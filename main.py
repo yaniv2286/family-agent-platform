@@ -1,15 +1,20 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks, Depends, File, UploadFile, Request
+import io
+import os
+import sys
+import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from database import init_db, get_db, User, LearningLog
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from database import init_db, get_db, User, LearningLog, init_tutor_history_db
+from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text, select
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime
-import os
-from tutors import math_tutor, english_tutor
+from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
 
 
 # Pydantic models for response
@@ -34,6 +39,10 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+class SpeakRequest(BaseModel):
+    text: str
+
+
 class EndSessionRequest(BaseModel):
     user_id: int
     subject: str
@@ -43,8 +52,9 @@ class EndSessionRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize the database
-    init_db()
+    # Startup: Initialize the databases
+    await init_db()
+    await init_tutor_history_db()
     yield
     # Shutdown: Cleanup if needed
     pass
@@ -58,8 +68,52 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Configure loguru JSON file logging
+os.makedirs("logs", exist_ok=True)
+logger.remove()
+logger.add(
+    "logs/tutor_app_{time:YYYY-MM-DD}.log",
+    serialize=True,
+    rotation="00:00",
+    retention="14 days",
+    enqueue=True,
+)
+logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True)
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    start_time = time.perf_counter()
+    with logger.contextualize(request_id=request_id):
+        logger.info(f"Request started: {request.method} {request.url.path}")
+        response = await call_next(request)
+        process_time = time.perf_counter() - start_time
+        logger.info(
+            f"Request completed",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_seconds=round(process_time, 4),
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.bind(request_id=request_id).exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content={"status": "error", "message": "Internal error occurred"},
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @app.get("/")
@@ -69,39 +123,33 @@ async def serve_index():
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(db: AsyncSession = Depends(get_db)):
     """
     Health check endpoint to verify the API and database are working.
     """
     try:
         # Test database connection
-        db_gen = get_db()
-        db = next(db_gen)
-        db.execute(text("SELECT 1"))
-        db.close()
+        await db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
 
 
 @app.get("/api/users", response_model=List[UserResponse])
-async def get_users():
+async def get_users(db: AsyncSession = Depends(get_db)):
     """
     Get all registered users from the database.
     """
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        users = db.query(User).all()
-        return users
-    finally:
-        db.close()
+    result = await db.execute(select(User))
+    users = result.scalars().all()
+    return users
 
 
 @app.post("/api/tutor/chat", response_model=ChatResponse)
-async def tutor_chat(request: ChatRequest):
+async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
     """
-    Chat with the tutor (math or english). Uses LLM if configured, otherwise uses mock responses.
+    Chat with the tutor (math or english) using the real OpenAI LLM (async),
+    then persist the turn and update the dynamic student profile in the background.
     """
     # Select tutor based on subject
     if request.subject == "english":
@@ -110,26 +158,66 @@ async def tutor_chat(request: ChatRequest):
         tutor = math_tutor
     
     # Get user profile
-    user_profile = tutor.get_user_profile(request.user_id)
+    user_profile = await tutor.get_user_profile(request.user_id)
     if not user_profile:
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
     
-    # Check if a real OpenAI API key is configured
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+    # Always use the real OpenAI model (async, non-blocking). get_llm_response
+    # internally returns a clear Hebrew error message if OPENAI_API_KEY is
+    # missing or the API call fails - there is no local mock engine anymore.
+    reply = await tutor.get_llm_response(request.messages, user_profile)
     
-    if openai_api_key and openai_api_key != "your_openai_api_key_here":
-        # Use the real OpenAI gpt-4o-mini model (falls back to mock internally on error)
-        reply = tutor.get_llm_response(request.messages, user_profile)
-    else:
-        # No API key configured - use the local mock response engine
-        user_input = request.messages[-1].get("content", "") if request.messages else ""
-        reply = tutor.get_mock_response(user_input, request.messages, user_profile)
+    # Persist the new turn and update the long-term profile summary in the background.
+    background_tasks.add_task(
+        update_tutor_memory,
+        user_profile["name"],
+        user_profile,
+        request.messages,
+        reply,
+    )
     
     return ChatResponse(reply=reply)
 
 
+@app.post("/api/tutor/speech")
+async def speech(request: SpeakRequest):
+    """
+    Convert the provided text to MP3 speech using OpenAI's TTS-1 model and
+    the 'nova' female voice, and stream it back to the client.
+    """
+    try:
+        tts_response = await generate_speech(request.text)
+        return StreamingResponse(
+            io.BytesIO(tts_response.content),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=speech.mp3"},
+        )
+    except RuntimeError:
+        return {"error": "OPENAI_API_KEY is not configured."}
+    except Exception as e:
+        logger.exception("OpenAI TTS request failed")
+        return {"error": "Failed to generate speech."}
+
+
+@app.post("/api/tutor/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """
+    Transcribe an uploaded audio file using OpenAI's Whisper-1 model.
+    Used as a fallback for mobile browsers that do not support Web Speech API.
+    """
+    try:
+        audio_bytes = await file.read()
+        text = await transcribe_audio(audio_bytes, file.filename or "recording.mp3")
+        return {"text": text}
+    except RuntimeError:
+        return {"error": "OPENAI_API_KEY is not configured."}
+    except Exception as e:
+        logger.exception("Whisper transcription request failed")
+        return {"text": ""}
+
+
 @app.post("/api/tutor/end-session")
-async def end_session(request: EndSessionRequest):
+async def end_session(request: EndSessionRequest, db: AsyncSession = Depends(get_db)):
     """
     End a tutoring session, analyze the conversation, and save to LearningLog.
     Also extracts and updates user profile information if discovered.
@@ -140,16 +228,13 @@ async def end_session(request: EndSessionRequest):
     else:
         tutor = math_tutor
     
-    # Analyze the session
-    analysis = tutor.analyze_session(request.messages, request.subject)
-    
-    # Extract profile information from conversation
-    profile_info = tutor.extract_profile_info(request.messages)
-    
-    # Save to database
-    db_gen = get_db()
-    db = next(db_gen)
     try:
+        # Analyze the session
+        analysis = tutor.analyze_session(request.messages, request.subject)
+        
+        # Extract profile information from conversation
+        profile_info = tutor.extract_profile_info(request.messages)
+        
         learning_log = LearningLog(
             user_id=request.user_id,
             subject=request.subject,
@@ -162,7 +247,8 @@ async def end_session(request: EndSessionRequest):
         db.add(learning_log)
         
         # Update user profile if new information was discovered
-        user = db.query(User).filter(User.id == request.user_id).first()
+        result = await db.execute(select(User).where(User.id == request.user_id))
+        user = result.scalar_one_or_none()
         profile_updated = False
         
         if user:
@@ -174,8 +260,8 @@ async def end_session(request: EndSessionRequest):
                 user.interests = profile_info["interests"]
                 profile_updated = True
         
-        db.commit()
-        db.refresh(learning_log)
+        await db.commit()
+        await db.refresh(learning_log)
         
         response = {
             "id": learning_log.id,
@@ -195,10 +281,9 @@ async def end_session(request: EndSessionRequest):
         
         return response
     except Exception as e:
-        db.rollback()
+        await db.rollback()
+        logger.bind(error=str(e)).exception("End session failed")
         return {"error": str(e)}
-    finally:
-        db.close()
 
 
 if __name__ == "__main__":

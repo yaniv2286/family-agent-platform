@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>מנטור למידה - Family Agent Platform</title>
     <style>
         * {
@@ -14,11 +14,22 @@
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
             min-height: 100vh;
+            width: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
             padding: 20px;
+        }
+
+        /* Mobile-friendly tap targets and remove double-tap zoom delay */
+        button, .profile-card, .subject-card, .send-button, .voice-button,
+        .end-session-button, .close-modal, .back-btn, .switch-child-btn {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
 
         .container {
@@ -214,6 +225,7 @@
         .tutoring-screen {
             display: none;
             padding: 0;
+            width: 100%;
         }
 
         .tutoring-screen.show {
@@ -255,7 +267,11 @@
 
         .chat-container {
             height: 400px;
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             padding: 25px;
             background: #f8f9fa;
         }
@@ -266,6 +282,8 @@
             border-radius: 16px;
             max-width: 80%;
             animation: fadeIn 0.3s ease-in;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         @keyframes fadeIn {
@@ -472,21 +490,171 @@
             font-size: 1.2em;
         }
 
-        @media (max-width: 600px) {
+        @media (max-width: 768px) {
+            body {
+                padding: 0;
+                align-items: flex-start;
+            }
+
+            .container {
+                border-radius: 0;
+                min-height: 100vh;
+                max-width: 100%;
+            }
+
+            .screen {
+                padding: 20px;
+            }
+
+            .header {
+                padding: 60px 15px 20px;
+            }
+
+            .header h1 {
+                font-size: 1.4em;
+            }
+
+            .header p {
+                font-size: 0.9em;
+            }
+
+            .back-btn, .switch-child-btn {
+                top: 12px;
+                padding: 10px 14px;
+                font-size: 14px;
+                min-width: 44px;
+                min-height: 44px;
+                line-height: 1.2;
+            }
+
+            .back-btn {
+                right: 10px;
+            }
+
+            .switch-child-btn {
+                left: 10px;
+            }
+
+            .welcome-text {
+                font-size: 1.1em;
+                margin-bottom: 20px;
+            }
+
             .profile-grid, .subject-grid {
                 grid-template-columns: 1fr;
+                gap: 15px;
+                margin-top: 15px;
             }
-            
-            .container {
-                border-radius: 16px;
+
+            .profile-card {
+                padding: 20px;
             }
-            
-            .header h1 {
-                font-size: 1.5em;
+
+            .avatar, .avatar img {
+                width: 90px;
+                height: 90px;
             }
-            
+
+            .profile-name {
+                font-size: 1.3em;
+            }
+
+            .subject-card {
+                padding: 25px 15px;
+            }
+
+            .subject-card .icon {
+                font-size: 48px;
+                margin-bottom: 15px;
+            }
+
+            .subject-card h3 {
+                font-size: 1.3em;
+            }
+
+            .subject-card p {
+                font-size: 0.95em;
+            }
+
+            .tutoring-screen.show {
+                display: flex;
+                flex-direction: column;
+                height: 90vh;
+                width: 100%;
+            }
+
             .session-info {
+                padding: 10px 15px;
                 font-size: 12px;
+                gap: 8px;
+                flex-shrink: 0;
+            }
+
+            .chat-container {
+                flex: 1;
+                height: auto;
+                min-height: 0;
+                padding: 15px;
+            }
+
+            .message {
+                padding: 12px 16px;
+                font-size: 15px;
+                max-width: 92%;
+            }
+
+            .input-area {
+                padding: 15px;
+                flex-shrink: 0;
+            }
+
+            .voice-button {
+                padding: 18px;
+                font-size: 17px;
+                margin-bottom: 12px;
+                min-height: 48px;
+            }
+
+            .text-input-group {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .text-input-group input {
+                padding: 14px;
+                font-size: 16px;
+                min-height: 48px;
+            }
+
+            .send-button {
+                width: 100%;
+                padding: 16px;
+                font-size: 16px;
+                min-height: 48px;
+            }
+
+            .end-session-button {
+                padding: 16px;
+                margin-top: 12px;
+                min-height: 48px;
+            }
+
+            .modal-content {
+                padding: 25px;
+                border-radius: 18px;
+            }
+
+            .modal-content h2 {
+                font-size: 1.4em;
+            }
+
+            .stars {
+                font-size: 42px;
+            }
+
+            .close-modal {
+                width: 100%;
+                padding: 14px;
             }
         }
     </style>
@@ -547,6 +715,7 @@
 
             <div class="input-area">
                 <button class="voice-button" id="voice-button">🎤 לחץ לדיבור</button>
+                <input type="file" id="voice-file-input" accept="audio/*" style="position: absolute; left: -9999px; opacity: 0; width: 1px; height: 1px; overflow: hidden;">
                 <div class="text-input-group">
                     <input type="text" id="text-input" placeholder="הקלד הודעה כאן...">
                     <button class="send-button" id="send-button">שלח</button>
@@ -580,7 +749,7 @@
         let timerInterval = null;
         let isListening = false;
         let recognition = null;
-        let bestHebrewVoice = null;
+        let currentAudio = null;
 
         // DOM Elements
         const profileScreen = document.getElementById('profile-screen');
@@ -592,6 +761,7 @@
         const switchChildBtn = document.getElementById('switch-child-btn');
         const chatContainer = document.getElementById('chat-container');
         const voiceButton = document.getElementById('voice-button');
+        const voiceFileInput = document.getElementById('voice-file-input');
         const textInput = document.getElementById('text-input');
         const sendButton = document.getElementById('send-button');
         const endSessionButton = document.getElementById('end-session-button');
@@ -603,6 +773,45 @@
         const studentName = document.getElementById('student-name');
         const subjectLabel = document.getElementById('subject-label');
 
+        // Global error handling helpers
+        function resetUI() {
+            sendButton.textContent = 'שלח';
+            sendButton.disabled = false;
+            voiceButton.classList.remove('listening');
+            voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
+            voiceFileInput.value = '';
+        }
+
+        function handleGlobalError(error, message = 'אופס, משהו השתבש. נסה שוב!') {
+            console.error('Global error:', error);
+            resetUI();
+            alert(message);
+        }
+
+        async function safeFetch(url, options = {}) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+            try {
+                const response = await fetch(url, { ...options, signal: controller.signal });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                resetUI();
+                throw error;
+            }
+        }
+
+        window.onerror = function (message, source, lineno, colno, error) {
+            handleGlobalError(error || message);
+            return true;
+        };
+
+        window.onunhandledrejection = function (event) {
+            handleGlobalError(event.reason);
+            event.preventDefault();
+        };
+
         // Hebrew to English name mapping
         const nameToEnglish = {
             'נויה': 'noya',
@@ -611,26 +820,10 @@
             'ליבי': 'libi'
         };
 
-        // Find best Hebrew voice
-        function findBestHebrewVoice() {
-            const voices = speechSynthesis.getVoices();
-            const voicePriority = ['Google', 'Microsoft', 'Apple', 'Female', 'female'];
-
-            for (const priority of voicePriority) {
-                const voice = voices.find(v => v.lang.includes('he') && v.name.includes(priority));
-                if (voice) return voice;
-            }
-
-            const hebrewVoice = voices.find(v => v.lang.includes('he'));
-            if (hebrewVoice) return hebrewVoice;
-
-            return voices[0] || null;
-        }
-
         // Load users
         async function loadUsers() {
             try {
-                const response = await fetch('/api/users');
+                const response = await safeFetch('/api/users');
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
@@ -671,16 +864,18 @@
             fallbackDiv.style.display = 'none';
             
             // Direct <img> tag pointing to the mapped avatar file
-            // Try .jpg first (actual format used), then .jpeg, then .png, then letter fallback
+            // Try .jpg first (actual format used), then .jpeg, then .png, then letter fallback.
+            // The ?v=2 query string forces a fresh download after the images were re-cropped.
             const img = document.createElement('img');
             img.alt = user.name;
-            img.src = `/static/avatars/${englishName}.jpg`;
+            const avatarVersion = 'v=2';
+            img.src = `/static/avatars/${englishName}.jpg?${avatarVersion}`;
             
             const fallbackExtensions = ['jpeg', 'png'];
             let attemptIndex = 0;
             img.onerror = function() {
                 if (attemptIndex < fallbackExtensions.length) {
-                    img.src = `/static/avatars/${englishName}.${fallbackExtensions[attemptIndex]}`;
+                    img.src = `/static/avatars/${englishName}.${fallbackExtensions[attemptIndex]}?${avatarVersion}`;
                     attemptIndex++;
                 } else {
                     img.style.display = 'none';
@@ -722,14 +917,14 @@
         }
 
         // Select subject and start tutoring
-        function selectSubject(subject, subjectName) {
+        async function selectSubject(subject, subjectName) {
             selectedSubject = subject;
             
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
             subjectLabel.textContent = `📚 ${subjectName}`;
             
             showScreen('tutoring');
-            initChat();
+            await initChat();
         }
 
         // Show specific screen
@@ -776,19 +971,42 @@
             });
         }
 
-        // Initialize chat
-        function initChat() {
-            const greeting = selectedUserProfile?.name 
-                ? `שלום ${selectedUserProfile.name}! אנחנו מוכנים לשיעור ${selectedSubject === 'math' ? 'חשבון' : 'אנגלית'} מדהים!`
-                : 'שלום! אנחנו מוכנים לשיעור מדהים!';
-            
-            chatContainer.innerHTML = `<div class="message assistant"><div class="role">מנטור</div>${greeting}</div>`;
+        // Initialize chat by asking the backend to generate the very first greeting.
+        // This lets the LLM's dynamic system prompt produce the correct gendered,
+        // interest-aware opening (e.g. asking the child what they like to do) instead
+        // of a hardcoded, generic one.
+        async function initChat() {
+            chatContainer.innerHTML = '<div class="loading">מכין את המנטור...</div>';
             messages = [];
             sessionStartTime = Date.now();
             sessionDurationSeconds = 20 * 60;
             startSessionTimer();
-            
-            speakResponse(greeting);
+
+            if (!selectedUserId || !selectedSubject) {
+                return;
+            }
+
+            try {
+                const response = await safeFetch('/api/tutor/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: selectedUserId,
+                        subject: selectedSubject,
+                        messages: []  // No conversation yet; only system prompt is sent
+                    })
+                });
+
+                const data = await response.json();
+                chatContainer.innerHTML = '';
+                addMessage('assistant', data.reply);
+                await speakResponse(data.reply);
+            } catch (error) {
+                console.error('Error initializing chat:', error);
+                chatContainer.innerHTML = '';
+                addMessage('assistant', 'שלום! אנחנו מוכנים לשיעור מדהים!');
+                await speakResponse('שלום! אנחנו מוכנים לשיעור מדהים!');
+            }
         }
 
         // Add message to chat
@@ -814,7 +1032,7 @@
             textInput.value = '';
 
             try {
-                const response = await fetch('/api/tutor/chat', {
+                const response = await safeFetch('/api/tutor/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -826,32 +1044,69 @@
 
                 const data = await response.json();
                 addMessage('assistant', data.reply);
-                speakResponse(data.reply);
+                await speakResponse(data.reply);
             } catch (error) {
                 console.error('Error sending message:', error);
                 addMessage('assistant', 'שגיאה בשליחת ההודעה. אנא נסה שוב!');
             }
         }
 
-        // Text-to-speech
-        function speakResponse(text) {
-            if ('speechSynthesis' in window) {
-                speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'he-IL';
-                utterance.rate = 0.95;
-                utterance.pitch = 1.18;
-                utterance.volume = 0.95;
-                
-                if (bestHebrewVoice) {
-                    utterance.voice = bestHebrewVoice;
+        // Text-to-speech via OpenAI TTS-1 (nova female voice)
+        async function speakResponse(text) {
+            // Sanitize the text for clean Hebrew speech:
+            // 1. Strip emojis and pictographic symbols.
+            // 2. Remove Markdown bold markers (**...**).
+            // 3. Replace multiplication `*` and LaTeX \times with the word "כפול".
+            // 4. Convert division `/` between numbers to "חלקי".
+            // 5. Remove any remaining backslash escapes (\, \(, \), etc.).
+            let ttsText = text
+                .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+                .replace(/\*\*(.*?)\*\*/g, '$1')
+                .replace(/\\times/g, ' כפול ')
+                .replace(/(\d)\s*\*\s*(\d)/g, '$1 כפול $2')
+                .replace(/(\d)\s*\/\s*(\d)/g, '$1 חלקי $2')
+                .replace(/\\[(){\}\[\]]?/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            // Stop any currently playing audio before starting a new one.
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.src = '';
+                currentAudio = null;
+            }
+
+            try {
+                const response = await safeFetch('/api/tutor/speech', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: ttsText })
+                });
+
+                if (!response.ok) {
+                    console.error('TTS request failed:', response.status);
+                    return;
                 }
-                
-                speechSynthesis.speak(utterance);
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                currentAudio = new Audio(url);
+
+                currentAudio.addEventListener('ended', () => {
+                    URL.revokeObjectURL(url);
+                    currentAudio = null;
+                });
+
+                await currentAudio.play();
+            } catch (error) {
+                console.error('Error playing TTS:', error);
             }
         }
 
         // Voice recognition
+        // We support two modes:
+        // 1. Web Speech API (Chrome/Edge on desktop and Android).
+        // 2. File upload + OpenAI Whisper fallback for mobile browsers like Safari.
         function initVoiceRecognition() {
             if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -874,6 +1129,9 @@
 
                 recognition.onerror = (event) => {
                     console.error('Speech recognition error:', event.error);
+                    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                        recognition = null;
+                    }
                     stopListening();
                 };
 
@@ -881,21 +1139,58 @@
                     stopListening();
                 };
             } else {
-                voiceButton.disabled = true;
-                voiceButton.textContent = '🎤 זיהוי קול לא זמין';
+                // No browser speech API — fallback to Whisper upload.
+                voiceButton.textContent = '🎤 הקלט/י הודעה';
             }
         }
 
         function startListening() {
             if (recognition && !isListening) {
-                recognition.start();
+                try {
+                    recognition.start();
+                    return true;
+                } catch (err) {
+                    console.error('Speech recognition start failed:', err);
+                    recognition = null;
+                    return false;
+                }
             }
+            return false;
         }
 
         function stopListening() {
             isListening = false;
             voiceButton.classList.remove('listening');
-            voiceButton.textContent = '🎤 לחץ לדיבור';
+            voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
+        }
+
+        async function uploadVoiceRecording(file) {
+            // Send the recorded audio file to the backend for Whisper transcription.
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const originalText = voiceButton.textContent;
+            voiceButton.textContent = '⏳ מעבד...';
+
+            try {
+                const response = await safeFetch('/api/tutor/transcribe', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const data = await response.json();
+                if (data.text) {
+                    textInput.value = data.text;
+                    sendMessage(data.text);
+                } else if (data.error) {
+                    console.error('Transcription error:', data.error);
+                }
+            } catch (error) {
+                console.error('Voice upload failed:', error);
+            } finally {
+                voiceButton.textContent = originalText;
+                voiceFileInput.value = '';
+            }
         }
 
         // 20-minute countdown timer
@@ -931,10 +1226,10 @@
                 return;
             }
 
-            const elapsed = Math.floor((Date.now() - sessionStartTime) / 60);
+            const elapsed = Math.max(1, Math.floor((Date.now() - sessionStartTime) / 60000));
 
             try {
-                const response = await fetch('/api/tutor/end-session', {
+                const response = await safeFetch('/api/tutor/end-session', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -945,7 +1240,19 @@
                     })
                 });
 
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('end-session HTTP error', response.status, errorText);
+                    alert(`שגיאה בסיום השיעור (${response.status}): ${errorText.slice(0, 200)}`);
+                    return;
+                }
+
                 const data = await response.json();
+
+                if (data.error) {
+                    alert('שגיאה: ' + data.error);
+                    return;
+                }
                 
                 const subjectName = selectedSubject === 'math' ? 'חשבון' : 'אנגלית';
                 document.getElementById('modal-message').textContent = 
@@ -966,20 +1273,62 @@
         backBtn.addEventListener('click', goBack);
         switchChildBtn.addEventListener('click', switchChild);
 
-        subjectGrid.addEventListener('click', (e) => {
+        subjectGrid.addEventListener('click', async (e) => {
             const card = e.target.closest('.subject-card');
             if (card) {
                 const subject = card.dataset.subject;
                 const subjectName = card.querySelector('h3').textContent;
-                selectSubject(subject, subjectName);
+                try {
+                    await selectSubject(subject, subjectName);
+                } catch (error) {
+                    console.error('Error starting subject:', error);
+                }
             }
         });
 
         voiceButton.addEventListener('click', () => {
-            if (isListening) {
-                recognition.stop();
+            const resetVoiceButton = () => {
+                voiceButton.classList.remove('listening');
+                voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
+            };
+
+            const handleVoiceClick = () => {
+                if (recognition) {
+                    if (isListening) {
+                        recognition.stop();
+                    } else {
+                        const started = startListening();
+                        if (!started) {
+                            // Web Speech failed; fall back to file upload.
+                            voiceFileInput.click();
+                        }
+                    }
+                } else {
+                    // No browser speech API: open the native audio recorder.
+                    voiceFileInput.click();
+                }
+            };
+
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        stream.getTracks().forEach(track => track.stop());
+                        handleVoiceClick();
+                    })
+                    .catch(error => {
+                        console.error('Microphone permission error:', error);
+                        resetVoiceButton();
+                        alert("Microphone access blocked. HTTPS is required.");
+                    });
             } else {
-                startListening();
+                handleVoiceClick();
+            }
+        });
+
+        voiceFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                uploadVoiceRecording(file);
             }
         });
 
@@ -1002,19 +1351,9 @@
             switchChild();
         });
 
-        function loadVoices() {
-            speechSynthesis.getVoices();
-            bestHebrewVoice = findBestHebrewVoice();
-        }
-
         // Initialize
-        loadVoices();
         loadUsers();
         initVoiceRecognition();
-
-        if (speechSynthesis.onvoiceschanged !== undefined) {
-            speechSynthesis.onvoiceschanged = loadVoices;
-        }
     </script>
 </body>
 </html>

@@ -1,65 +1,243 @@
+import io
 import os
+import re
+import time
 from typing import List, Dict, Optional
+from num2words import num2words
+from loguru import logger
 from dotenv import load_dotenv
-from openai import OpenAI
-from database import SessionLocal, User
+from openai import AsyncOpenAI
+from sqlalchemy import select
+from database import (
+    SessionLocal,
+    User,
+    get_chat_history,
+    get_student_profile_summary,
+    append_chat_messages,
+    update_student_profile_summary,
+)
 
 # Ensure environment variables from .env are loaded even if this module is
 # imported before database.py (which also calls load_dotenv()).
 load_dotenv()
 
-# Model is locked to gpt-4o-mini for cost optimization. Do NOT change this
-# to gpt-4 or gpt-4o without an explicit, deliberate decision.
-OPENAI_MODEL = "gpt-4o-mini"
+# Model selection (strict, cost-optimized): gpt-5.6-luna is the primary model.
+# gpt-4o-mini is used only as an automatic fallback if the primary model
+# becomes unavailable for this account/SDK (e.g. deprecated, quota, etc.).
+PRIMARY_MODEL = "gpt-5.6-luna"
+FALLBACK_MODEL = "gpt-4o-mini"
 
-_openai_client: Optional[OpenAI] = None
+# Newer reasoning-style models (like gpt-5.6-luna) require max_completion_tokens
+# instead of max_tokens, and only support the default temperature (1) - they
+# reject any explicit temperature override. Classic chat models (gpt-4o-mini)
+# use the older max_tokens/temperature parameters.
+_NEWER_MODELS = {PRIMARY_MODEL}
+
+# Once we discover the primary model is unavailable for this account, we
+# remember that for the lifetime of the process to avoid paying the latency
+# cost of a failing request on every single chat turn.
+_primary_model_unavailable = False
+
+_async_client: Optional[AsyncOpenAI] = None
 
 
-def _get_openai_client() -> Optional[OpenAI]:
-    """Lazily create (and cache) the OpenAI client if a real API key is configured.
+def _get_async_client() -> Optional[AsyncOpenAI]:
+    """Lazily create (and cache) the async OpenAI client if a real API key is configured.
 
-    Returns None if no valid key is present, so callers can gracefully fall
-    back to the local mock response engine.
+    Returns None if no valid key is present.
     """
-    global _openai_client
+    global _async_client
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or api_key == "your_openai_api_key_here":
         return None
-    if _openai_client is None:
-        _openai_client = OpenAI(api_key=api_key)
-    return _openai_client
+    if _async_client is None:
+        _async_client = AsyncOpenAI(api_key=api_key, timeout=120.0)
+    return _async_client
 
 
-def call_llm(system_prompt: str, conversation_history: List[Dict]) -> Optional[str]:
-    """Call the real OpenAI gpt-4o-mini model with the given system prompt and
-    conversation history. Returns the assistant's reply text, or None if the
-    LLM is not configured or the call fails for any reason (network error,
-    invalid key, rate limit, etc.) - in which case the caller should fall
-    back to the local mock response engine.
+def _build_completion_kwargs(model: str, messages: List[Dict]) -> Dict:
+    """Build the model-appropriate keyword arguments for chat.completions.create."""
+    kwargs = {"model": model, "messages": messages}
+    if model in _NEWER_MODELS:
+        kwargs["max_completion_tokens"] = 200
+        # temperature is intentionally omitted - these models only support the default
+    else:
+        kwargs["max_tokens"] = 150
+        kwargs["temperature"] = 0.8
+    return kwargs
+
+
+class BaseAgent:
+    """Base agent with timeout-protected, fault-tolerant LLM interaction."""
+
+    async def _call_llm(self, system_prompt: str, conversation_history: List[Dict]) -> str:
+        """Call the real OpenAI model (gpt-5.6-luna, falling back to gpt-4o-mini)
+        with the given system prompt and conversation history, asynchronously so
+        the FastAPI event loop is never blocked while waiting for generation.
+
+        Returns a user-friendly fallback message if the API key is missing or
+        both the primary and fallback model calls fail.
+        """
+        global _primary_model_unavailable
+
+        client = _get_async_client()
+        if client is None:
+            logger.warning("OpenAI API key not configured")
+            return "מפתח ה-API של OpenAI אינו מוגדר. אנא הגדירו OPENAI_API_KEY בקובץ .env."
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in conversation_history:
+            role = msg.get("role", "user")
+            if role not in ("user", "assistant"):
+                role = "user"
+            messages.append({"role": role, "content": msg.get("content") or ""})
+
+        model_to_try = FALLBACK_MODEL if _primary_model_unavailable else PRIMARY_MODEL
+
+        try:
+            start = time.perf_counter()
+            logger.info("OpenAI chat completion started", model=model_to_try)
+            response = await client.chat.completions.create(**_build_completion_kwargs(model_to_try, messages))
+            latency = time.perf_counter() - start
+            usage = getattr(response, "usage", None)
+            usage_dict = usage.model_dump() if usage is not None else None
+            logger.info(
+                "OpenAI chat completion finished",
+                model=model_to_try,
+                latency_seconds=round(latency, 4),
+                usage=usage_dict,
+            )
+            reply = response.choices[0].message.content
+            return reply.strip() if reply else ""
+        except Exception as primary_error:
+            if model_to_try == PRIMARY_MODEL:
+                logger.warning(
+                    "Primary model failed, falling back",
+                    primary_model=PRIMARY_MODEL,
+                    fallback_model=FALLBACK_MODEL,
+                    error=str(primary_error),
+                )
+                _primary_model_unavailable = True
+                try:
+                    start = time.perf_counter()
+                    logger.info("OpenAI chat fallback started", model=FALLBACK_MODEL)
+                    response = await client.chat.completions.create(**_build_completion_kwargs(FALLBACK_MODEL, messages))
+                    latency = time.perf_counter() - start
+                    usage = getattr(response, "usage", None)
+                    usage_dict = usage.model_dump() if usage is not None else None
+                    logger.info(
+                        "OpenAI chat fallback finished",
+                        model=FALLBACK_MODEL,
+                        latency_seconds=round(latency, 4),
+                        usage=usage_dict,
+                    )
+                    reply = response.choices[0].message.content
+                    return reply.strip() if reply else ""
+                except Exception:
+                    logger.exception("Fallback model failed")
+                    return "מצטערים, יש בעיה זמנית בחיבור. אנא נסו שוב בעוד רגע!"
+            logger.exception("OpenAI chat completion failed")
+            return "מצטערים, יש בעיה זמנית בחיבור. אנא נסו שוב בעוד רגע!"
+
+    async def get_user_profile(self, user_id: int) -> Optional[Dict]:
+        """Fetch a user profile from the main database asynchronously."""
+        async with SessionLocal() as db:
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if user:
+                return {
+                    "id": user.id,
+                    "name": user.name,
+                    "role": user.role,
+                    "grade_level": user.grade_level,
+                    "interests": user.interests,
+                }
+            return None
+
+
+async def call_llm(system_prompt: str, conversation_history: List[Dict]) -> str:
+    """Module-level helper for non-agent code that still needs a safe LLM call."""
+    return await BaseAgent()._call_llm(system_prompt, conversation_history)
+
+
+def _sanitize_numbers_for_tts(text: str) -> str:
+    """Replace digit sequences in the text with spoken Hebrew words
+    so the TTS engine pauses and pronounces numbers correctly.
     """
-    client = _get_openai_client()
-    if client is None:
-        return None
+    # Strip thousands separators (e.g. 12,000 -> 12000)
+    text = re.sub(r'(?<=[0-9]),(?=[0-9])', '', text)
 
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in conversation_history:
-        role = msg.get("role", "user")
-        if role not in ("user", "assistant"):
-            role = "user"
-        messages.append({"role": role, "content": msg.get("content", "")})
+    def _replace(match: re.Match) -> str:
+        try:
+            return num2words(int(match.group(0)), lang='he')
+        except Exception:
+            return match.group(0)
+
+    return re.sub(r'[0-9]+', _replace, text)
+
+
+async def generate_speech(text: str):
+    """Generate MP3 speech from the given text using OpenAI's TTS-1 model and
+    the 'nova' female voice. Returns the binary response object, whose content
+    can be streamed to the caller. This is async so it doesn't block FastAPI.
+
+    Raises RuntimeError if no API key is configured.
+    """
+    text = _sanitize_numbers_for_tts(text)
+    client = _get_async_client()
+    if client is None:
+        logger.warning("OpenAI API key not configured for TTS")
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
 
     try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.8,
-            max_tokens=150,
+        start = time.perf_counter()
+        logger.info("OpenAI TTS started", model="tts-1", voice="shimmer")
+        response = await client.audio.speech.create(
+            model="tts-1",
+            voice="shimmer",
+            input=text,
+            response_format="mp3",
         )
-        reply = response.choices[0].message.content
-        return reply.strip() if reply else None
-    except Exception as e:
-        print(f"OpenAI API call failed, falling back to mock engine: {e}")
-        return None
+        latency = time.perf_counter() - start
+        logger.info("OpenAI TTS finished", model="tts-1", latency_seconds=round(latency, 4))
+        return response
+    except Exception:
+        logger.exception("OpenAI TTS failed")
+        raise
+
+
+async def transcribe_audio(audio_bytes: bytes, filename: str = "recording.mp3") -> str:
+    """Transcribe the uploaded audio bytes using OpenAI's Whisper-1 model.
+    Works with short voice recordings from any phone browser.
+
+    Raises RuntimeError if no API key is configured.
+    """
+    client = _get_async_client()
+    if client is None:
+        logger.warning("OpenAI API key not configured for transcription")
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = filename
+
+    try:
+        start = time.perf_counter()
+        logger.info("OpenAI Whisper transcription started", model="whisper-1", language="he")
+        response = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="he",
+        )
+        latency = time.perf_counter() - start
+        logger.info(
+            "OpenAI Whisper transcription finished",
+            model="whisper-1",
+            latency_seconds=round(latency, 4),
+        )
+        return response.text.strip()
+    except Exception:
+        logger.exception("OpenAI Whisper transcription failed")
+        raise
 
 
 # Explicit name-to-gender mapping for our known children.
@@ -109,63 +287,61 @@ def g(word: str, gender: str) -> str:
     return GENDERED_WORDS.get(word, {}).get(gender, word)
 
 
-class MathTutor:
-    def __init__(self):
-        self.attempt_counts = {}  # Track consecutive incorrect attempts per user session
-        self.victory_memory = {}  # Store memorable wins per user
-        self.frustration_indicators = ['עייף', 'קשה', 'לא מבין', 'מת', 'אני לא יכול', 'אני עייף', 'לא רוצה', 'שונא', 'מסכים']
+class MathTutor(BaseAgent):
+
     
-    def get_user_profile(self, user_id: int) -> Optional[Dict]:
-        """Get user profile from database"""
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                return {
-                    "id": user.id,
-                    "name": user.name,
-                    "role": user.role,
-                    "grade_level": user.grade_level,
-                    "interests": user.interests
-                }
-            return None
-        finally:
-            db.close()
-    
-    def generate_system_prompt(self, user_profile: Dict) -> str:
-        """Generate system prompt based on user profile - mentor persona"""
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None) -> str:
+        """Generate system prompt based on user profile, dynamic long-term memory,
+        and the most recent chat turns.
+        """
         interests = user_profile.get("interests") or None
         grade_level = user_profile.get("grade_level", "elementary school")
         name = user_profile.get("name", "תלמיד")
         gender = get_gender(name)
         gender_hebrew = "נקבה" if gender == "female" else "זכר"
         
-        # Get victory memory for this user
-        victories = self.victory_memory.get(user_profile.get("id", ""), [])
-        victory_context = ""
-        if victories:
-            victory_context = f"ניצחונות קודמים: {', '.join(victories[:3])}"
-        
         interests_line = interests if interests else "לא ידוע - אין להניח שום תחום עניין!"
+        
+        summary_line = dynamic_summary if dynamic_summary else "אין עדיין סיכום לטווח ארוך."
+        history_lines = "- אין עדיין היסטוריית שיחה.\n"
+        if recent_history:
+            history_lines = ""
+            for m in recent_history:
+                speaker = "מנטור" if m.get("role") == "assistant" else "תלמיד"
+                content = str(m.get("content") or "")[:250]
+                history_lines += f"- {speaker}: {content}\n"
         
         prompt = f"""אתה מנטור מתמטיקה מעורר השראה וחבר לכל החיים בשם המשפחה. אתה מדבר בעברית בלבד.
 
 פרטי התלמיד:
 - שם: {name}
 - מגדר: {gender_hebrew}
-- רמה: {grade_level}
+- כיתה/שכבה: {grade_level}
 - תחומי עניין: {interests_line}
-{victory_context}
+
+זיכרון לטווח ארוך:
+{summary_line}
+
+הודעות אחרונות מהשיחה (עד 10):
+{history_lines}
+
+חובה מוחלטת - תוכנית לימודים לפי כיתה (אסור לשאול את התלמיד/ה מה הכיתה, הגיל או מה הוא/היא רוצה ללמוד):
+- אם הכיתה היא "Kindergarten" (גן חובה): חשבון = ספירה 1-10, זיהוי צורות, מושגים בסיסיים (גדול/קטן). שחק/י מאוד, השתמש במשחקים ונקודות, אל תניח/י שהילד/ה יודע/ת לקרוא.
+- אם הכיתה היא "1st Grade" (כיתה א'): חשבון = חיבור וחיסור עד 20.
+- אם הכיתה היא "3rd Grade" (כיתה ג'): חשבון = חיבור וחיסור עד 1000, היכרות ראשונית עם לוח הכפל, וחילוק בסיסי.
+- אם הכיתה היא "5th Grade" (כיתה ה'): חשבון = סדר פעולות חשבון, מספרים גדולים (רבבות), כפל וחילוק של מספרים רב-ספרתיים, ושאלות מילה.
+
+אתה חייב לפתוח את השיעור בשאלה אחת קונקרטית המתאימה בדיוק לכיתה {grade_level}, מבלי לשאול את התלמיד/ה שום פרט אישי או העדפה.
 
 חובה מוחלטת - התאמה מגדרית:
-עליך לפנות לתלמיד/ה תמיד בלשון הדקדוקית הנכונה התואמת למגדר: {gender_hebrew}.
-אם נקבה: השתמש במילים כמו "מוכנה", "את", "אלופה", "אוהבת", "לומדת".
-אם זכר: השתמש במילים כמו "מוכן", "אתה", "אלוף", "אוהב", "לומד".
+עליך לפנות לתלמיד/ה תמיד בלשון הדקדוקית הנכונה התואמת למגדר הזה בדיוק: {gender_hebrew}.
+אם נקבה: השתמש בצורות כמו "את מוכנה", "אלופה", "את", "אוהבת", "לומדת".
+אם זכר: השתמש בצורות כמו "אתה מוכן", "אלוף", "אתה", "אוהב", "לומד".
 לעולם אל תשתמש כברירת מחדל בלשון זכר כאשר מדובר בתלמידה.
 
 חובה מוחלטת - אפס הנחות על תחומי עניין:
-אם תחומי העניין אינם ידועים (רשום "לא ידוע"), אסור לך בהחלט להניח או להמציא תחום עניין כלשהו (כגון כדורגל, ריקוד וכו').
-במקרה כזה, ההודעה הראשונה שלך חייבת לשאול את התלמיד/ה במפורש מה הוא/היא הכי אוהב/ת לעשות בזמן הפנוי, תוך שימוש בלשון הדקדוקית הנכונה למגדר {gender_hebrew}.
+אם תחום העניין רשום כ"לא ידוע", אסור לך בהחלט להמציא, להניח או להזכיר תחביב כלשהו (כגון כדורגל, ריקוד וכו').
+ההודעה הראשונה חייבת להיות שאלת פתיחה לימודית מתאימה בדיוק לכיתה {grade_level}. אין לשאול על תחומי עניין או על רצונות הלמידה בהודעה הראשונה. אם נדרש, ניתן לשאול על תחומי עניין רק בשאלה נפרדת מאוחר יותר, תוך שימוש בלשון הדקדוקית הנכונה למגדר {gender_hebrew}.
 
 אישיות וטון:
 - חם, נלהב, מעודד עמוקות, ואמפתי כמו מנטור ילדות אהוב וחבר טוב
@@ -180,130 +356,28 @@ class MathTutor:
 3. חשוף את התשובה רק אחרי 3 ניסיונות כושלים רצופים
 4. אם התלמיד/ה מראה סימני עייפות או תסכול, הצע תמיכה רגשית מותאמת מגדרית
 5. השב ב-1-2 משפטים בלבד - קצר, חי, טבעי ומלא לב להשמעה
-6. השתמש בסימון מתמטי פשוט שמתאים לרמת הכיתה"""
+6. השתמש בסימון מתמטי פשוט שמתאים לרמת הכיתה
+7. חובה מוחלטת - עיצוב מתמטי: אין להשתמש אף פעם בפורמט LaTeX (למשל \\times, \\frac, או סימני לוכסן). השתמש תמיד בסימנים פשוטים בטקסט: * או המילה "כפול" לכפל, / לחילוק, ומספרים רגילים. ההודעות חייבות להיות נקיות מארטיפקטים של קוד.
+
+חובה מוחלטת - חינוך פרואקטיבי (Proactive Pedagogy):
+א. אף פעם אל תשבת או לחכות שהתלמיד/ה יוביל. אף פעם אל תסיים את השיחה במשפט סביל כמו "להתראות" או "בכיף".
+ב. כאשר התלמיד/ה מצליח/ה - שבח/י בקצרה ועבור/י מיד לאתגר המשך קטן וקשור. דוגמה: "כל הכבוד! עכשיו ננסה ביחד: כמה כדורגלנים יש בקבוצה אחת?"
+ג. שאל/י שאלה אחת בלבד בכל הודעה. אף פעם אל תשאל שתי שאלות באותו משפט. סיים/י כל הודעה בפעולה או שאלה ברורה, קצרה וכיפית לתלמיד/ה.
+ד. שחק/י את החוויה: ספר/י לתלמיד/ה שהוא/היא צובר/ת נקודות, מוצא/ת אוצרות או כובש/ת שערים עם כל תשובה נכונה."""
         
         return prompt
     
-    def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> str:
-        """Get a response from the real OpenAI gpt-4o-mini model, using the
-        gender- and interest-aware system prompt. Falls back to the local
-        mock engine if the LLM is not configured or the call fails.
+    async def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> str:
+        """Get a response from the real OpenAI model (gpt-5.6-luna, falling back
+        to gpt-4o-mini), using the gender-, interest-, and long-term-memory-aware
+        system prompt. This call is fully asynchronous so it never blocks the
+        FastAPI event loop.
         """
-        system_prompt = self.generate_system_prompt(user_profile)
-        reply = call_llm(system_prompt, conversation_history)
-        if reply is not None:
-            return reply
-        
-        # Fallback to mock engine
-        user_input = conversation_history[-1].get("content", "") if conversation_history else ""
-        return self.get_mock_response(user_input, conversation_history, user_profile)
-    
-    def get_mock_response(self, user_input: str, conversation_history: List[Dict], user_profile: Dict) -> str:
-        """Generate mock responses with inspiring mentor persona - gender-aware, zero interest assumptions"""
-        user_id = user_profile["id"]
-        gender = get_gender(user_profile.get("name", ""))
-        bo = g("בוא", gender)
-        atah = g("אתה", gender)
-        ohev = g("אוהב", gender)
-        ohed = g("אוהד", gender)
-        lomed = g("לומד", gender)
-        chaver = g("חבר", gender)
-        tirtze = g("תרצה", gender)
-        
-        # Check for frustration indicators
-        user_input_lower = user_input.lower()
-        is_frustrated = any(indicator in user_input_lower for indicator in self.frustration_indicators)
-        
-        # Emotional support for frustration
-        if is_frustrated:
-            return f"הכל בסדר, מותר לקחת רגע! {bo} נפתור רק עוד אחד קטן ביחד ונצא אלופים!"
-        
-        # Check if this is first session (missing profile data) - NEVER assume interests
-        needs_onboarding = (
-            not user_profile.get("grade_level") or 
-            user_profile.get("grade_level") in [None, "", "Unknown"] or
-            not user_profile.get("interests") or 
-            user_profile.get("interests") in [None, "", "Unknown"]
-        )
-        
-        # Onboarding mode - explicitly ask for grade and interests warmly, gender-correct, zero assumptions
-        if needs_onboarding:
-            if len(conversation_history) <= 1:
-                return f"שלום {user_profile.get('name', chaver)}! כל כך כיף ש{atah} כאן! באיזו כיתה {atah} {lomed} ומה {atah} הכי {ohev} לעשות בזמן הפנוי?"
-            else:
-                return f"מדהים! עכשיו שאני מכיר {'אותך' if gender == 'male' else 'אותך'} טוב יותר, {bo} נצא להרפתק במתמטיקה ביחד!"
-        
-        # Initialize attempt counter if not exists
-        if user_id not in self.attempt_counts:
-            self.attempt_counts[user_id] = 0
-        
-        # Check for help requests with growth mindset
-        if any(word in user_input for word in ['עזרה', 'לא מבין', 'קשה', 'איך']):
-            self.attempt_counts[user_id] += 1
-            if self.attempt_counts[user_id] >= 3:
-                self.attempt_counts[user_id] = 0
-                # Record this as a learning moment
-                self.record_victory(user_id, "התמדה מדהימה")
-                return "אני כל כך גאה בך שלא ויתרת! התשובה היא 12, אבל הדרך שלנו לשם הייתה מדהימה!"
-            else:
-                return f"איזה כיוון יפה! היינו ממש קרוב, {bo} ננסה יחד עוד צעד קטן!"
-        
-        # Check for numeric answers with celebration
-        import re
-        numbers = re.findall(r'\d+', user_input)
-        if numbers:
-            if len(numbers) == 1:
-                num = int(numbers[0])
-                if num > 0:
-                    self.attempt_counts[user_id] = 0
-                    # Record victory
-                    self.record_victory(user_id, "פתרון מתמטי מוצלח")
-                    return "וואו! אנחנו עושים את זה! זה נכון! כל הכבוד על ההתמדה שלך!"
-                else:
-                    self.attempt_counts[user_id] += 1
-                    if self.attempt_counts[user_id] >= 3:
-                        self.attempt_counts[user_id] = 0
-                        return f"היינו קרובים מאוד! הכיוון שלנו היה יפה, {bo} נחשוב יחד על מספרים חיוביים!"
-                    else:
-                        return f"איזה כיוון יפה! {bo} נחשוב יחד איך המספרים מתנהגים!"
-        
-        # Interest-based responses - STRICTLY driven by the actual DB value, never assumed.
-        # If interests is empty this branch is unreachable (onboarding handles it above).
-        interests = (user_profile.get("interests") or "").lower()
-        victories = self.victory_memory.get(user_id, [])
-        
-        if "football" in interests or "כדורגל" in interests:
-            if "כדורגל" in str(victories):
-                return f"זוכר/ת איך פתרנו את הבעיה עם כדורגל? {bo} נעשה את זה שוב!"
-            return f"{ohed} כדורגל? אנחנו חושבים על בעיה שקשורה למשחק! כמה שחקנים בקבוצה שלנו?"
-        elif "gaming" in interests or "משחקים" in interests:
-            if "משחקים" in str(victories):
-                return "כמו במשחקים, אנחנו מתקדמים רמה אחר רמה!"
-            return f"{ohev} משחקים? אנחנו עולים רמה! איזה אתגר חדש {tirtze}?"
-        elif "dancing" in interests or "ריקוד" in interests:
-            return f"ריקודים זה כיף! אנחנו רוקדים עם מספרים! כמה צעדים נעשה ביחד?"
-        elif "coding" in interests or "קידוד" in interests:
-            return f"קידוד זה מדהים! אנחנו מתכנתים פתרונות! איזה קוד נכתוב ביחד?"
-        elif "music" in interests or "מוזיקה" in interests:
-            return f"מוזיקה זה יפה! אנחנו יוצרים מנגינה עם מספרים! איזה תו ננגן?"
-        elif "reading" in interests or "קריאה" in interests:
-            return f"קריאה זה כיף! אנחנו כותבים סיפורים עם מספרים! איזה סיפור נספר?"
-        else:
-            # Reference previous victories - still never invents a hobby
-            if victories:
-                return f"זוכר/ת איך ניצחנו ב-{victories[0]}? {bo} נעשה את זה שוב!"
-            return f"שלום {chaver}! אנחנו הולכים להיות אלופי מתמטיקה ביחד! איזה נושא נתחיל?"
-    
-    def record_victory(self, user_id: int, achievement: str):
-        """Record a memorable achievement for the child"""
-        if user_id not in self.victory_memory:
-            self.victory_memory[user_id] = []
-        
-        if achievement not in self.victory_memory[user_id]:
-            self.victory_memory[user_id].append(achievement)
-            # Keep only last 5 victories
-            if len(self.victory_memory[user_id]) > 5:
-                self.victory_memory[user_id] = self.victory_memory[user_id][-5:]
+        child_name = user_profile.get("name", "תלמיד")
+        dynamic_summary = (await get_student_profile_summary(child_name)) or ""
+        recent_history = await get_chat_history(child_name, limit=10)
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history)
+        return await self._call_llm(system_prompt, conversation_history)
     
     def extract_profile_info(self, messages: List[Dict]) -> Dict:
         """Extract grade level and interests from conversation transcript"""
@@ -311,7 +385,7 @@ class MathTutor:
         interests = []
         
         # Combine all user messages for analysis
-        user_messages = [msg.get("content", "") for msg in messages if msg.get("role") == "user"]
+        user_messages = [msg.get("content") or "" for msg in messages if msg.get("role") == "user"]
         all_text = " ".join(user_messages).lower()
         
         # Grade level extraction patterns (simplified)
@@ -383,7 +457,7 @@ class MathTutor:
         mistakes_summary = ""
         
         # Extract topic from conversation
-        all_text = " ".join([msg.get("content", "") for msg in messages])
+        all_text = " ".join([msg.get("content") or "" for msg in messages])
         
         # Simple topic detection
         if any(word in all_text.lower() for word in ['חיבור', 'plus', 'עלה', 'מוסיף']):
@@ -403,8 +477,8 @@ class MathTutor:
         positive_indicators = ['מצוין', 'נכון', 'כל הכבוד', 'awesome', 'correct', 'excellent', 'great', 'וואו', 'כיף', 'מדהים', 'יפה']
         negative_indicators = ['לא נכון', 'נסה שוב', 'קרוב', 'טעות', 'wrong', 'incorrect', 'try again', 'דאגה']
         
-        positive_count = sum(1 for msg in assistant_messages if any(indicator in msg.get("content", "").lower() for indicator in positive_indicators))
-        negative_count = sum(1 for msg in assistant_messages if any(indicator in msg.get("content", "").lower() for indicator in negative_indicators))
+        positive_count = sum(1 for msg in assistant_messages if any(indicator in (msg.get("content") or "").lower() for indicator in positive_indicators))
+        negative_count = sum(1 for msg in assistant_messages if any(indicator in (msg.get("content") or "").lower() for indicator in negative_indicators))
         
         # Calculate score delta (-10 to +20)
         if len(assistant_messages) > 0:
@@ -427,185 +501,94 @@ class MathTutor:
         }
 
 
-class EnglishTutor:
-    def __init__(self):
-        self.attempt_counts = {}  # Track consecutive incorrect attempts per user session
-        self.victory_memory = {}  # Store memorable wins per user
-        self.frustration_indicators = ['עייף', 'קשה', 'לא מבין', 'מת', 'אני לא יכול', 'אני עייף', 'לא רוצה', 'שונא', 'מסכים']
+class EnglishTutor(BaseAgent):
+
     
-    def get_user_profile(self, user_id: int) -> Optional[Dict]:
-        """Get user profile from database"""
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                return {
-                    "id": user.id,
-                    "name": user.name,
-                    "role": user.role,
-                    "grade_level": user.grade_level,
-                    "interests": user.interests
-                }
-            return None
-        finally:
-            db.close()
-    
-    def generate_system_prompt(self, user_profile: Dict) -> str:
-        """Generate system prompt for the bilingual English tutor - mentor persona"""
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None) -> str:
+        """Generate system prompt for the bilingual English tutor - mentor persona,
+        enriched with the student's dynamic long-term memory and recent chat turns.
+        """
         interests = user_profile.get("interests") or None
         grade_level = user_profile.get("grade_level", "elementary school")
         name = user_profile.get("name", "תלמיד")
         gender = get_gender(name)
         gender_hebrew = "נקבה" if gender == "female" else "זכר"
         
-        victories = self.victory_memory.get(user_profile.get("id", ""), [])
-        victory_context = ""
-        if victories:
-            victory_context = f"ניצחונות קודמים: {', '.join(victories[:3])}"
-        
         interests_line = interests if interests else "לא ידוע - אין להניח שום תחום עניין!"
+        
+        summary_line = dynamic_summary if dynamic_summary else "אין עדיין סיכום לטווח ארוך."
+        history_lines = "- אין עדיין היסטוריית שיחה.\n"
+        if recent_history:
+            history_lines = ""
+            for m in recent_history:
+                speaker = "מנטור" if m.get("role") == "assistant" else "תלמיד"
+                content = str(m.get("content") or "")[:250]
+                history_lines += f"- {speaker}: {content}\n"
         
         prompt = f"""אתה מנטור אנגלית מעורר השראה וחבר לכל החיים בשם המשפחה. אתה דו-לשוני: מסביר ומעודד בעברית, ומלמד ומתרגל אוצר מילים ומשפטים באנגלית.
 
 פרטי התלמיד:
 - שם: {name}
 - מגדר: {gender_hebrew}
-- רמה: {grade_level}
+- כיתה/שכבה: {grade_level}
 - תחומי עניין: {interests_line}
-{victory_context}
+
+זיכרון לטווח ארוך:
+{summary_line}
+
+הודעות אחרונות מהשיחה (עד 10):
+{history_lines}
+
+חובה מוחלטת - תוכנית לימודים לפי כיתה (אסור לשאול את התלמיד/ה מה הכיתה, הגיל או מה הוא/היא רוצה ללמוד):
+- אם הכיתה היא "Kindergarten" (גן חובה): אנגלית = אוצר מילים בסיסי בלבד (צבעים, חיות). שחק/י מאוד, אל תניח/י שהילד/ה יודע/ת לקרוא.
+- אם הכיתה היא "1st Grade" (כיתה א'): אנגלית = מילים פשוטות וביטויים קצרים ונימוסים בסיסיים באנגלית.
+- אם הכיתה היא "3rd Grade" (כיתה ג'): אנגלית = משפטים קצרים, שאלות בסיסיות ואוצר מילים יומיומי.
+- אם הכיתה היא "5th Grade" (כיתה ה'): אנגלית = משפטים שיחתיים, דקדוק בסיסי (כגון זמן הווה פשוט) וקורא/ת ברמה בסיסית.
+
+אתה חייב לפתוח את השיעור בשאלה אחת קונקרטית באנגלית או בעברית-אנגלית המתאימה בדיוק לכיתה {grade_level}, מבלי לשאול את התלמיד/ה שום פרט אישי או העדפה.
 
 חובה מוחלטת - התאמה מגדרית:
-עליך לפנות לתלמיד/ה תמיד בלשון הדקדוקית הנכונה התואמת למגדר: {gender_hebrew}.
-אם נקבה: השתמש במילים כמו "מוכנה", "את", "אלופה", "אוהבת", "לומדת", "מדברת".
-אם זכר: השתמש במילים כמו "מוכן", "אתה", "אלוף", "אוהב", "לומד", "מדבר".
+עליך לפנות לתלמיד/ה תמיד בלשון הדקדוקית הנכונה התואמת למגדר הזה בדיוק: {gender_hebrew}.
+אם נקבה: השתמש בצורות כמו "את מוכנה", "אלופה", "את", "אוהבת", "לומדת", "מדברת".
+אם זכר: השתמש בצורות כמו "אתה מוכן", "אלוף", "אתה", "אוהב", "לומד", "מדבר".
 לעולם אל תשתמש כברירת מחדל בלשון זכר כאשר מדובר בתלמידה.
 
 חובה מוחלטת - אפס הנחות על תחומי עניין:
-אם תחומי העניין אינם ידועים (רשום "לא ידוע"), אסור לך בהחלט להניח או להמציא תחום עניין כלשהו.
-במקרה כזה, ההודעה הראשונה שלך חייבת לשאול את התלמיד/ה במפורש (בעברית) מה הוא/היא הכי אוהב/ת לעשות בזמן הפנוי, תוך שימוש בלשון הדקדוקית הנכונה למגדר {gender_hebrew}.
+אם תחום העניין רשום כ"לא ידוע", אסור לך בהחלט להמציא, להניח או להזכיר תחביב כלשהו.
+ההודעה הראשונה חייבת להיות שאלת פתיחה לימודית מתאימה בדיוק לכיתה {grade_level}. אין לשאול על תחומי עניין או על רצונות הלמידה בהודעה הראשונה. אם נדרש, ניתן לשאול על תחומי עניין רק בשאלה נפרדת מאוחר יותר, תוך שימוש בלשון הדקדוקית הנכונה למגדר {gender_hebrew}.
 
 אישיות וטון:
 - חם, נלהב, מעודד עמוקות, ואמפתי כמו מנטור ילדות אהוב וחבר טוב
 - שפת גישה חיובית: אף פעם לא להשתמש במילים "טעות" או "לא נכון"
 - תרגל מילים ומשפטים באנגלית תוך התאמה לתחומי העניין ולרמת הכיתה של התלמיד/ה - רק אם ידועים בפועל
-- השב ב-1-2 משפטים בלבד - קצר, חי, טבעי ומלא לב להשמעה"""
+- השב ב-1-2 משפטים בלבד - קצר, חי, טבעי ומלא לב להשמעה
+
+חובה מוחלטת - חינוך פרואקטיבי (Proactive Pedagogy):
+א. אף פעם אל תשבת או לחכות שהתלמיד/ה יוביל. אף פעם אל תסיים את השיחה במשפט סביל כמו "להתראות" או "בכיף".
+ב. כאשר התלמיד/ה מצליח/ה - שבח/י בקצרה ועבור/י מיד לאתגר המשך קטן וקשור. דוגמה: "Great job! Now, do you know how to say 'Ball' in English?" או "Awesome! Let's play a game. What color is the soccer ball?"
+ג. שאל/י שאלה אחת בלבד בכל הודעה. אף פעם אל תשאל שתי שאלות באותו משפט. סיים/י כל הודעה בפעולה או שאלה ברורה, קצרה וכיפית לתלמיד/ה.
+ד. שחק/י את החוויה: ספר/י לתלמיד/ה שהוא/היא צובר/ת נקודות, מוצא/ת אוצרות או כובש/ת שערים עם כל תשובה נכונה."""
         
         return prompt
     
-    def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> str:
-        """Get a response from the real OpenAI gpt-4o-mini model, using the
-        gender- and interest-aware bilingual system prompt. Falls back to the
-        local mock engine if the LLM is not configured or the call fails.
+    async def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> str:
+        """Get a response from the real OpenAI model (gpt-5.6-luna, falling back
+        to gpt-4o-mini), using the gender-, interest-, and long-term-memory-aware
+        bilingual system prompt. This call is fully asynchronous so it never blocks
+        the FastAPI event loop.
         """
-        system_prompt = self.generate_system_prompt(user_profile)
-        reply = call_llm(system_prompt, conversation_history)
-        if reply is not None:
-            return reply
-        
-        # Fallback to mock engine
-        user_input = conversation_history[-1].get("content", "") if conversation_history else ""
-        return self.get_mock_response(user_input, conversation_history, user_profile)
-    
-    def get_mock_response(self, user_input: str, conversation_history: List[Dict], user_profile: Dict) -> str:
-        """Generate English tutor mock responses with inspiring mentor persona - gender-aware, zero interest assumptions"""
-        user_id = user_profile["id"]
-        gender = get_gender(user_profile.get("name", ""))
-        bo = g("בוא", gender)
-        atah = g("אתה", gender)
-        ohev = g("אוהב", gender)
-        lomed = g("לומד", gender)
-        mochan = g("מוכן", gender)
-        medaber = g("מדבר", gender)
-        chaver = g("חבר", gender)
-        
-        # Check for frustration indicators
-        user_input_lower = user_input.lower()
-        is_frustrated = any(indicator in user_input_lower for indicator in self.frustration_indicators)
-        
-        # Emotional support for frustration
-        if is_frustrated:
-            return f"הכל בסדר, מותר לקחת רגע! {bo} נתרגל רק עוד מילה אחת ביחד ונצא אלופים!"
-        
-        # Check if this is first session (missing profile data) - NEVER assume interests
-        needs_onboarding = (
-            not user_profile.get("grade_level") or 
-            user_profile.get("grade_level") in [None, "", "Unknown"] or
-            not user_profile.get("interests") or 
-            user_profile.get("interests") in [None, "", "Unknown"]
-        )
-        
-        # Onboarding mode - explicitly ask for grade and interests, gender-correct, zero assumptions
-        if needs_onboarding:
-            if len(conversation_history) <= 1:
-                return f"שלום {user_profile.get('name', chaver)}! I'm so happy {atah} are here! באיזו כיתה {atah} {lomed} ומה {atah} הכי {ohev} לעשות בזמן הפנוי?"
-            else:
-                return f"מדהים! Now we will learn English together in a fun way! {mochan} להתחיל?"
-        
-        # Initialize attempt counter if not exists
-        if user_id not in self.attempt_counts:
-            self.attempt_counts[user_id] = 0
-        
-        # Simple heuristic analysis for English
-        # Check for user asking for help or using Hebrew
-        if any(word in user_input for word in ['עזרה', 'לא מבין', 'קשה', 'איך']):
-            self.attempt_counts[user_id] += 1
-            if self.attempt_counts[user_id] >= 3:
-                self.attempt_counts[user_id] = 0
-                self.record_victory(user_id, "התמדה מדהימה באנגלית")
-                return "אני כל כך גאה בך! התשובה הנכונה היא: I love learning English! כל הכבוד שהתמדת!"
-            else:
-                return "איזה כיוון יפה! Let's try together - say one word in English!"
-        
-        # Check if the user said something in English
-        import re
-        english_words = re.findall(r'[a-zA-Z]+', user_input)
-        if english_words:
-            self.attempt_counts[user_id] = 0
-            self.record_victory(user_id, "התקדמות באנגלית")
-            english_phrase = ' '.join(english_words)
-            return f'Wow! "{english_phrase}" - איזה יפה! {atah} {medaber} אנגלית מצוין! {bo} ננסה עוד משפט!'
-        
-        # Interest-based responses - STRICTLY driven by the actual DB value, never assumed.
-        # If interests is empty this branch is unreachable (onboarding handles it above).
-        interests = (user_profile.get("interests") or "").lower()
-        victories = self.victory_memory.get(user_id, [])
-        
-        if "football" in interests or "כדורגל" in interests:
-            if "כדורגל" in str(victories):
-                return f"Remember how we learned 'ball'? {bo} נלמוד עוד מילה חדשה בכדורגל!"
-            return f"{atah} {ohev} כדורגל! {bo} נלמוד את המילה: 'football'. תגיד/י איתי: football!"
-        elif "gaming" in interests or "משחקים" in interests:
-            return f"{ohev} משחקים? {bo} נלמוד: 'game'. תגיד/י איתי: game!"
-        elif "dancing" in interests or "ריקוד" in interests:
-            return f"ריקוד זה כיף! {bo} נלמוד: 'dance'. תגיד/י איתי: dance!"
-        elif "coding" in interests or "קידוד" in interests:
-            return f"קידוד זה מדהים! {bo} נלמוד: 'computer'. תגיד/י איתי: computer!"
-        elif "music" in interests or "מוזיקה" in interests:
-            return f"מוזיקה זה יפה! {bo} נלמוד: 'music'. תגיד/י איתי: music!"
-        elif "reading" in interests or "קריאה" in interests:
-            return f"קריאה זה כיף! {bo} נלמוד: 'book'. תגיד/י איתי: book!"
-        else:
-            # Reference previous victories - still never invents a hobby
-            if victories:
-                return f"זוכר/ת איך התקדמנו ב-{victories[0]}? {bo} נלמוד עוד מילה!"
-            return "Hello friend! We are going to be English stars together! What word would you like to learn?"
-    
-    def record_victory(self, user_id: int, achievement: str):
-        """Record a memorable achievement for the child"""
-        if user_id not in self.victory_memory:
-            self.victory_memory[user_id] = []
-        
-        if achievement not in self.victory_memory[user_id]:
-            self.victory_memory[user_id].append(achievement)
-            if len(self.victory_memory[user_id]) > 5:
-                self.victory_memory[user_id] = self.victory_memory[user_id][-5:]
+        child_name = user_profile.get("name", "תלמיד")
+        dynamic_summary = (await get_student_profile_summary(child_name)) or ""
+        recent_history = await get_chat_history(child_name, limit=10)
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history)
+        return await self._call_llm(system_prompt, conversation_history)
     
     def extract_profile_info(self, messages: List[Dict]) -> Dict:
         """Extract grade level and interests from conversation transcript"""
         grade_level = None
         interests = []
         
-        user_messages = [msg.get("content", "") for msg in messages if msg.get("role") == "user"]
+        user_messages = [msg.get("content") or "" for msg in messages if msg.get("role") == "user"]
         all_text = " ".join(user_messages).lower()
         
         # Same grade level extraction as math
@@ -675,7 +658,7 @@ class EnglishTutor:
         score_delta = 0
         mistakes_summary = ""
         
-        all_text = " ".join([msg.get("content", "") for msg in messages])
+        all_text = " ".join([msg.get("content") or "" for msg in messages])
         
         # Topic detection
         if any(word in all_text.lower() for word in ['animals', 'חיות']):
@@ -689,7 +672,7 @@ class EnglishTutor:
         
         # Count English words as positive
         import re
-        user_messages = [msg.get("content", "") for msg in messages if msg.get("role") == "user"]
+        user_messages = [msg.get("content") or "" for msg in messages if msg.get("role") == "user"]
         assistant_messages = [msg for msg in messages if msg.get("role") == "assistant"]
         
         english_word_count = 0
@@ -701,8 +684,8 @@ class EnglishTutor:
         positive_indicators = ['מצוין', 'נכון', 'כל הכבוד', 'awesome', 'correct', 'excellent', 'great', 'wow', 'good', 'beautiful', 'יפה']
         negative_indicators = ['טעות', 'wrong', 'incorrect', 'try again']
         
-        positive_count = sum(1 for msg in assistant_messages if any(indicator in msg.get("content", "").lower() for indicator in positive_indicators))
-        negative_count = sum(1 for msg in assistant_messages if any(indicator in msg.get("content", "").lower() for indicator in negative_indicators))
+        positive_count = sum(1 for msg in assistant_messages if any(indicator in (msg.get("content") or "").lower() for indicator in positive_indicators))
+        negative_count = sum(1 for msg in assistant_messages if any(indicator in (msg.get("content") or "").lower() for indicator in negative_indicators))
         
         # Calculate score
         if len(assistant_messages) > 0:
@@ -723,6 +706,59 @@ class EnglishTutor:
             "score_delta": score_delta,
             "mistakes_summary": mistakes_summary
         }
+
+
+async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_history: List[Dict], new_reply: str):
+    """Persist the latest chat turn and update the dynamic student profile summary.
+    This runs as a FastAPI background task so it does not delay the chat response.
+    """
+    try:
+        # Save the new user messages and the assistant reply to chat_history
+        await append_chat_messages(child_name, conversation_history, new_reply)
+        
+        # Build the full conversation including the new reply
+        full_conversation = list(conversation_history) + [{"role": "assistant", "content": new_reply}]
+        
+        # Fetch the previous profile summary (if any)
+        current_summary = await get_student_profile_summary(child_name)
+        summary_context = current_summary if current_summary else "אין עדיין סיכום."
+        
+        # Ask the LLM to produce an updated, concise Hebrew learning profile
+        summarization_prompt = f"""אתה מנתח/ת למידה של תלמיד/ה. עדכן/י את סיכום הפרופיל הלמידה על בסיס השיחה המלאה בין המנטור לתלמיד/ה.
+
+פרטים:
+- שם: {child_name}
+- כיתה: {user_profile.get('grade_level', '')}
+- סיכום קודם: {summary_context}
+
+כללים לכתיבה:
+- כתוב ב-2-3 משפטים בעברית בלבד.
+- השתמש בסימנים מתמטיים פשוטים בטקסט (מספרים, * או המילה "כפול" לכפל, / לחילוק) — אין להשתמש ב-LaTeX, backslashes, סימני \\times, \\frac, \\(, \\), או סוגריים מסולסלים מיותרים.
+
+תוכן הסיכום:
+1. חוזקות עיקריות של התלמיד/ה
+2. תחומים שדורשים עוד תרגול
+3. נושאים שהושלמו/נשלטו
+4. המלצה לשאלת המשך או נושא הבא"""
+        
+        new_summary = await call_llm(summarization_prompt, full_conversation)
+        if new_summary and not new_summary.strip().startswith("מפתח ה-API"):
+            # Sanitize math artifacts from the summary before saving
+            clean_summary = (
+                new_summary
+                .replace('\\times', ' כפול ')
+                .replace('\\(', '')
+                .replace('\\)', '')
+                .replace('\\frac', '')
+                .replace('\\', '')
+                .replace('{,}', ',')
+                .replace('**', '')
+                .replace('\n', ' ')
+                .strip()
+            )
+            await update_student_profile_summary(child_name, clean_summary)
+    except Exception as e:
+        logger.bind(child_name=child_name, error=str(e)).exception("Failed to update tutor memory")
 
 
 # Initialize tutor instances
