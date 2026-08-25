@@ -7,7 +7,16 @@ import uuid
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
-from database import init_db, get_db, User, LearningLog, init_tutor_history_db
+from database import (
+    init_db,
+    get_db,
+    User,
+    LearningLog,
+    init_tutor_history_db,
+    TutorHistorySessionLocal,
+    StudentProfile,
+    ChatHistory,
+)
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select
@@ -128,6 +137,15 @@ async def serve_index():
     return FileResponse("static/index.html")
 
 
+@app.get("/dashboard")
+async def serve_dashboard():
+    """
+    Serve the parent management dashboard. Intentionally not linked from
+    the kids-facing index.html - this is a hidden route for parents only.
+    """
+    return FileResponse("static/dashboard.html")
+
+
 @app.get("/health")
 async def health_check(db: AsyncSession = Depends(get_db)):
     """
@@ -149,6 +167,61 @@ async def get_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User))
     users = result.scalars().all()
     return users
+
+
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(db: AsyncSession = Depends(get_db)):
+    """
+    Aggregate per-child, per-subject learning data for the parent dashboard:
+    - The AI-generated long-term profile_summary for math and english.
+    - The 5 most recent chat_history messages for each subject, so parents
+      can see recent activity without digging through raw logs.
+    """
+    result = await db.execute(select(User).where(User.role == "child"))
+    children = result.scalars().all()
+
+    subjects = ("math", "english")
+    dashboard = []
+
+    async with TutorHistorySessionLocal() as history_db:
+        for child in children:
+            child_name = child.name
+            subjects_data = {}
+
+            for subject in subjects:
+                profile_result = await history_db.execute(
+                    select(StudentProfile).where(
+                        StudentProfile.child_name == child_name,
+                        StudentProfile.subject == subject,
+                    )
+                )
+                profile = profile_result.scalar_one_or_none()
+
+                messages_result = await history_db.execute(
+                    select(ChatHistory)
+                    .where(ChatHistory.child_name == child_name, ChatHistory.subject == subject)
+                    .order_by(ChatHistory.timestamp.desc())
+                    .limit(5)
+                )
+                recent_messages = list(reversed(messages_result.scalars().all()))
+
+                subjects_data[subject] = {
+                    "profile_summary": profile.profile_summary if profile else None,
+                    "updated_at": profile.updated_at if profile else None,
+                    "recent_messages": [
+                        {"role": m.role, "content": m.content, "timestamp": m.timestamp}
+                        for m in recent_messages
+                    ],
+                }
+
+            dashboard.append({
+                "user_id": child.id,
+                "child_name": child_name,
+                "grade_level": child.grade_level,
+                "subjects": subjects_data,
+            })
+
+    return {"children": dashboard}
 
 
 @app.post("/api/tutor/chat", response_model=ChatResponse)

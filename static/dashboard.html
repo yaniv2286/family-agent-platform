@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>לוח בקרה להורים - Family Agent Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            min-height: 100vh;
+            width: 100%;
+            padding: 30px 20px;
+        }
+
+        .page-header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .page-header h1 {
+            font-size: 2em;
+            margin-bottom: 8px;
+        }
+
+        .page-header p {
+            opacity: 0.9;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .child-card {
+            background: white;
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+        }
+
+        .child-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 12px;
+        }
+
+        .child-card-header h2 {
+            color: #333;
+            font-size: 1.4em;
+        }
+
+        .grade-badge {
+            background: #f0f0f0;
+            color: #667eea;
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 12px;
+        }
+
+        .subject-block {
+            border: 2px solid #f0f0f0;
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }
+
+        .subject-block:last-of-type {
+            margin-bottom: 0;
+        }
+
+        .subject-block.math {
+            border-color: #a8c5f5;
+        }
+
+        .subject-block.english {
+            border-color: #f5c6e0;
+        }
+
+        .subject-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 1.05em;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .profile-summary {
+            color: #444;
+            font-size: 0.95em;
+            line-height: 1.5;
+            margin-bottom: 6px;
+        }
+
+        .profile-summary.empty {
+            color: #999;
+            font-style: italic;
+        }
+
+        .updated-at {
+            color: #999;
+            font-size: 0.78em;
+            margin-bottom: 10px;
+        }
+
+        details.recent-logs {
+            margin-top: 8px;
+        }
+
+        details.recent-logs summary {
+            cursor: pointer;
+            color: #667eea;
+            font-weight: 600;
+            font-size: 0.9em;
+            padding: 6px 0;
+            outline: none;
+        }
+
+        details.recent-logs summary:hover {
+            text-decoration: underline;
+        }
+
+        .chat-log-list {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .chat-log-item {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 0.85em;
+        }
+
+        .chat-log-item .role {
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 2px;
+        }
+
+        .chat-log-item.assistant .role {
+            color: #764ba2;
+        }
+
+        .chat-log-item .content {
+            color: #333;
+            word-break: break-word;
+        }
+
+        .no-logs {
+            color: #999;
+            font-size: 0.85em;
+            font-style: italic;
+        }
+
+        .loading, .error-message {
+            text-align: center;
+            color: white;
+            font-size: 1.1em;
+            margin-top: 60px;
+        }
+
+        @media (max-width: 480px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>📊 לוח בקרה להורים</h1>
+        <p>מעקב התקדמות למידה - חשבון ואנגלית</p>
+    </div>
+
+    <div id="dashboard-content">
+        <div class="loading">טוען נתונים...</div>
+    </div>
+
+    <script>
+        const SUBJECT_META = {
+            math: { icon: '📐', label: 'חשבון' },
+            english: { icon: '🔤', label: 'אנגלית' },
+        };
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str ?? '';
+            return div.innerHTML;
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '';
+            try {
+                return new Date(ts).toLocaleString('he-IL');
+            } catch (e) {
+                return ts;
+            }
+        }
+
+        function renderSubjectBlock(subjectKey, data) {
+            const meta = SUBJECT_META[subjectKey] || { icon: '📚', label: subjectKey };
+            const summaryHtml = data.profile_summary
+                ? `<div class="profile-summary">${escapeHtml(data.profile_summary)}</div>`
+                : `<div class="profile-summary empty">אין עדיין סיכום למידה בנושא זה.</div>`;
+            const updatedHtml = data.updated_at
+                ? `<div class="updated-at">עודכן לאחרונה: ${formatTimestamp(data.updated_at)}</div>`
+                : '';
+
+            const messages = data.recent_messages || [];
+            const logsHtml = messages.length
+                ? `<div class="chat-log-list">` +
+                  messages.map(m => `
+                    <div class="chat-log-item ${m.role === 'assistant' ? 'assistant' : 'user'}">
+                        <div class="role">${m.role === 'assistant' ? 'מנטור' : 'תלמיד'}</div>
+                        <div class="content">${escapeHtml(m.content)}</div>
+                    </div>
+                  `).join('') +
+                  `</div>`
+                : `<div class="no-logs">אין עדיין הודעות בנושא זה.</div>`;
+
+            return `
+                <div class="subject-block ${subjectKey}">
+                    <div class="subject-title">${meta.icon} ${meta.label}</div>
+                    ${summaryHtml}
+                    ${updatedHtml}
+                    <details class="recent-logs">
+                        <summary>💬 יומן שיחות אחרון</summary>
+                        ${logsHtml}
+                    </details>
+                </div>
+            `;
+        }
+
+        function renderChildCard(child) {
+            const subjectsHtml = Object.entries(child.subjects || {})
+                .map(([subjectKey, data]) => renderSubjectBlock(subjectKey, data))
+                .join('');
+
+            return `
+                <div class="child-card">
+                    <div class="child-card-header">
+                        <h2>👤 ${escapeHtml(child.child_name)}</h2>
+                        ${child.grade_level ? `<span class="grade-badge">${escapeHtml(child.grade_level)}</span>` : ''}
+                    </div>
+                    ${subjectsHtml}
+                </div>
+            `;
+        }
+
+        async function loadDashboard() {
+            const container = document.getElementById('dashboard-content');
+            try {
+                const response = await fetch('/api/dashboard/stats');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                const children = data.children || [];
+
+                if (!children.length) {
+                    container.innerHTML = '<div class="error-message">לא נמצאו תלמידים רשומים.</div>';
+                    return;
+                }
+
+                container.innerHTML = `<div class="dashboard-grid">${children.map(renderChildCard).join('')}</div>`;
+            } catch (error) {
+                console.error('Failed to load dashboard stats:', error);
+                container.innerHTML = '<div class="error-message">שגיאה בטעינת נתוני לוח הבקרה. אנא נסה לרענן.</div>';
+            }
+        }
+
+        loadDashboard();
+    </script>
+</body>
+</html>
