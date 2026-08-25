@@ -39,6 +39,11 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+class EnglishChatRequest(BaseModel):
+    user_id: int
+    messages: List[Dict[str, str]]
+
+
 class SpeakRequest(BaseModel):
     text: str
 
@@ -174,6 +179,31 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
         user_profile,
         request.messages,
         reply,
+        request.subject,
+    )
+    
+    return ChatResponse(reply=reply)
+
+
+@app.post("/api/tutor/english", response_model=ChatResponse)
+async def tutor_english(request: EnglishChatRequest, background_tasks: BackgroundTasks):
+    """
+    Dedicated English-tutor chat endpoint.
+    """
+    user_profile = await english_tutor.get_user_profile(request.user_id)
+    if not user_profile:
+        return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
+    
+    reply = await english_tutor.get_llm_response(request.messages, user_profile)
+    
+    # Persist the new turn and update the English profile summary in the background.
+    background_tasks.add_task(
+        update_tutor_memory,
+        user_profile["name"],
+        user_profile,
+        request.messages,
+        reply,
+        "english",
     )
     
     return ChatResponse(reply=reply)

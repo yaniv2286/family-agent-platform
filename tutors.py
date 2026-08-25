@@ -227,6 +227,7 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "recording.mp3") 
             model="whisper-1",
             file=audio_file,
             language="he",
+            prompt="The user is an Israeli child speaking a mix of Hebrew and accented English.",
         )
         latency = time.perf_counter() - start
         logger.info(
@@ -525,7 +526,7 @@ class EnglishTutor(BaseAgent):
                 content = str(m.get("content") or "")[:250]
                 history_lines += f"- {speaker}: {content}\n"
         
-        prompt = f"""אתה מנטור אנגלית מעורר השראה וחבר לכל החיים בשם המשפחה. אתה דו-לשוני: מסביר ומעודד בעברית, ומלמד ומתרגל אוצר מילים ומשפטים באנגלית.
+        prompt = f"""אתה מורה אנגלית מחמיא אך מחמיר/ה לילדים בישראל. השיעור הוא אחד על אחד, חי, קצר ומלא עידוד. קוראים לך "אנג'ל".
 
 פרטי התלמיד:
 - שם: {name}
@@ -539,35 +540,24 @@ class EnglishTutor(BaseAgent):
 הודעות אחרונות מהשיחה (עד 10):
 {history_lines}
 
-חובה מוחלטת - תוכנית לימודים לפי כיתה (אסור לשאול את התלמיד/ה מה הכיתה, הגיל או מה הוא/היא רוצה ללמוד):
-- אם הכיתה היא "Kindergarten" (גן חובה): אנגלית = אוצר מילים בסיסי בלבד (צבעים, חיות). שחק/י מאוד, אל תניח/י שהילד/ה יודע/ת לקרוא.
-- אם הכיתה היא "1st Grade" (כיתה א'): אנגלית = מילים פשוטות וביטויים קצרים ונימוסים בסיסיים באנגלית.
-- אם הכיתה היא "3rd Grade" (כיתה ג'): אנגלית = משפטים קצרים, שאלות בסיסיות ואוצר מילים יומיומי.
-- אם הכיתה היא "5th Grade" (כיתה ה'): אנגלית = משפטים שיחתיים, דקדוק בסיסי (כגון זמן הווה פשוט) וקורא/ת ברמה בסיסית.
+חובה מוחלטת - שיטת סוקרטס:
+- אף פעם אל תיתן/י תרגום ישיר. אם התלמיד/ה שואל/ת "איך אומרים X", ספק/י רמז, את האות הראשונה, או שתמש/י במילה במשפט עם מילה חסרה. דוגמה: "זה מתחיל באות B ___" או "I have a red ___" בלבד.
+- הגב/י בעברית כשצריך להסביר, אך תמיד תבע/י מהתלמיד/ה לנסות לענות באנגלית.
 
-אתה חייב לפתוח את השיעור בשאלה אחת קונקרטית באנגלית או בעברית-אנגלית המתאימה בדיוק לכיתה {grade_level}, מבלי לשאול את התלמיד/ה שום פרט אישי או העדפה.
+חובה מוחלטת - תיקון עדין וברור:
+- תקן/י שגיאות דקדוק באנגלית בעדינות ובבירור לפני שאת/ה ממשיך/ה הלאה. דוגמה: "Great try! It's 'I am happy', not 'I happy'. Now, can you say 'I am happy'?"
+- אף פעם אל תדלג/י על שגיאה.
 
-חובה מוחלטת - התאמה מגדרית:
-עליך לפנות לתלמיד/ה תמיד בלשון הדקדוקית הנכונה התואמת למגדר הזה בדיוק: {gender_hebrew}.
-אם נקבה: השתמש בצורות כמו "את מוכנה", "אלופה", "את", "אוהבת", "לומדת", "מדברת".
-אם זכר: השתמש בצורות כמו "אתה מוכן", "אלוף", "אתה", "אוהב", "לומד", "מדבר".
-לעולם אל תשתמש כברירת מחדל בלשון זכר כאשר מדובר בתלמידה.
+חובה מוחלטת - תגובה בעברית:
+- אם התלמיד/ה עונה בעברית, הכר/י את המענה, אך תמיד תגיד/י בחיוך: "בוא/י ננסה באנגלית!"
 
-חובה מוחלטת - אפס הנחות על תחומי עניין:
-אם תחום העניין רשום כ"לא ידוע", אסור לך בהחלט להמציא, להניח או להזכיר תחביב כלשהו.
-ההודעה הראשונה חייבת להיות שאלת פתיחה לימודית מתאימה בדיוק לכיתה {grade_level}. אין לשאול על תחומי עניין או על רצונות הלמידה בהודעה הראשונה. אם נדרש, ניתן לשאול על תחומי עניין רק בשאלה נפרדת מאוחר יותר, תוך שימוש בלשון הדקדוקית הנכונה למגדר {gender_hebrew}.
+חובה מוחלטת - פתיחת שיעור:
+- פתח/י בשאלה אחת באנגלית המתאימה לכיתה {grade_level}, ללא שאלות על תחומי עניין.
 
-אישיות וטון:
-- חם, נלהב, מעודד עמוקות, ואמפתי כמו מנטור ילדות אהוב וחבר טוב
-- שפת גישה חיובית: אף פעם לא להשתמש במילים "טעות" או "לא נכון"
-- תרגל מילים ומשפטים באנגלית תוך התאמה לתחומי העניין ולרמת הכיתה של התלמיד/ה - רק אם ידועים בפועל
-- השב ב-1-2 משפטים בלבד - קצר, חי, טבעי ומלא לב להשמעה
-
-חובה מוחלטת - חינוך פרואקטיבי (Proactive Pedagogy):
-א. אף פעם אל תשבת או לחכות שהתלמיד/ה יוביל. אף פעם אל תסיים את השיחה במשפט סביל כמו "להתראות" או "בכיף".
-ב. כאשר התלמיד/ה מצליח/ה - שבח/י בקצרה ועבור/י מיד לאתגר המשך קטן וקשור. דוגמה: "Great job! Now, do you know how to say 'Ball' in English?" או "Awesome! Let's play a game. What color is the soccer ball?"
-ג. שאל/י שאלה אחת בלבד בכל הודעה. אף פעם אל תשאל שתי שאלות באותו משפט. סיים/י כל הודעה בפעולה או שאלה ברורה, קצרה וכיפית לתלמיד/ה.
-ד. שחק/י את החוויה: ספר/י לתלמיד/ה שהוא/היא צובר/ת נקודות, מוצא/ת אוצרות או כובש/ת שערים עם כל תשובה נכונה."""
+חובה מוחלטת - תקשורת:
+- השב/י ב-1-2 משפטים בלבד.
+- פנה/י לתלמיד/ה בלשון הנכונה למגדר: {gender_hebrew}.
+- סיים/י בפעולה או שאלה ברורה וקצרה."""
         
         return prompt
     
@@ -708,7 +698,7 @@ class EnglishTutor(BaseAgent):
         }
 
 
-async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_history: List[Dict], new_reply: str):
+async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_history: List[Dict], new_reply: str, subject: str = "math"):
     """Persist the latest chat turn and update the dynamic student profile summary.
     This runs as a FastAPI background task so it does not delay the chat response.
     """
@@ -723,8 +713,26 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
         current_summary = await get_student_profile_summary(child_name)
         summary_context = current_summary if current_summary else "אין עדיין סיכום."
         
-        # Ask the LLM to produce an updated, concise Hebrew learning profile
-        summarization_prompt = f"""אתה מנתח/ת למידה של תלמיד/ה. עדכן/י את סיכום הפרופיל הלמידה על בסיס השיחה המלאה בין המנטור לתלמיד/ה.
+        if subject == "english":
+            summarization_prompt = f"""אתה מנתח/ת למידה של תלמיד/ה באנגלית. עדכן/י את סיכום הפרופיל הלמידה על בסיס השיחה המלאה.
+
+פרטים:
+- שם: {child_name}
+- כיתה: {user_profile.get('grade_level', '')}
+- סיכום קודם: {summary_context}
+
+כללים לכתיבה:
+- כתוב ב-2-3 משפטים בעברית בלבד.
+- עקוב אחרי אוצר מילים שהתלמיד/ה שלט/ה בו (mastered vocabulary) ותבניות דקדוק שעדיין דורשות תרגול (ongoing grammar struggles).
+- ציין/י את התקדמות הילד/ה ותמצית/י נושא אחד לתרגול הבא.
+
+תוכן הסיכום:
+1. אוצר מילים שהתלמיד/ה שלט/ה בו
+2. קשיים דקדוקיים שדורשים עוד תרגול
+3. התקדמות כללית
+4. המלצה לנושא הבא"""
+        else:
+            summarization_prompt = f"""אתה מנתח/ת למידה של תלמיד/ה. עדכן/י את סיכום הפרופיל הלמידה על בסיס השיחה המלאה בין המנטור לתלמיד/ה.
 
 פרטים:
 - שם: {child_name}
@@ -743,19 +751,23 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
         
         new_summary = await call_llm(summarization_prompt, full_conversation)
         if new_summary and not new_summary.strip().startswith("מפתח ה-API"):
-            # Sanitize math artifacts from the summary before saving
-            clean_summary = (
-                new_summary
-                .replace('\\times', ' כפול ')
-                .replace('\\(', '')
-                .replace('\\)', '')
-                .replace('\\frac', '')
-                .replace('\\', '')
-                .replace('{,}', ',')
-                .replace('**', '')
-                .replace('\n', ' ')
-                .strip()
-            )
+            if subject == "english":
+                # English summaries don't need math sanitization
+                clean_summary = new_summary.replace('\n', ' ').strip()
+            else:
+                # Sanitize math artifacts from the summary before saving
+                clean_summary = (
+                    new_summary
+                    .replace('\\times', ' כפול ')
+                    .replace('\\(', '')
+                    .replace('\\)', '')
+                    .replace('\\frac', '')
+                    .replace('\\', '')
+                    .replace('{,}', ',')
+                    .replace('**', '')
+                    .replace('\n', ' ')
+                    .strip()
+                )
             await update_student_profile_summary(child_name, clean_summary)
     except Exception as e:
         logger.bind(child_name=child_name, error=str(e)).exception("Failed to update tutor memory")

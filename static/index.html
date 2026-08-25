@@ -27,7 +27,7 @@
 
         /* Mobile-friendly tap targets and remove double-tap zoom delay */
         button, .profile-card, .subject-card, .send-button, .voice-button,
-        .end-session-button, .close-modal, .back-btn, .switch-child-btn {
+        .end-session-button, .close-modal, .back-btn, .switch-child-btn, .tutor-toggle-btn {
             touch-action: manipulation;
             -webkit-tap-highlight-color: transparent;
         }
@@ -242,6 +242,34 @@
             font-size: 14px;
             flex-wrap: wrap;
             gap: 10px;
+        }
+
+        .tutor-toggle {
+            display: flex;
+            gap: 10px;
+            padding: 12px 25px;
+            background: #ffffff;
+            border-bottom: 1px solid #e9ecef;
+            flex-shrink: 0;
+        }
+
+        .tutor-toggle-btn {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            background: #f8f9fa;
+            color: #333;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tutor-toggle-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: transparent;
         }
 
         .session-info span {
@@ -590,6 +618,15 @@
                 flex-shrink: 0;
             }
 
+            .tutor-toggle {
+                padding: 8px 15px;
+            }
+
+            .tutor-toggle-btn {
+                padding: 10px;
+                font-size: 13px;
+            }
+
             .chat-container {
                 flex: 1;
                 height: auto;
@@ -709,6 +746,11 @@
                 </div>
             </div>
 
+            <div class="tutor-toggle" id="tutor-toggle">
+                <button class="tutor-toggle-btn" id="toggle-math-btn" data-subject="math">📐 חשבון</button>
+                <button class="tutor-toggle-btn" id="toggle-english-btn" data-subject="english">🔤 אנגלית</button>
+            </div>
+
             <div class="chat-container" id="chat-container">
                 <div class="loading">טוען...</div>
             </div>
@@ -772,6 +814,28 @@
         const messageCount = document.getElementById('message-count');
         const studentName = document.getElementById('student-name');
         const subjectLabel = document.getElementById('subject-label');
+        const tutorToggle = document.getElementById('tutor-toggle');
+        const toggleMathBtn = document.getElementById('toggle-math-btn');
+        const toggleEnglishBtn = document.getElementById('toggle-english-btn');
+
+        // Returns the correct backend endpoint for the currently active tutor.
+        function getChatEndpoint(subject) {
+            return subject === 'english' ? '/api/tutor/english' : '/api/tutor/chat';
+        }
+
+        // Build the request body for the active tutor's endpoint. The dedicated
+        // English endpoint doesn't take a `subject` field.
+        function buildChatBody(subject, userId, messagesPayload) {
+            if (subject === 'english') {
+                return { user_id: userId, messages: messagesPayload };
+            }
+            return { user_id: userId, subject, messages: messagesPayload };
+        }
+
+        function updateTutorToggleUI(subject) {
+            toggleMathBtn.classList.toggle('active', subject === 'math');
+            toggleEnglishBtn.classList.toggle('active', subject === 'english');
+        }
 
         // Global error handling helpers
         function resetUI() {
@@ -922,8 +986,26 @@
             
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
             subjectLabel.textContent = `📚 ${subjectName}`;
+            updateTutorToggleUI(subject);
             
             showScreen('tutoring');
+            await initChat();
+        }
+
+        // Switch between the Math and English tutors while already in the
+        // tutoring screen. Clears the chat window so the two subjects' 
+        // conversations never mix visually or in the message history sent
+        // to the backend.
+        async function switchTutor(subject) {
+            if (!selectedUserId || subject === selectedSubject) {
+                return;
+            }
+
+            selectedSubject = subject;
+            const subjectName = subject === 'english' ? '🔤 שיעור אנגלית' : '📐 שיעור חשבון';
+            subjectLabel.textContent = `📚 ${subjectName}`;
+            updateTutorToggleUI(subject);
+
             await initChat();
         }
 
@@ -987,14 +1069,10 @@
             }
 
             try {
-                const response = await safeFetch('/api/tutor/chat', {
+                const response = await safeFetch(getChatEndpoint(selectedSubject), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: selectedUserId,
-                        subject: selectedSubject,
-                        messages: []  // No conversation yet; only system prompt is sent
-                    })
+                    body: JSON.stringify(buildChatBody(selectedSubject, selectedUserId, []))  // No conversation yet; only system prompt is sent
                 });
 
                 const data = await response.json();
@@ -1032,14 +1110,10 @@
             textInput.value = '';
 
             try {
-                const response = await safeFetch('/api/tutor/chat', {
+                const response = await safeFetch(getChatEndpoint(selectedSubject), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: selectedUserId,
-                        subject: selectedSubject,
-                        messages: messages
-                    })
+                    body: JSON.stringify(buildChatBody(selectedSubject, selectedUserId, messages))
                 });
 
                 const data = await response.json();
@@ -1282,6 +1356,17 @@
                     await selectSubject(subject, subjectName);
                 } catch (error) {
                     console.error('Error starting subject:', error);
+                }
+            }
+        });
+
+        tutorToggle.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.tutor-toggle-btn');
+            if (btn) {
+                try {
+                    await switchTutor(btn.dataset.subject);
+                } catch (error) {
+                    console.error('Error switching tutor:', error);
                 }
             }
         });
