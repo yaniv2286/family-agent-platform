@@ -10,3 +10,5 @@ num2words
 cryptography
 loguru
 aiosqlite
+apscheduler
+httpx

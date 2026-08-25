@@ -24,6 +24,8 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime
 from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
+from scheduler import start_scheduler, stop_scheduler
+from orchestrator import run_daily_orchestration
 
 
 # Pydantic models for response
@@ -70,9 +72,10 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize the databases
     await init_db()
     await init_tutor_history_db()
+    start_scheduler()
     yield
     # Shutdown: Cleanup if needed
-    pass
+    stop_scheduler()
 
 
 # Create FastAPI app with lifespan
@@ -222,6 +225,25 @@ async def dashboard_stats(db: AsyncSession = Depends(get_db)):
             })
 
     return {"children": dashboard}
+
+
+@app.post("/api/orchestrator/run-now")
+async def orchestrator_run_now():
+    """
+    Manually trigger the daily orchestration job (gather activity, generate
+    the summary, and send it to Yaniv on Telegram) without waiting for the
+    scheduled time. Useful for testing the Telegram integration.
+    """
+    try:
+        result = await run_daily_orchestration()
+        return {
+            "status": "ok",
+            "telegram_sent": result["telegram_sent"],
+            "summary_text": result["summary_text"],
+        }
+    except Exception as e:
+        logger.exception("Manual orchestrator run failed")
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/tutor/chat", response_model=ChatResponse)
