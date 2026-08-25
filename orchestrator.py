@@ -29,17 +29,24 @@ async def _get_children():
         return result.scalars().all()
 
 
-# Spam heuristic thresholds, computed entirely in Python from message
+# Subject-aware spam thresholds, computed entirely in Python from message
 # metadata - the LLM never sees raw chat content, only these derived flags.
-SPAM_MIN_MESSAGE_COUNT = 5
-SPAM_MAX_AVG_WORDS = 2.0
+SPAM_THRESHOLDS = {
+    # English short answers are usually unproductive; single words are not
+    # valid English practice unless they are clear, full answers.
+    "english": {"min_messages": 3, "max_avg_words": 2.5},
+    # Math answers are naturally short (e.g. "4" or "12"), so only flag
+    # heavy streams of essentially empty/garbage inputs.
+    "math": {"min_messages": 5, "max_avg_words": 1.0},
+}
 
 
-def _compute_engagement_stats(message_contents: list) -> dict:
-    """Compute message_count, average_words_per_message, and the is_lazy_spam
-    heuristic flag from a list of raw message strings. This is the only
-    place raw chat content is touched - the content itself is discarded
-    immediately after these numbers are derived, and never sent to the LLM.
+def _compute_engagement_stats(message_contents: list, subject: str) -> dict:
+    """Compute message_count, average_words_per_message, and the subject-aware
+    is_lazy_spam heuristic flag from a list of raw message strings. This is
+    the only place raw chat content is touched - the content itself is
+    discarded immediately after these numbers are derived, and never sent
+    to the LLM.
     """
     message_count = len(message_contents)
     if message_count == 0:
@@ -52,9 +59,10 @@ def _compute_engagement_stats(message_contents: list) -> dict:
     word_counts = [len((content or "").split()) for content in message_contents]
     average_words_per_message = sum(word_counts) / message_count
 
+    thresholds = SPAM_THRESHOLDS.get(subject, SPAM_THRESHOLDS["math"])
     is_lazy_spam = (
-        message_count > SPAM_MIN_MESSAGE_COUNT
-        and average_words_per_message < SPAM_MAX_AVG_WORDS
+        message_count > thresholds["min_messages"]
+        and average_words_per_message < thresholds["max_avg_words"]
     )
 
     return {
@@ -109,7 +117,7 @@ async def gather_daily_report_data() -> list:
                 # Raw content is used only inside _compute_engagement_stats
                 # and is not kept or returned beyond this point.
                 message_contents = [row[0] for row in messages_result.all()]
-                engagement_stats = _compute_engagement_stats(message_contents)
+                engagement_stats = _compute_engagement_stats(message_contents, subject)
 
                 profile_result = await history_db.execute(
                     select(StudentProfile).where(
@@ -172,7 +180,7 @@ async def _generate_summary_text(report_data: list) -> str:
 
     system_prompt = """אתה אנליסט ביצועים בכיר ומחמיר בסטייל ישראלי-עסקי, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור ולא כותב לילדים - אתה כותב תמצית מנהלים לאדם בוגר.
 
-אתה מקבל בהודעת המשתמש נתונים בתגית [DATA] לכל תלמיד/ה ומקצוע: message_count (מספר הודעות היום), average_words_per_message (אורך הודעה ממוצע במילים), is_lazy_spam (True/False - דגל שכבר חושב ונקבע באופן דטרמיניסטי בקוד Python לפי הכללים: יותר מ-5 הודעות היום וממוצע מילים נמוך מ-2.0), ו-profile_summary (סיכום פדגוגי). אין לך גישה לתוכן ההודעות בפועל - רק למספרים האלה. is_lazy_spam הוא המסקנה הסופית, לא רמז - סמוך/י עליו לחלוטין ואל תנסה/י "לנתח" אותו מחדש.
+אתה מקבל בהודעת המשתמש נתונים בתגית [DATA] לכל תלמיד/ה ומקצוע: message_count (מספר הודעות היום), average_words_per_message (אורך הודעה ממוצע במילים), is_lazy_spam (True/False - דגל שכבר חושב ונקבע באופן דטרמיניסטי בקוד Python לפי מקצוע: באנגלית - יותר מ-3 הודעות היום וממוצע מילים נמוך מ-2.5; בחשבון - יותר מ-5 הודעות היום וממוצע מילים נמוך מ-1.0, כי תשובות קצרות כמו "4" הן לגיטימיות), ו-profile_summary (סיכום פדגוגי). אין לך גישה לתוכן ההודעות בפועל - רק למספרים האלה. is_lazy_spam הוא המסקנה הסופית, לא רמז - סמוך/י עליו לחלוטין ואל תנסה/י "לנתח" אותו מחדש.
 
 חובה מוחלטת #1 - אין דאמפ נתונים גולמי:
 - אסור בהחלט להעביר לפלט הסופי מונחים גולמיים כמו "message_count", "average_words_per_message", "is_lazy_spam", "profile_summary", "[DATA]" או כל תבנית מפתח=ערך.
