@@ -763,6 +763,7 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
 - סיכום קודם: {summary_context}
 
 כללים לכתיבה:
+- You are updating an existing student profile. NEVER delete, summarize away, or overwrite past 'Pedagogical Gems', established strengths, or weaknesses. If the recent chat is trivial, short, or lacks educational value, preserve the previous profile exactly as it was. Your job is to APPEND and MERGE new insights, not replace the history.
 - כתוב ב-2-3 משפטים בעברית בלבד.
 - עקוב אחרי אוצר מילים שהתלמיד/ה שלט/ה בו (mastered vocabulary) ותבניות דקדוק שעדיין דורשות תרגול (ongoing grammar struggles).
 - ציין/י את התקדמות הילד/ה ותמצית/י נושא אחד לתרגול הבא.
@@ -782,6 +783,7 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
 - סיכום קודם: {summary_context}
 
 כללים לכתיבה:
+- You are updating an existing student profile. NEVER delete, summarize away, or overwrite past 'Pedagogical Gems', established strengths, or weaknesses. If the recent chat is trivial, short, or lacks educational value, preserve the previous profile exactly as it was. Your job is to APPEND and MERGE new insights, not replace the history.
 - כתוב ב-2-3 משפטים בעברית בלבד.
 - השתמש בסימנים מתמטיים פשוטים בטקסט (מספרים, * או המילה "כפול" לכפל, / לחילוק) — אין להשתמש ב-LaTeX, backslashes, סימני \\times, \\frac, \\(, \\), או סוגריים מסולסלים מיותרים.
 - חובה לחלץ ולתעד בבירור כל "Pedagogical Gem" שנראה בשיחה - רעיון מקורי, שאלה מבריקה, תובנה מצחיקה או חשיבה מחוץ לקופסה. כתב/י אותם במפורש כחלק מהסיכום.
