@@ -4,9 +4,13 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from loguru import logger
-from sqlalchemy import Column, Integer, String, DateTime, Float, Text, ForeignKey, select, func
+from sqlalchemy import Column, Integer, String, DateTime, Float, Text, ForeignKey, select, func, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base, relationship
+
+# Default subject used for chat history/profile rows created before the
+# 'subject' column existed, and as a fallback when a subject isn't provided.
+DEFAULT_SUBJECT = "math"
 
 load_dotenv()
 
@@ -116,6 +120,7 @@ class ChatHistory(TutorHistoryBase):
 
     id = Column(Integer, primary_key=True, index=True)
     child_name = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=False, default=DEFAULT_SUBJECT, index=True)
     role = Column(String, nullable=False)  # 'user' or 'assistant'
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
@@ -125,22 +130,55 @@ class StudentProfile(TutorHistoryBase):
     __tablename__ = "student_profiles"
 
     child_name = Column(String, primary_key=True, index=True)
+    subject = Column(String, primary_key=True, default=DEFAULT_SUBJECT)
     profile_summary = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+async def _table_columns(conn, table_name: str):
+    """Return the set of column names currently present in a SQLite table
+    (empty set if the table doesn't exist yet).
+    """
+    result = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return {row[1] for row in result.fetchall()}
+
+
+async def _migrate_tutor_history_schema(conn):
+    """Ensure chat_history and student_profiles have the 'subject' column so
+    math and English tutor sessions are stored separately.
+
+    SQLite can't easily change a table's primary key (needed for
+    student_profiles, which becomes a composite (child_name, subject) key),
+    so for both tables we simply drop and let create_all() recreate them
+    with the new schema if the old 'subject'-less schema is detected. This
+    is an acceptable one-time reset for this local, single-family app.
+    """
+    for table_name in ("chat_history", "student_profiles"):
+        columns = await _table_columns(conn, table_name)
+        if columns and "subject" not in columns:
+            logger.warning(
+                f"Old '{table_name}' schema detected without 'subject' column; "
+                "dropping and recreating table to separate math/English data."
+            )
+            await conn.execute(text(f"DROP TABLE {table_name}"))
+
+
 async def init_tutor_history_db():
     async with tutor_history_engine.begin() as conn:
+        await _migrate_tutor_history_schema(conn)
         await conn.run_sync(TutorHistoryBase.metadata.create_all)
 
 
-async def get_chat_history(child_name: str, limit: int = 10):
-    """Return the last N chat messages for a child, oldest first."""
+async def get_chat_history(child_name: str, subject: str = DEFAULT_SUBJECT, limit: int = 10):
+    """Return the last N chat messages for a child within a specific subject,
+    oldest first. Filtering by subject keeps math and English conversations
+    from leaking into each other's context.
+    """
     start = time.perf_counter()
     async with TutorHistorySessionLocal() as db:
         result = await db.execute(
             select(ChatHistory)
-            .where(ChatHistory.child_name == child_name)
+            .where(ChatHistory.child_name == child_name, ChatHistory.subject == subject)
             .order_by(ChatHistory.timestamp.desc())
             .limit(limit)
         )
@@ -150,21 +188,24 @@ async def get_chat_history(child_name: str, limit: int = 10):
         "get_chat_history completed",
         duration_seconds=round(duration, 4),
         child_name=child_name,
+        subject=subject,
     )
     return [{"role": r.role, "content": r.content, "timestamp": r.timestamp} for r in reversed(rows)]
 
 
-async def append_chat_messages(child_name: str, conversation_history, new_reply: str):
+async def append_chat_messages(child_name: str, subject: str, conversation_history, new_reply: str):
     """Persist the new tail of the conversation plus the latest assistant reply.
-    Uses the current row count to avoid duplicates when the frontend resends the
-    full conversation history.
+    Uses the current row count (scoped to this subject) to avoid duplicates
+    when the frontend resends the full conversation history.
     """
     if not child_name:
         return
     start = time.perf_counter()
     async with TutorHistorySessionLocal() as db:
         count_result = await db.execute(
-            select(func.count()).where(ChatHistory.child_name == child_name)
+            select(func.count()).where(
+                ChatHistory.child_name == child_name, ChatHistory.subject == subject
+            )
         )
         current_count = count_result.scalar()
         new_user_messages = conversation_history[current_count:]
@@ -172,6 +213,7 @@ async def append_chat_messages(child_name: str, conversation_history, new_reply:
             db.add(
                 ChatHistory(
                     child_name=child_name,
+                    subject=subject,
                     role=msg.get("role", "user"),
                     content=msg.get("content", ""),
                 )
@@ -179,6 +221,7 @@ async def append_chat_messages(child_name: str, conversation_history, new_reply:
         db.add(
             ChatHistory(
                 child_name=child_name,
+                subject=subject,
                 role="assistant",
                 content=new_reply,
             )
@@ -189,15 +232,20 @@ async def append_chat_messages(child_name: str, conversation_history, new_reply:
         "append_chat_messages completed",
         duration_seconds=round(duration, 4),
         child_name=child_name,
+        subject=subject,
     )
 
 
-async def get_student_profile_summary(child_name: str):
-    """Return the persisted learning profile summary for a child, or None."""
+async def get_student_profile_summary(child_name: str, subject: str = DEFAULT_SUBJECT):
+    """Return the persisted learning profile summary for a child within a
+    specific subject, or None.
+    """
     start = time.perf_counter()
     async with TutorHistorySessionLocal() as db:
         result = await db.execute(
-            select(StudentProfile).where(StudentProfile.child_name == child_name)
+            select(StudentProfile).where(
+                StudentProfile.child_name == child_name, StudentProfile.subject == subject
+            )
         )
         p = result.scalar_one_or_none()
     duration = time.perf_counter() - start
@@ -205,16 +253,21 @@ async def get_student_profile_summary(child_name: str):
         "get_student_profile_summary completed",
         duration_seconds=round(duration, 4),
         child_name=child_name,
+        subject=subject,
     )
     return p.profile_summary if p else None
 
 
-async def update_student_profile_summary(child_name: str, summary: str):
-    """Create or update the learning profile summary for a child."""
+async def update_student_profile_summary(child_name: str, subject: str, summary: str):
+    """Create or update the learning profile summary for a child within a
+    specific subject.
+    """
     start = time.perf_counter()
     async with TutorHistorySessionLocal() as db:
         result = await db.execute(
-            select(StudentProfile).where(StudentProfile.child_name == child_name)
+            select(StudentProfile).where(
+                StudentProfile.child_name == child_name, StudentProfile.subject == subject
+            )
         )
         p = result.scalar_one_or_none()
         if p:
@@ -224,6 +277,7 @@ async def update_student_profile_summary(child_name: str, summary: str):
             db.add(
                 StudentProfile(
                     child_name=child_name,
+                    subject=subject,
                     profile_summary=summary,
                     updated_at=datetime.utcnow(),
                 )
@@ -234,4 +288,5 @@ async def update_student_profile_summary(child_name: str, summary: str):
         "update_student_profile_summary completed",
         duration_seconds=round(duration, 4),
         child_name=child_name,
+        subject=subject,
     )

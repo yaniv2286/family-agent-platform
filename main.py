@@ -46,6 +46,7 @@ class EnglishChatRequest(BaseModel):
 
 class SpeakRequest(BaseModel):
     text: str
+    subject: str = "math"
 
 
 class EndSessionRequest(BaseModel):
@@ -212,11 +213,12 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
 @app.post("/api/tutor/speech")
 async def speech(request: SpeakRequest):
     """
-    Convert the provided text to MP3 speech using OpenAI's TTS-1 model and
-    the 'nova' female voice, and stream it back to the client.
+    Convert the provided text to MP3 speech using OpenAI's TTS-1 model,
+    selecting a distinct voice for math vs. English so the two tutors sound
+    different, and stream it back to the client.
     """
     try:
-        tts_response = await generate_speech(request.text)
+        tts_response = await generate_speech(request.text, request.subject)
         return StreamingResponse(
             io.BytesIO(tts_response.content),
             media_type="audio/mpeg",

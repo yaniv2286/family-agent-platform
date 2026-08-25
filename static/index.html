@@ -1125,23 +1125,28 @@
             }
         }
 
-        // Text-to-speech via OpenAI TTS-1 (nova female voice)
+        // Text-to-speech via OpenAI TTS-1. Voice is chosen server-side based
+        // on the active subject (math vs. english) so the two tutors sound
+        // distinct.
         async function speakResponse(text) {
-            // Sanitize the text for clean Hebrew speech:
-            // 1. Strip emojis and pictographic symbols.
-            // 2. Remove Markdown bold markers (**...**).
-            // 3. Replace multiplication `*` and LaTeX \times with the word "כפול".
-            // 4. Convert division `/` between numbers to "חלקי".
-            // 5. Remove any remaining backslash escapes (\, \(, \), etc.).
+            // Strip emojis/pictographic symbols and Markdown bold markers -
+            // these apply regardless of subject.
             let ttsText = text
                 .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
-                .replace(/\*\*(.*?)\*\*/g, '$1')
-                .replace(/\\times/g, ' כפול ')
-                .replace(/(\d)\s*\*\s*(\d)/g, '$1 כפול $2')
-                .replace(/(\d)\s*\/\s*(\d)/g, '$1 חלקי $2')
-                .replace(/\\[(){\}\[\]]?/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
+                .replace(/\*\*(.*?)\*\*/g, '$1');
+
+            if (selectedSubject !== 'english') {
+                // Hebrew math sanitization for clean speech:
+                // 1. Replace multiplication `*` and LaTeX \times with the word "כפול".
+                // 2. Convert division `/` between numbers to "חלקי".
+                // 3. Remove any remaining backslash escapes (\, \(, \), etc.).
+                ttsText = ttsText
+                    .replace(/\\times/g, ' כפול ')
+                    .replace(/(\d)\s*\*\s*(\d)/g, '$1 כפול $2')
+                    .replace(/(\d)\s*\/\s*(\d)/g, '$1 חלקי $2')
+                    .replace(/\\[(){\}\[\]]?/g, '');
+            }
+            ttsText = ttsText.replace(/\s+/g, ' ').trim();
 
             // Stop any currently playing audio before starting a new one.
             if (currentAudio) {
@@ -1154,7 +1159,7 @@
                 const response = await safeFetch('/api/tutor/speech', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: ttsText })
+                    body: JSON.stringify({ text: ttsText, subject: selectedSubject || 'math' })
                 });
 
                 if (!response.ok) {

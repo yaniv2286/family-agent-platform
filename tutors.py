@@ -176,14 +176,29 @@ def _sanitize_numbers_for_tts(text: str) -> str:
     return re.sub(r'[0-9]+', _replace, text)
 
 
-async def generate_speech(text: str):
-    """Generate MP3 speech from the given text using OpenAI's TTS-1 model and
-    the 'nova' female voice. Returns the binary response object, whose content
-    can be streamed to the caller. This is async so it doesn't block FastAPI.
+# Distinct OpenAI TTS voices per subject, so the English tutor sounds like a
+# different, native-English-leaning voice than the Hebrew-speaking math tutor.
+SUBJECT_VOICES = {
+    "math": "shimmer",
+    "english": "alloy",
+}
+DEFAULT_VOICE = "shimmer"
+
+
+async def generate_speech(text: str, subject: str = "math"):
+    """Generate MP3 speech from the given text using OpenAI's TTS-1 model.
+    Returns the binary response object, whose content can be streamed to the
+    caller. This is async so it doesn't block FastAPI.
+
+    The voice is selected based on `subject` so the math tutor and English
+    tutor sound distinct. Hebrew digit sanitization is only applied for the
+    math tutor - the English tutor's numbers should stay as English numerals.
 
     Raises RuntimeError if no API key is configured.
     """
-    text = _sanitize_numbers_for_tts(text)
+    if subject != "english":
+        text = _sanitize_numbers_for_tts(text)
+    voice = SUBJECT_VOICES.get(subject, DEFAULT_VOICE)
     client = _get_async_client()
     if client is None:
         logger.warning("OpenAI API key not configured for TTS")
@@ -191,15 +206,15 @@ async def generate_speech(text: str):
 
     try:
         start = time.perf_counter()
-        logger.info("OpenAI TTS started", model="tts-1", voice="shimmer")
+        logger.info("OpenAI TTS started", model="tts-1", voice=voice, subject=subject)
         response = await client.audio.speech.create(
             model="tts-1",
-            voice="shimmer",
+            voice=voice,
             input=text,
             response_format="mp3",
         )
         latency = time.perf_counter() - start
-        logger.info("OpenAI TTS finished", model="tts-1", latency_seconds=round(latency, 4))
+        logger.info("OpenAI TTS finished", model="tts-1", voice=voice, latency_seconds=round(latency, 4))
         return response
     except Exception:
         logger.exception("OpenAI TTS failed")
@@ -289,6 +304,7 @@ def g(word: str, gender: str) -> str:
 
 
 class MathTutor(BaseAgent):
+    SUBJECT = "math"
 
     
     def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None) -> str:
@@ -375,8 +391,8 @@ class MathTutor(BaseAgent):
         FastAPI event loop.
         """
         child_name = user_profile.get("name", "תלמיד")
-        dynamic_summary = (await get_student_profile_summary(child_name)) or ""
-        recent_history = await get_chat_history(child_name, limit=10)
+        dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
+        recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history)
         return await self._call_llm(system_prompt, conversation_history)
     
@@ -503,6 +519,7 @@ class MathTutor(BaseAgent):
 
 
 class EnglishTutor(BaseAgent):
+    SUBJECT = "english"
 
     
     def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None) -> str:
@@ -568,8 +585,8 @@ class EnglishTutor(BaseAgent):
         the FastAPI event loop.
         """
         child_name = user_profile.get("name", "תלמיד")
-        dynamic_summary = (await get_student_profile_summary(child_name)) or ""
-        recent_history = await get_chat_history(child_name, limit=10)
+        dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
+        recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history)
         return await self._call_llm(system_prompt, conversation_history)
     
@@ -703,14 +720,15 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
     This runs as a FastAPI background task so it does not delay the chat response.
     """
     try:
-        # Save the new user messages and the assistant reply to chat_history
-        await append_chat_messages(child_name, conversation_history, new_reply)
+        # Save the new user messages and the assistant reply to chat_history,
+        # scoped to this subject so math and English conversations never mix.
+        await append_chat_messages(child_name, subject, conversation_history, new_reply)
         
         # Build the full conversation including the new reply
         full_conversation = list(conversation_history) + [{"role": "assistant", "content": new_reply}]
         
-        # Fetch the previous profile summary (if any)
-        current_summary = await get_student_profile_summary(child_name)
+        # Fetch the previous profile summary (if any), scoped to this subject
+        current_summary = await get_student_profile_summary(child_name, subject)
         summary_context = current_summary if current_summary else "אין עדיין סיכום."
         
         if subject == "english":
@@ -768,7 +786,7 @@ async def update_tutor_memory(child_name: str, user_profile: Dict, conversation_
                     .replace('\n', ' ')
                     .strip()
                 )
-            await update_student_profile_summary(child_name, clean_summary)
+            await update_student_profile_summary(child_name, subject, clean_summary)
     except Exception as e:
         logger.bind(child_name=child_name, error=str(e)).exception("Failed to update tutor memory")
 
