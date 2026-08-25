@@ -29,17 +29,49 @@ async def _get_children():
         return result.scalars().all()
 
 
-# Cap on how many of today's actual user messages we pull per child/subject
-# for the LLM to inspect when judging engagement quality vs. spam.
-MAX_SAMPLE_MESSAGES = 20
+# Spam heuristic thresholds, computed entirely in Python from message
+# metadata - the LLM never sees raw chat content, only these derived flags.
+SPAM_MIN_MESSAGE_COUNT = 5
+SPAM_MAX_AVG_WORDS = 2.0
+
+
+def _compute_engagement_stats(message_contents: list) -> dict:
+    """Compute message_count, average_words_per_message, and the is_lazy_spam
+    heuristic flag from a list of raw message strings. This is the only
+    place raw chat content is touched - the content itself is discarded
+    immediately after these numbers are derived, and never sent to the LLM.
+    """
+    message_count = len(message_contents)
+    if message_count == 0:
+        return {
+            "message_count": 0,
+            "average_words_per_message": 0.0,
+            "is_lazy_spam": False,
+        }
+
+    word_counts = [len((content or "").split()) for content in message_contents]
+    average_words_per_message = sum(word_counts) / message_count
+
+    is_lazy_spam = (
+        message_count > SPAM_MIN_MESSAGE_COUNT
+        and average_words_per_message < SPAM_MAX_AVG_WORDS
+    )
+
+    return {
+        "message_count": message_count,
+        "average_words_per_message": round(average_words_per_message, 2),
+        "is_lazy_spam": is_lazy_spam,
+    }
 
 
 async def gather_daily_report_data() -> list:
     """Collect per-child, per-subject activity and profile summaries for today.
 
-    Includes a sample of today's actual user messages (not just a count) so
-    the summarizer can judge whether the child engaged in genuine learning
-    or was just spamming short/meaningless messages.
+    All spam/engagement analysis happens here in Python from message
+    metadata (count, average word length) - raw message content is fetched
+    only to compute these numbers and is never propagated further (not
+    returned, not sent to the LLM). This avoids wasting tokens on raw chat
+    logs and keeps the spam heuristic deterministic and auditable.
 
     Returns a list of dicts:
         {
@@ -47,9 +79,10 @@ async def gather_daily_report_data() -> list:
             "grade_level": str | None,
             "subjects": {
                 "math": {
-                    "messages_today": int,
+                    "message_count": int,
+                    "average_words_per_message": float,
+                    "is_lazy_spam": bool,
                     "profile_summary": str | None,
-                    "sample_messages": list[str],
                 },
                 "english": {...},
             },
@@ -65,28 +98,18 @@ async def gather_daily_report_data() -> list:
             subjects_data = {}
 
             for subject in SUBJECTS:
-                count_result = await history_db.execute(
-                    select(func.count()).where(
-                        ChatHistory.child_name == child_name,
-                        ChatHistory.subject == subject,
-                        ChatHistory.role == "user",
-                        ChatHistory.timestamp >= since,
-                    )
-                )
-                messages_today = count_result.scalar() or 0
-
                 messages_result = await history_db.execute(
-                    select(ChatHistory.content)
-                    .where(
+                    select(ChatHistory.content).where(
                         ChatHistory.child_name == child_name,
                         ChatHistory.subject == subject,
                         ChatHistory.role == "user",
                         ChatHistory.timestamp >= since,
                     )
-                    .order_by(ChatHistory.timestamp.asc())
-                    .limit(MAX_SAMPLE_MESSAGES)
                 )
-                sample_messages = [row[0] for row in messages_result.all()]
+                # Raw content is used only inside _compute_engagement_stats
+                # and is not kept or returned beyond this point.
+                message_contents = [row[0] for row in messages_result.all()]
+                engagement_stats = _compute_engagement_stats(message_contents)
 
                 profile_result = await history_db.execute(
                     select(StudentProfile).where(
@@ -97,9 +120,8 @@ async def gather_daily_report_data() -> list:
                 profile = profile_result.scalar_one_or_none()
 
                 subjects_data[subject] = {
-                    "messages_today": messages_today,
+                    **engagement_stats,
                     "profile_summary": profile.profile_summary if profile else None,
-                    "sample_messages": sample_messages,
                 }
 
             report.append({
@@ -112,32 +134,36 @@ async def gather_daily_report_data() -> list:
 
 
 def _build_internal_data_block(report_data: list) -> str:
-    """Serialize the raw report data as compact, clearly-labeled internal
-    data tags (not natural Hebrew sentences), so the LLM has everything it
-    needs for analysis but has no ready-made prose to copy-paste verbatim
-    into its output.
+    """Serialize only the Python-computed metadata (message count, average
+    words per message, the is_lazy_spam flag, and the profile summary) as
+    compact [DATA] tags for the LLM.
+
+    ZERO raw chat content is included here by design - the spam
+    determination is already made deterministically in Python
+    (_compute_engagement_stats); the LLM's only job is to phrase that
+    conclusion and the profile summary into the final report.
     """
     lines = []
     for child in report_data:
         name = child["child_name"]
         for subject in SUBJECTS:
             data = child["subjects"][subject]
-            samples = data["sample_messages"]
             lines.append(
                 f"[DATA] child_name={name}; subject={subject}; "
-                f"messages_today_count={data['messages_today']}; "
-                f"profile_summary={data['profile_summary'] or 'NONE'}; "
-                f"raw_user_messages_today={samples if samples else 'NONE'}"
+                f"message_count={data['message_count']}; "
+                f"average_words_per_message={data['average_words_per_message']}; "
+                f"is_lazy_spam={data['is_lazy_spam']}; "
+                f"profile_summary={data['profile_summary'] or 'NONE'}"
             )
     return "\n".join(lines) if lines else "[DATA] no_children_registered=true"
 
 
 async def _generate_summary_text(report_data: list) -> str:
-    """Ask the LLM to act as a strict executive analyst and turn the raw
-    activity data (including sampled message content) into a terse,
+    """Ask the LLM to act as a strict executive analyst and turn Python-
+    computed engagement metadata (never raw chat content) into a terse,
     human-readable Hebrew executive report for Yaniv: who genuinely studied
-    today, who didn't, and whether any child is gaming the system with
-    low-quality spam messages instead of real engagement.
+    today, who didn't, and which children were already flagged by the
+    Python spam heuristic as low-quality/lazy engagement.
 
     Falls back to a plain, deterministic summary if the LLM call fails or no
     API key is configured, so the daily report is never silently skipped.
@@ -146,28 +172,27 @@ async def _generate_summary_text(report_data: list) -> str:
 
     system_prompt = """אתה אנליסט ביצועים בכיר ומחמיר בסטייל ישראלי-עסקי, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור ולא כותב לילדים - אתה כותב תמצית מנהלים לאדם בוגר.
 
-אתה מקבל בהודעת המשתמש נתונים גולמיים בתגית [DATA] (שם, מקצוע, מספר הודעות היום, סיכום פרופיל, והודעות הגלם של התלמיד/ה היום). זה מידע פנימי לניתוח בלבד.
+אתה מקבל בהודעת המשתמש נתונים בתגית [DATA] לכל תלמיד/ה ומקצוע: message_count (מספר הודעות היום), average_words_per_message (אורך הודעה ממוצע במילים), is_lazy_spam (True/False - דגל שכבר חושב ונקבע באופן דטרמיניסטי בקוד Python לפי הכללים: יותר מ-5 הודעות היום וממוצע מילים נמוך מ-2.0), ו-profile_summary (סיכום פדגוגי). אין לך גישה לתוכן ההודעות בפועל - רק למספרים האלה. is_lazy_spam הוא המסקנה הסופית, לא רמז - סמוך/י עליו לחלוטין ואל תנסה/י "לנתח" אותו מחדש.
 
 חובה מוחלטת #1 - אין דאמפ נתונים גולמי:
-- אסור בהחלט להעביר לפלט הסופי מונחים גולמיים כמו "messages_today_count", "profile_summary", "raw_user_messages_today", "[DATA]", "למד/ה היום?" או כל תבנית מפתח=ערך.
+- אסור בהחלט להעביר לפלט הסופי מונחים גולמיים כמו "message_count", "average_words_per_message", "is_lazy_spam", "profile_summary", "[DATA]" או כל תבנית מפתח=ערך.
 - אסור בהחלט להדביק את תוכן שדה profile_summary כמו שהוא. יש לתמצת אותו במשפט תיאורי קצר משלך, בשפה טבעית וזורמת, ולא להעביר אותו verbatim.
 - כל שורה בפלט חייבת להיות משפט אנושי רגיל, לא רשומת מסד נתונים.
 
-חובה מוחלטת #2 - איסור ציטוט הודעות:
-- אסור בהחלט לצטט מילה במילה הודעות מתוך raw_user_messages_today (בלי מירכאות עם הטקסט המקורי של התלמיד/ה).
-- אם ההודעות קצרות/חזרתיות/חסרות תוכן (למשל תשובות של מילה אחת שחוזרות על עצמן) - זה סימן לספאם. תאר/י את התבנית במילים שלך (למשל: "עונה בתשובות קצרות וללא מעורבות אמיתית"), בלי להעביר את הציטוטים בפועל.
-- אם ההודעות מראות שאלות/תשובות מהותיות - זו למידה אמיתית, תאר/י זאת בקצרה.
+חובה מוחלטת #2 - ספאם מגיע מוכן מקוד, לא מניתוח טקסט:
+- אם is_lazy_spam=True במקצוע מסוים, חובה לכתוב עבורו בולט אזהרה שמתחיל ב-⚠️ שמתאר במילים שלך שהתלמיד/ה שלח/ה הרבה הודעות קצרות וחסרות תוכן (ציין/י את message_count אם רלוונטי, בלי לצטט טקסט - אין לך טקסט לצטט בכלל).
+- אם is_lazy_spam=False, אל תרמז/י על ספאם - תאר/י את הפעילות כלמידה רגילה על בסיס profile_summary ו-message_count.
 
 חובה מוחלטת #3 - קיבוץ לא-פעילים:
-- כל תלמיד/ה עם messages_today_count=0 בשני המקצועות אסור שיקבל סעיף נפרד משלו.
-- באיזה סוף הדוח, שורה אחת בלבד לכל הלא-פעילים ביחד: "💤 לא פעלו היום: שם1, שם2".
+- כל תלמיד/ה עם message_count=0 בשני המקצועות אסור שיקבל סעיף נפרד משלו.
+- בסוף הדוח, שורה אחת בלבד לכל הלא-פעילים ביחד: "💤 לא פעלו היום: שם1, שם2".
 - אם כולם היו פעילים, אל תכלול שורה זו כלל.
 
 חובה מוחלטת #4 - פורמט קשיח:
 - שורה ראשונה בלבד: "📅 דוח יומי - DD/MM/YYYY".
-- לכל תלמיד/ה פעיל/ה (עם הודעה אחת לפחות באחד המקצועות): כתוב/י את השם מודגש בכתיב **שם** ומתחתיו עד 2 בולטים קצרים בלבד (•) - לא יותר.
+- לכל תלמיד/ה פעיל/ה (message_count>0 באחד המקצועות לפחות): כתוב/י את השם מודגש בכתיב **שם** ומתחתיו עד 2 בולטים קצרים בלבד (•) - לא יותר.
 - כל בולט שמתייחס לחשבון יתחיל באימוג'י 📐, כל בולט שמתייחס לאנגלית יתחיל באימוג'י 🔤.
-- אם זוהה ספאם/מעורבות מזויפת במקצוע מסוים, הבולט של אותו מקצוע חייב להתחיל ב-⚠️ במקום באימוג'י המקצוע, ולתאר את התבנית החשודה בקצרה.
+- אם is_lazy_spam=True במקצוע מסוים, הבולט של אותו מקצוע חייב להתחיל ב-⚠️ במקום באימוג'י המקצוע.
 - שורת הלא-פעילים (אם יש) מגיעה בסוף, אחרי כל התלמידים הפעילים.
 - אין הקדמה, אין משפט סיכום מסכם, אין כותרות Markdown (#), אין הדגשת ** מלבד שמות התלמידים.
 
@@ -195,7 +220,8 @@ async def _generate_summary_text(report_data: list) -> str:
 def _build_fallback_summary(report_data: list) -> str:
     """Deterministic, human-readable fallback used only if the LLM call
     fails outright - keeps the same grouping rules (inactive kids on one
-    line) so the report is never a raw data dump even in the failure path.
+    line) and surfaces the Python-computed is_lazy_spam flag directly, so
+    the report is never a raw data dump even in the failure path.
     """
     date_str = datetime.now().strftime("%d/%m/%Y")
     active_lines = []
@@ -203,7 +229,7 @@ def _build_fallback_summary(report_data: list) -> str:
 
     for child in report_data:
         name = child["child_name"]
-        total_messages = sum(child["subjects"][s]["messages_today"] for s in SUBJECTS)
+        total_messages = sum(child["subjects"][s]["message_count"] for s in SUBJECTS)
         if total_messages == 0:
             inactive_names.append(name)
             continue
@@ -211,9 +237,13 @@ def _build_fallback_summary(report_data: list) -> str:
         active_lines.append(f"**{name}**")
         for subject in SUBJECTS:
             data = child["subjects"][subject]
-            emoji = "📐" if subject == "math" else "🔤"
-            if data["messages_today"] > 0:
-                active_lines.append(f"{emoji} התקבלו {data['messages_today']} הודעות היום.")
+            if data["message_count"] == 0:
+                continue
+            if data["is_lazy_spam"]:
+                active_lines.append(f"⚠️ הודעות רבות ({data['message_count']}) אך קצרות וחסרות תוכן.")
+            else:
+                emoji = "📐" if subject == "math" else "🔤"
+                active_lines.append(f"{emoji} התקבלו {data['message_count']} הודעות היום.")
 
     parts = [f"📅 דוח יומי - {date_str}"]
     parts.extend(active_lines)
