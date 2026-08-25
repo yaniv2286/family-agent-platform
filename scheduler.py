@@ -1,6 +1,7 @@
 """APScheduler setup for the daily orchestrator job."""
 import os
 
+import tzlocal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
@@ -8,10 +9,14 @@ from loguru import logger
 from orchestrator import run_daily_orchestration
 
 # Daily run time (24h, local server time), configurable via .env.
-ORCHESTRATOR_HOUR = int(os.getenv("ORCHESTRATOR_HOUR", "20"))
-ORCHESTRATOR_MINUTE = int(os.getenv("ORCHESTRATOR_MINUTE", "0"))
+ORCHESTRATOR_HOUR = int(os.getenv("ORCHESTRATOR_HOUR", "21"))
+ORCHESTRATOR_MINUTE = int(os.getenv("ORCHESTRATOR_MINUTE", "30"))
 
-scheduler = AsyncIOScheduler()
+# Explicitly pin the trigger to the server's local timezone so the schedule
+# doesn't silently shift if the scheduler's default ever resolves to UTC.
+LOCAL_TIMEZONE = tzlocal.get_localzone()
+
+scheduler = AsyncIOScheduler(timezone=LOCAL_TIMEZONE)
 
 
 async def _scheduled_job():
@@ -25,7 +30,7 @@ def start_scheduler():
     """
     scheduler.add_job(
         _scheduled_job,
-        trigger=CronTrigger(hour=ORCHESTRATOR_HOUR, minute=ORCHESTRATOR_MINUTE),
+        trigger=CronTrigger(hour=ORCHESTRATOR_HOUR, minute=ORCHESTRATOR_MINUTE, timezone=LOCAL_TIMEZONE),
         id="daily_orchestration",
         replace_existing=True,
     )
@@ -34,6 +39,7 @@ def start_scheduler():
         "Orchestrator scheduler started",
         hour=ORCHESTRATOR_HOUR,
         minute=ORCHESTRATOR_MINUTE,
+        timezone=str(LOCAL_TIMEZONE),
     )
 
 

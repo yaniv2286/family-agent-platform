@@ -55,14 +55,21 @@ def _get_async_client() -> Optional[AsyncOpenAI]:
     return _async_client
 
 
-def _build_completion_kwargs(model: str, messages: List[Dict]) -> Dict:
-    """Build the model-appropriate keyword arguments for chat.completions.create."""
+def _build_completion_kwargs(model: str, messages: List[Dict], max_tokens: Optional[int] = None) -> Dict:
+    """Build the model-appropriate keyword arguments for chat.completions.create.
+
+    `max_tokens` lets callers request a larger completion budget than the
+    default (e.g. for longer, multi-child analyst reports) - reasoning
+    models in particular can silently return an empty message if the
+    default budget is exhausted by internal reasoning tokens before any
+    visible output is produced.
+    """
     kwargs = {"model": model, "messages": messages}
     if model in _NEWER_MODELS:
-        kwargs["max_completion_tokens"] = 200
+        kwargs["max_completion_tokens"] = max_tokens or 200
         # temperature is intentionally omitted - these models only support the default
     else:
-        kwargs["max_tokens"] = 150
+        kwargs["max_tokens"] = max_tokens or 150
         kwargs["temperature"] = 0.8
     return kwargs
 
@@ -70,10 +77,18 @@ def _build_completion_kwargs(model: str, messages: List[Dict]) -> Dict:
 class BaseAgent:
     """Base agent with timeout-protected, fault-tolerant LLM interaction."""
 
-    async def _call_llm(self, system_prompt: str, conversation_history: List[Dict]) -> str:
+    async def _call_llm(
+        self,
+        system_prompt: str,
+        conversation_history: List[Dict],
+        max_tokens: Optional[int] = None,
+    ) -> str:
         """Call the real OpenAI model (gpt-5.6-luna, falling back to gpt-4o-mini)
         with the given system prompt and conversation history, asynchronously so
         the FastAPI event loop is never blocked while waiting for generation.
+
+        `max_tokens` can be raised for calls that need a longer completion
+        (e.g. multi-child analyst reports) than the default kid-chat budget.
 
         Returns a user-friendly fallback message if the API key is missing or
         both the primary and fallback model calls fail.
@@ -97,7 +112,9 @@ class BaseAgent:
         try:
             start = time.perf_counter()
             logger.info("OpenAI chat completion started", model=model_to_try)
-            response = await client.chat.completions.create(**_build_completion_kwargs(model_to_try, messages))
+            response = await client.chat.completions.create(
+                **_build_completion_kwargs(model_to_try, messages, max_tokens)
+            )
             latency = time.perf_counter() - start
             usage = getattr(response, "usage", None)
             usage_dict = usage.model_dump() if usage is not None else None
@@ -121,7 +138,9 @@ class BaseAgent:
                 try:
                     start = time.perf_counter()
                     logger.info("OpenAI chat fallback started", model=FALLBACK_MODEL)
-                    response = await client.chat.completions.create(**_build_completion_kwargs(FALLBACK_MODEL, messages))
+                    response = await client.chat.completions.create(
+                        **_build_completion_kwargs(FALLBACK_MODEL, messages, max_tokens)
+                    )
                     latency = time.perf_counter() - start
                     usage = getattr(response, "usage", None)
                     usage_dict = usage.model_dump() if usage is not None else None
@@ -155,9 +174,13 @@ class BaseAgent:
             return None
 
 
-async def call_llm(system_prompt: str, conversation_history: List[Dict]) -> str:
+async def call_llm(
+    system_prompt: str,
+    conversation_history: List[Dict],
+    max_tokens: Optional[int] = None,
+) -> str:
     """Module-level helper for non-agent code that still needs a safe LLM call."""
-    return await BaseAgent()._call_llm(system_prompt, conversation_history)
+    return await BaseAgent()._call_llm(system_prompt, conversation_history, max_tokens)
 
 
 def _sanitize_numbers_for_tts(text: str) -> str:

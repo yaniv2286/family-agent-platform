@@ -11,4 +11,5 @@ cryptography
 loguru
 aiosqlite
 apscheduler
+tzlocal
 httpx
