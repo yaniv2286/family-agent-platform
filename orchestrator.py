@@ -111,54 +111,74 @@ async def gather_daily_report_data() -> list:
     return report
 
 
-async def _generate_summary_text(report_data: list) -> str:
-    """Ask the LLM to act as a strict executive analyst and turn the raw
-    activity data (including sampled message content) into a terse,
-    bullet-point Hebrew report for Yaniv: who genuinely studied today, who
-    didn't, and whether any child is gaming the system with low-quality
-    spam messages instead of real engagement.
-
-    Falls back to a plain, deterministic summary if the LLM call fails or no
-    API key is configured, so the daily report is never silently skipped.
+def _build_internal_data_block(report_data: list) -> str:
+    """Serialize the raw report data as compact, clearly-labeled internal
+    data tags (not natural Hebrew sentences), so the LLM has everything it
+    needs for analysis but has no ready-made prose to copy-paste verbatim
+    into its output.
     """
     lines = []
     for child in report_data:
         name = child["child_name"]
         for subject in SUBJECTS:
             data = child["subjects"][subject]
-            label = SUBJECT_LABELS[subject]
-            studied = "כן" if data["messages_today"] > 0 else "לא"
-            summary = data["profile_summary"] or "אין עדיין סיכום למידה."
             samples = data["sample_messages"]
-            samples_block = (
-                " | ".join(f'"{s}"' for s in samples) if samples else "(אין הודעות היום)"
-            )
             lines.append(
-                f"- {name} ({label}): למד/ה היום? {studied} "
-                f"(הודעות היום: {data['messages_today']}). "
-                f"סיכום פרופיל: {summary} "
-                f"הודעות התלמיד/ה היום (לפי סדר כרונולוגי, לבדיקת איכות): {samples_block}"
+                f"[DATA] child_name={name}; subject={subject}; "
+                f"messages_today_count={data['messages_today']}; "
+                f"profile_summary={data['profile_summary'] or 'NONE'}; "
+                f"raw_user_messages_today={samples if samples else 'NONE'}"
             )
-    raw_data_block = "\n".join(lines) if lines else "אין נתונים על ילדים רשומים במערכת."
+    return "\n".join(lines) if lines else "[DATA] no_children_registered=true"
 
-    system_prompt = """אתה אנליסט ביצועים בכיר ומחמיר, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור, לא מעודד ילדים - אתה מנתח נתונים בצורה עניינית וישירה.
 
-חובה מוחלטת - בדיקת איכות (Quality over Quantity):
-- עבור כל תלמיד/ה שיש לו הודעות היום, קרא/י את דוגמאות ההודעות שסופקו.
-- אם ההודעות קצרות, חזרתיות, חסרות משמעות, או נראות כמו ניסיון "לספאם" את המערכת כדי לצבור נקודות/הודעות בלי למידה אמיתית (למשל: "כן", "אוקיי", "1", "..." שוב ושוב, או אותה הודעה בדיוק חזור ושוב) - חובה לדגל את זה במפורש כ"פעילות חשודה / ספאם" ולא לרשום אותו כ"למד/ה" באמת.
-- אם ההודעות מראות מעורבות אמיתית (שאלות, תשובות מהותיות, תרגול בעיות) - זו למידה אמיתית.
+async def _generate_summary_text(report_data: list) -> str:
+    """Ask the LLM to act as a strict executive analyst and turn the raw
+    activity data (including sampled message content) into a terse,
+    human-readable Hebrew executive report for Yaniv: who genuinely studied
+    today, who didn't, and whether any child is gaming the system with
+    low-quality spam messages instead of real engagement.
 
-חובה מוחלטת - פורמט פלט:
-- כתוב/י בעברית בלבד, בפורמט בולטים (•) בלבד. אין להשתמש בפסקאות טקסט רגיל, אין הקדמה, אין ניסוח מקדים, אין סיכום מסכם בסוף.
-- שורה ראשונה בלבד: תאריך היום בפורמט "📅 דוח יומי - DD/MM/YYYY" (בלי טקסט נוסף בשורה הזו).
-- לאחר מכן, בולט אחד לכל תלמיד/ה עם פעילות היום (מקסימום 3 בולטים לכל תלמיד/ה פעיל/ה), ובולט קצר אחד לכל תלמיד/ה שלא למד/ה כלל.
-- כל בולט חייב להיות משפט אחד קצר וממוקד - עובדה, לא ניסוח מנופח.
-- ציין/י תלמיד/ה שספאם/ה בבולט נפרד ומפורש שמתחיל ב"⚠️".
-- אל תמציא/י מידע שלא קיים בנתונים. אל תשתמש/י בפורמט Markdown מסובך (בלי **, בלי כותרות #)."""
+    Falls back to a plain, deterministic summary if the LLM call fails or no
+    API key is configured, so the daily report is never silently skipped.
+    """
+    internal_data_block = _build_internal_data_block(report_data)
+
+    system_prompt = """אתה אנליסט ביצועים בכיר ומחמיר בסטייל ישראלי-עסקי, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור ולא כותב לילדים - אתה כותב תמצית מנהלים לאדם בוגר.
+
+אתה מקבל בהודעת המשתמש נתונים גולמיים בתגית [DATA] (שם, מקצוע, מספר הודעות היום, סיכום פרופיל, והודעות הגלם של התלמיד/ה היום). זה מידע פנימי לניתוח בלבד.
+
+חובה מוחלטת #1 - אין דאמפ נתונים גולמי:
+- אסור בהחלט להעביר לפלט הסופי מונחים גולמיים כמו "messages_today_count", "profile_summary", "raw_user_messages_today", "[DATA]", "למד/ה היום?" או כל תבנית מפתח=ערך.
+- אסור בהחלט להדביק את תוכן שדה profile_summary כמו שהוא. יש לתמצת אותו במשפט תיאורי קצר משלך, בשפה טבעית וזורמת, ולא להעביר אותו verbatim.
+- כל שורה בפלט חייבת להיות משפט אנושי רגיל, לא רשומת מסד נתונים.
+
+חובה מוחלטת #2 - איסור ציטוט הודעות:
+- אסור בהחלט לצטט מילה במילה הודעות מתוך raw_user_messages_today (בלי מירכאות עם הטקסט המקורי של התלמיד/ה).
+- אם ההודעות קצרות/חזרתיות/חסרות תוכן (למשל תשובות של מילה אחת שחוזרות על עצמן) - זה סימן לספאם. תאר/י את התבנית במילים שלך (למשל: "עונה בתשובות קצרות וללא מעורבות אמיתית"), בלי להעביר את הציטוטים בפועל.
+- אם ההודעות מראות שאלות/תשובות מהותיות - זו למידה אמיתית, תאר/י זאת בקצרה.
+
+חובה מוחלטת #3 - קיבוץ לא-פעילים:
+- כל תלמיד/ה עם messages_today_count=0 בשני המקצועות אסור שיקבל סעיף נפרד משלו.
+- באיזה סוף הדוח, שורה אחת בלבד לכל הלא-פעילים ביחד: "💤 לא פעלו היום: שם1, שם2".
+- אם כולם היו פעילים, אל תכלול שורה זו כלל.
+
+חובה מוחלטת #4 - פורמט קשיח:
+- שורה ראשונה בלבד: "📅 דוח יומי - DD/MM/YYYY".
+- לכל תלמיד/ה פעיל/ה (עם הודעה אחת לפחות באחד המקצועות): כתוב/י את השם מודגש בכתיב **שם** ומתחתיו עד 2 בולטים קצרים בלבד (•) - לא יותר.
+- כל בולט שמתייחס לחשבון יתחיל באימוג'י 📐, כל בולט שמתייחס לאנגלית יתחיל באימוג'י 🔤.
+- אם זוהה ספאם/מעורבות מזויפת במקצוע מסוים, הבולט של אותו מקצוע חייב להתחיל ב-⚠️ במקום באימוג'י המקצוע, ולתאר את התבנית החשודה בקצרה.
+- שורת הלא-פעילים (אם יש) מגיעה בסוף, אחרי כל התלמידים הפעילים.
+- אין הקדמה, אין משפט סיכום מסכם, אין כותרות Markdown (#), אין הדגשת ** מלבד שמות התלמידים.
+
+חובה מוחלטת #5 - טון:
+- תמציתי באכזריות, ישיר, סטייל דוח מנהלים ישראלי. אפס פלואף, אפס משפטי נימוס.
+
+אל תמציא/י מידע שלא קיים בנתונים."""
 
     try:
         from tutors import call_llm  # local import avoids a circular import at module load time
-        conversation = [{"role": "user", "content": f"נתוני היום:\n{raw_data_block}"}]
+        conversation = [{"role": "user", "content": internal_data_block}]
         # Multi-child bullet reports need a larger completion budget than the
         # short kid-chat replies - the default was too small for reasoning
         # models and could silently return an empty response.
@@ -169,9 +189,38 @@ async def _generate_summary_text(report_data: list) -> str:
     except Exception:
         logger.exception("Failed to generate LLM daily summary; falling back to raw report")
 
-    # Deterministic fallback so a report is always sent even if the LLM fails.
+    return _build_fallback_summary(report_data)
+
+
+def _build_fallback_summary(report_data: list) -> str:
+    """Deterministic, human-readable fallback used only if the LLM call
+    fails outright - keeps the same grouping rules (inactive kids on one
+    line) so the report is never a raw data dump even in the failure path.
+    """
     date_str = datetime.now().strftime("%d/%m/%Y")
-    return f"📅 דוח יומי - {date_str}\n\n{raw_data_block}"
+    active_lines = []
+    inactive_names = []
+
+    for child in report_data:
+        name = child["child_name"]
+        total_messages = sum(child["subjects"][s]["messages_today"] for s in SUBJECTS)
+        if total_messages == 0:
+            inactive_names.append(name)
+            continue
+
+        active_lines.append(f"**{name}**")
+        for subject in SUBJECTS:
+            data = child["subjects"][subject]
+            emoji = "📐" if subject == "math" else "🔤"
+            if data["messages_today"] > 0:
+                active_lines.append(f"{emoji} התקבלו {data['messages_today']} הודעות היום.")
+
+    parts = [f"📅 דוח יומי - {date_str}"]
+    parts.extend(active_lines)
+    if inactive_names:
+        parts.append(f"💤 לא פעלו היום: {', '.join(inactive_names)}")
+
+    return "\n".join(parts)
 
 
 async def send_telegram_message(text: str) -> bool:
