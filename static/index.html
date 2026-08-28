@@ -3,12 +3,69 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>מנטור למידה - Family Agent Platform</title>
+    <title>Koko - Family Agent Platform</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+        }
+
+        .pin-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #667eea;
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .pin-modal.show {
+            display: flex;
+        }
+
+        .pin-content {
+            background: white;
+            padding: 40px;
+            border-radius: 24px;
+            width: 100%;
+            max-width: 360px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .pin-content h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .pin-content p {
+            color: #6c757d;
+            margin-bottom: 20px;
+        }
+
+        .pin-content input {
+            width: 100%;
+            padding: 16px;
+            font-size: 24px;
+            text-align: center;
+            border: 2px solid #dee2e6;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            direction: ltr;
+        }
+
+        .pin-content input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .pin-error {
+            color: #dc3545;
+            margin-top: 15px;
+            min-height: 22px;
         }
 
         body {
@@ -53,6 +110,26 @@
         .header h1 {
             font-size: 2em;
             margin-bottom: 10px;
+        }
+
+        .koko-avatar {
+            width: 96px;
+            height: 96px;
+            margin-bottom: 10px;
+            display: inline-block;
+            filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.15));
+            animation: gentleBounce 2s infinite ease-in-out;
+        }
+
+        .koko-avatar svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        @keyframes gentleBounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
         }
 
         .header p {
@@ -291,6 +368,135 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             transition: width 1s linear;
             border-radius: 4px;
+        }
+
+        .points-display {
+            flex: 1 0 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .points-progress {
+            flex: 1;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .points-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            transition: width 0.5s ease;
+            border-radius: 4px;
+        }
+
+        .points-earned {
+            color: #28a745;
+            min-width: 40px;
+            text-align: left;
+        }
+
+        .history-btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .history-sidebar {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 320px;
+            max-width: 90%;
+            height: 100%;
+            background: white;
+            box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2);
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            z-index: 1001;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .history-sidebar.open {
+            transform: translateX(0);
+        }
+
+        .history-header {
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .history-header h2 {
+            font-size: 1.2em;
+        }
+
+        .history-header button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .history-dates {
+            padding: 10px 20px;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .history-date-chip {
+            padding: 6px 12px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .history-date-chip.active, .history-date-chip:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .history-empty {
+            color: #6c757d;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .history-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.3);
+            display: none;
+            z-index: 1000;
+        }
+
+        .history-overlay.show {
+            display: block;
         }
 
         .chat-container {
@@ -697,11 +903,37 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="pin-modal" id="pin-modal">
+        <div class="pin-content">
+            <h2>🔒 הזן קוד כניסה</h2>
+            <p>בקש מההורה את הקוד כדי להמשיך</p>
+            <input type="password" id="pin-input" placeholder="קוד 4 ספרות" inputmode="numeric" pattern="[0-9]*" maxlength="10">
+            <button id="pin-submit" class="close-modal">כניסה</button>
+            <p class="pin-error" id="pin-error"></p>
+        </div>
+    </div>
+
+    <div class="container" id="app-container" style="display: none;">
         <div class="header">
             <button class="back-btn" id="back-btn">⬅ חזור</button>
             <button class="switch-child-btn" id="switch-child-btn">🔄 החלף תלמיד</button>
-            <h1>🌟 מנטור למידה</h1>
+            <div class="koko-avatar" aria-label="Koko">
+                <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Koko">
+                    <circle cx="60" cy="60" r="56" fill="#ffffff" stroke="#667eea" stroke-width="4"/>
+                    <circle cx="35" cy="35" r="16" fill="#8fa4d3"/>
+                    <circle cx="85" cy="35" r="16" fill="#8fa4d3"/>
+                    <circle cx="35" cy="35" r="10" fill="#e3eaf7"/>
+                    <circle cx="85" cy="35" r="10" fill="#e3eaf7"/>
+                    <ellipse cx="60" cy="70" rx="32" ry="28" fill="#a8bdd9"/>
+                    <circle cx="48" cy="62" r="5" fill="#2d2d2d"/>
+                    <circle cx="72" cy="62" r="5" fill="#2d2d2d"/>
+                    <circle cx="50" cy="61" r="1.5" fill="#fff"/>
+                    <circle cx="74" cy="61" r="1.5" fill="#fff"/>
+                    <ellipse cx="60" cy="74" rx="9" ry="7" fill="#667eea"/>
+                    <path d="M54,84 Q60,90 66,84" stroke="#2d2d2d" stroke-width="2" fill="none" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h1>Koko</h1>
             <p>בואו נלמד ביחד בכיף!</p>
         </div>
 
@@ -741,6 +973,12 @@
                 <span id="student-name">👤 תלמיד</span>
                 <span id="subject-label">📚 נושא</span>
                 <span id="message-count">💬 הודעות: 0</span>
+                <button class="history-btn" id="history-btn" style="display: none;">📜 היסטוריה</button>
+                <div class="points-display" id="points-display">
+                    <span>⭐ <span id="points-total">0</span> נקודות</span>
+                    <div class="points-progress"><div class="points-fill" id="points-fill" style="width: 0%"></div></div>
+                    <span class="points-earned" id="points-earned"></span>
+                </div>
                 <div class="timer-progress">
                     <div class="timer-bar" id="timer-bar" style="width: 100%"></div>
                 </div>
@@ -781,6 +1019,7 @@
     </div>
 
     <script>
+    window.addEventListener('DOMContentLoaded', () => {
         // State
         let messages = [];
         let selectedUserId = null;
@@ -792,6 +1031,7 @@
         let isListening = false;
         let recognition = null;
         let currentAudio = null;
+        let isEnding = false;
 
         // DOM Elements
         const profileScreen = document.getElementById('profile-screen');
@@ -817,19 +1057,39 @@
         const tutorToggle = document.getElementById('tutor-toggle');
         const toggleMathBtn = document.getElementById('toggle-math-btn');
         const toggleEnglishBtn = document.getElementById('toggle-english-btn');
+        const historyBtn = document.getElementById('history-btn');
+        const historySidebar = document.getElementById('history-sidebar');
+        const historyOverlay = document.getElementById('history-overlay');
+        const historyDates = document.getElementById('history-dates');
+        const historyList = document.getElementById('history-list');
+        const closeHistory = document.getElementById('close-history');
+        const appContainer = document.getElementById('app-container');
+        const pinModal = document.getElementById('pin-modal');
+        const pinInput = document.getElementById('pin-input');
+        const pinSubmit = document.getElementById('pin-submit');
+        const pinError = document.getElementById('pin-error');
 
         // Returns the correct backend endpoint for the currently active tutor.
         function getChatEndpoint(subject) {
             return subject === 'english' ? '/api/tutor/english' : '/api/tutor/chat';
         }
 
+        // Generate a unique idempotency key for each chat request.
+        function generateIdempotencyKey() {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        }
+
         // Build the request body for the active tutor's endpoint. The dedicated
         // English endpoint doesn't take a `subject` field.
-        function buildChatBody(subject, userId, messagesPayload) {
+        function buildChatBody(subject, userId, messagesPayload, idempotencyKey) {
+            const key = idempotencyKey || generateIdempotencyKey();
             if (subject === 'english') {
-                return { user_id: userId, messages: messagesPayload };
+                return { user_id: userId, messages: messagesPayload, idempotency_key: key };
             }
-            return { user_id: userId, subject, messages: messagesPayload };
+            return { user_id: userId, subject, messages: messagesPayload, idempotency_key: key };
         }
 
         function updateTutorToggleUI(subject) {
@@ -856,13 +1116,82 @@
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 15000);
             try {
-                const response = await fetch(url, { ...options, signal: controller.signal });
+                const appPin = localStorage.getItem('app_pin');
+                const headers = { ...(options.headers || {}) };
+                if (appPin) {
+                    headers['x-app-pin'] = appPin;
+                }
+                const response = await fetch(url, { ...options, headers, signal: controller.signal });
+                if (response.status === 401) {
+                    localStorage.removeItem('app_pin');
+                    if (pinModal) pinModal.classList.add('show');
+                    if (pinError) pinError.textContent = 'קוד שגוי, נסה שוב';
+                    throw new Error('Invalid or missing PIN');
+                }
                 clearTimeout(timeoutId);
                 return response;
             } catch (error) {
                 clearTimeout(timeoutId);
                 resetUI();
                 throw error;
+            }
+        }
+
+        function promptForPin(message = '') {
+            if (pinModal) pinModal.classList.add('show');
+            if (pinError) pinError.textContent = message;
+            if (pinInput) pinInput.value = '';
+            if (appContainer) appContainer.style.display = 'none';
+        }
+
+        async function checkAppPin() {
+            const storedPin = localStorage.getItem('app_pin');
+            if (storedPin) {
+                try {
+                    const response = await fetch('/api/ping', {
+                        method: 'GET',
+                        headers: { 'x-app-pin': storedPin }
+                    });
+                    if (response.ok) {
+                        if (appContainer) appContainer.style.display = 'block';
+                        loadUsers();
+                    } else {
+                        localStorage.removeItem('app_pin');
+                        promptForPin('קוד הכניסה פג או שגוי');
+                    }
+                } catch (error) {
+                    console.error('PIN verification failed:', error);
+                    promptForPin('שגיאה באימות הקוד');
+                }
+            } else {
+                promptForPin();
+            }
+        }
+
+        async function submitPin() {
+            const pin = pinInput ? pinInput.value.trim() : '';
+            if (!pin) {
+                if (pinError) pinError.textContent = 'הזן קוד כניסה';
+                return;
+            }
+            // Validate with a lightweight server ping.
+            try {
+                const response = await fetch('/api/ping', {
+                    method: 'GET',
+                    headers: { 'x-app-pin': pin }
+                });
+                if (response.ok) {
+                    localStorage.setItem('app_pin', pin);
+                    if (pinModal) pinModal.classList.remove('show');
+                    if (pinError) pinError.textContent = '';
+                    if (appContainer) appContainer.style.display = 'block';
+                    loadUsers();
+                } else {
+                    if (pinError) pinError.textContent = 'קוד שגוי, נסה שוב';
+                }
+            } catch (error) {
+                console.error('PIN validation failed:', error);
+                if (pinError) pinError.textContent = 'שגיאה באימות הקוד';
             }
         }
 
@@ -987,6 +1316,7 @@
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
             subjectLabel.textContent = `📚 ${subjectName}`;
             updateTutorToggleUI(subject);
+            if (historyBtn) historyBtn.style.display = 'inline-block';
             
             showScreen('tutoring');
             await initChat();
@@ -1032,9 +1362,12 @@
         // Go back to previous screen
         function goBack() {
             if (tutoringScreen.classList.contains('show')) {
+                if (historyBtn) historyBtn.style.display = 'none';
+                closeHistoryPanel();
                 showScreen('subject');
                 stopSessionTimer();
             } else if (!subjectScreen.classList.contains('hidden')) {
+                if (historyBtn) historyBtn.style.display = 'none';
                 showScreen('profile');
             }
         }
@@ -1047,6 +1380,8 @@
             selectedSubject = null;
             messages = [];
             stopSessionTimer();
+            if (historyBtn) historyBtn.style.display = 'none';
+            closeHistoryPanel();
             
             document.querySelectorAll('.profile-card').forEach(card => {
                 card.classList.remove('selected');
@@ -1058,7 +1393,7 @@
         // interest-aware opening (e.g. asking the child what they like to do) instead
         // of a hardcoded, generic one.
         async function initChat() {
-            chatContainer.innerHTML = '<div class="loading">מכין את המנטור...</div>';
+            chatContainer.innerHTML = '<div class="loading">מכין את הKoko...</div>';
             messages = [];
             sessionStartTime = Date.now();
             sessionDurationSeconds = 20 * 60;
@@ -1078,6 +1413,7 @@
                 const data = await response.json();
                 chatContainer.innerHTML = '';
                 addMessage('assistant', data.reply);
+                updatePointsDisplay(data.total_points || 0, data.points_earned || 0);
                 await speakResponse(data.reply);
             } catch (error) {
                 console.error('Error initializing chat:', error);
@@ -1087,11 +1423,98 @@
             }
         }
 
+        // Update the real-time points bar in the header.
+        function updatePointsDisplay(total, earned) {
+            const totalEl = document.getElementById('points-total');
+            const fillEl = document.getElementById('points-fill');
+            const earnedEl = document.getElementById('points-earned');
+            if (totalEl) totalEl.textContent = total;
+            if (fillEl) fillEl.style.width = `${Math.min((total % 100) || 0, 100)}%`;
+            if (earnedEl) earnedEl.textContent = earned > 0 ? `+${earned}` : '';
+        }
+
+        async function loadHistory() {
+            if (!selectedUserProfile || !selectedSubject) return;
+            try {
+                const response = await safeFetch(`/api/history/${encodeURIComponent(selectedUserProfile.name)}?subject=${selectedSubject}`);
+                if (!response.ok) throw new Error('history fetch failed');
+                const data = await response.json();
+                renderHistory(data.messages || []);
+            } catch (error) {
+                console.error('Error loading history:', error);
+                historyList.innerHTML = '<div class="history-empty">שגיאה בטעינת ההיסטוריה</div>';
+            }
+        }
+
+        function renderHistory(messages) {
+            historyDates.innerHTML = '';
+            historyList.innerHTML = '';
+
+            const grouped = {};
+            for (const m of messages) {
+                const date = (m.timestamp || '').slice(0, 10) || 'ללא תאריך';
+                if (!grouped[date]) grouped[date] = [];
+                grouped[date].push(m);
+            }
+
+            const dates = Object.keys(grouped).sort();
+            if (dates.length === 0) {
+                historyList.innerHTML = '<div class="history-empty">אין הודעות עדיין</div>';
+                return;
+            }
+
+            dates.forEach((date, idx) => {
+                const chip = document.createElement('div');
+                chip.className = 'history-date-chip' + (idx === 0 ? ' active' : '');
+                chip.textContent = date;
+                chip.addEventListener('click', () => {
+                    historyDates.querySelectorAll('.history-date-chip').forEach(c => c.classList.remove('active'));
+                    chip.classList.add('active');
+                    showDateMessages(date, grouped[date]);
+                });
+                historyDates.appendChild(chip);
+            });
+
+            showDateMessages(dates[0], grouped[dates[0]]);
+        }
+
+        function showDateMessages(date, msgs) {
+            historyList.innerHTML = '';
+            const title = document.createElement('div');
+            title.style.fontWeight = 'bold';
+            title.style.marginBottom = '10px';
+            title.style.color = '#667eea';
+            title.textContent = date;
+            historyList.appendChild(title);
+
+            for (const m of msgs) {
+                const row = document.createElement('div');
+                row.style.marginBottom = '12px';
+                row.style.padding = '10px';
+                row.style.background = m.role === 'assistant' ? '#f8f9fa' : '#e9ecef';
+                row.style.borderRadius = '8px';
+                const role = m.role === 'assistant' ? 'Koko' : 'תלמיד';
+                row.innerHTML = `<strong>${role}:</strong> ${m.content}`;
+                historyList.appendChild(row);
+            }
+        }
+
+        function openHistory() {
+            historySidebar.classList.add('open');
+            historyOverlay.classList.add('show');
+            loadHistory();
+        }
+
+        function closeHistoryPanel() {
+            historySidebar.classList.remove('open');
+            historyOverlay.classList.remove('show');
+        }
+
         // Add message to chat
         function addMessage(role, content) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
-            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : 'מנטור'}</div>${content}`;
+            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : 'Koko'}</div>${content}`;
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
             
@@ -1106,6 +1529,12 @@
                 return;
             }
 
+            const idempotencyKey = generateIdempotencyKey();
+
+            // Block further input while this request is in-flight.
+            if (sendButton) sendButton.disabled = true;
+            if (voiceButton) voiceButton.disabled = true;
+
             addMessage('user', content);
             textInput.value = '';
 
@@ -1113,15 +1542,19 @@
                 const response = await safeFetch(getChatEndpoint(selectedSubject), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(buildChatBody(selectedSubject, selectedUserId, messages))
+                    body: JSON.stringify(buildChatBody(selectedSubject, selectedUserId, messages, idempotencyKey))
                 });
 
                 const data = await response.json();
                 addMessage('assistant', data.reply);
+                updatePointsDisplay(data.total_points || 0, data.points_earned || 0);
                 await speakResponse(data.reply);
             } catch (error) {
                 console.error('Error sending message:', error);
                 addMessage('assistant', 'שגיאה בשליחת ההודעה. אנא נסה שוב!');
+            } finally {
+                if (sendButton) sendButton.disabled = false;
+                if (voiceButton) voiceButton.disabled = false;
             }
         }
 
@@ -1289,6 +1722,7 @@
             timerBar.style.width = `${progress}%`;
             
             if (remaining <= 0) {
+                stopSessionTimer();
                 endSession();
             }
         }
@@ -1301,7 +1735,25 @@
 
         // End session
         async function endSession() {
+            if (isEnding) return;
+            isEnding = true;
+
+            // Stop Koko immediately: any playing TTS audio or active listening dies
+            // the moment the child presses "finish".
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+            if (recognition) {
+                try {
+                    recognition.stop();
+                } catch (e) {}
+                isListening = false;
+            }
+
             if (!selectedUserId || messages.length === 0) {
+                isEnding = false;
                 return;
             }
 
@@ -1322,6 +1774,7 @@
                 if (!response.ok) {
                     const errorText = await response.text();
                     console.error('end-session HTTP error', response.status, errorText);
+                    isEnding = false;
                     alert(`שגיאה בסיום השיעור (${response.status}): ${errorText.slice(0, 200)}`);
                     return;
                 }
@@ -1329,6 +1782,7 @@
                 const data = await response.json();
 
                 if (data.error) {
+                    isEnding = false;
                     alert('שגיאה: ' + data.error);
                     return;
                 }
@@ -1342,8 +1796,10 @@
                 sessionModal.classList.add('show');
                 
                 stopSessionTimer();
+                isEnding = false;
             } catch (error) {
                 console.error('Error ending session:', error);
+                isEnding = false;
                 alert('שגיאה בסיום השיעור');
             }
         }
@@ -1377,6 +1833,14 @@
         });
 
         voiceButton.addEventListener('click', () => {
+            // Stop any playing TTS the instant the child presses the microphone,
+            // before getUserMedia or any other async work.
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+
             const resetVoiceButton = () => {
                 voiceButton.classList.remove('listening');
                 voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
@@ -1441,9 +1905,31 @@
             switchChild();
         });
 
+        if (historyBtn) historyBtn.addEventListener('click', openHistory);
+        if (closeHistory) closeHistory.addEventListener('click', closeHistoryPanel);
+        if (historyOverlay) historyOverlay.addEventListener('click', closeHistoryPanel);
+
+        if (pinSubmit) pinSubmit.addEventListener('click', submitPin);
+        if (pinInput) pinInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitPin(); });
+
         // Initialize
-        loadUsers();
         initVoiceRecognition();
+        checkAppPin();
+    });
     </script>
+
+    <!-- History sidebar -->
+    <div class="history-overlay" id="history-overlay"></div>
+    <div class="history-sidebar" id="history-sidebar">
+        <div class="history-header">
+            <h2>📜 היסטוריה</h2>
+            <button id="close-history">&times;</button>
+        </div>
+        <div class="history-dates" id="history-dates"></div>
+        <div class="history-list" id="history-list">
+            <div class="history-empty">בחר תאריך כדי לראות את ההודעות</div>
+        </div>
+    </div>
+
 </body>
 </html>

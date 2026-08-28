@@ -16,10 +16,13 @@ from database import (
     TutorHistorySessionLocal,
     StudentProfile,
     ChatHistory,
+    add_student_points,
+    get_student_points,
+    get_chat_by_idempotency_key,
 )
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text, select
+from sqlalchemy import text, select, func
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime
@@ -44,15 +47,19 @@ class ChatRequest(BaseModel):
     user_id: int
     subject: str
     messages: List[Dict[str, str]]
+    idempotency_key: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     reply: str
+    points_earned: int = 0
+    total_points: int = 0
 
 
 class EnglishChatRequest(BaseModel):
     user_id: int
     messages: List[Dict[str, str]]
+    idempotency_key: Optional[str] = None
 
 
 class SpeakRequest(BaseModel):
@@ -86,17 +93,33 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure loguru JSON file logging
+# Configure loguru plain-text file logging
 os.makedirs("logs", exist_ok=True)
 logger.remove()
 logger.add(
     "logs/tutor_app_{time:YYYY-MM-DD}.log",
-    serialize=True,
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}{exception}",
     rotation="00:00",
     retention="14 days",
     enqueue=True,
+    encoding="utf-8",
 )
 logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True)
+
+# Application-level PIN. The default is for local development only; set
+# APP_PIN in .env for any shared/local-network deployment.
+APP_PIN = os.getenv("APP_PIN", "1234")
+
+
+@app.middleware("http")
+async def pin_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        if request.headers.get("x-app-pin") != APP_PIN:
+            return JSONResponse(
+                {"detail": "Unauthorized: missing or incorrect PIN"},
+                status_code=401,
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -263,22 +286,43 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
     if not user_profile:
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
     
-    # Always use the real OpenAI model (async, non-blocking). get_llm_response
-    # internally returns a clear Hebrew error message if OPENAI_API_KEY is
-    # missing or the API call fails - there is no local mock engine anymore.
-    reply = await tutor.get_llm_response(request.messages, user_profile)
+    # Idempotency: if this exact request has already been processed, replay the
+    # stored response without calling the LLM or awarding points again.
+    if request.idempotency_key:
+        previous = await get_chat_by_idempotency_key(
+            user_profile["name"], request.subject, request.idempotency_key
+        )
+        if previous:
+            current_total = await get_student_points(user_profile["name"], request.subject)
+            logger.info(
+                "Idempotent replay for chat request",
+                child_name=user_profile["name"],
+                subject=request.subject,
+                idempotency_key=request.idempotency_key,
+            )
+            return ChatResponse(
+                reply=previous.content,
+                points_earned=0,
+                total_points=current_total,
+            )
     
+    # Always use the real OpenAI model (async, non-blocking). get_llm_response
+    # now returns (reply_text, points_earned).
+    reply_text, points_earned = await tutor.get_llm_response(request.messages, user_profile)
+    total_points = await add_student_points(user_profile["name"], request.subject, points_earned)
+
     # Persist the new turn and update the long-term profile summary in the background.
     background_tasks.add_task(
         update_tutor_memory,
         user_profile["name"],
         user_profile,
         request.messages,
-        reply,
+        reply_text,
         request.subject,
+        request.idempotency_key,
     )
     
-    return ChatResponse(reply=reply)
+    return ChatResponse(reply=reply_text, points_earned=points_earned, total_points=total_points)
 
 
 @app.post("/api/tutor/english", response_model=ChatResponse)
@@ -290,7 +334,28 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
     if not user_profile:
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
     
-    reply = await english_tutor.get_llm_response(request.messages, user_profile)
+    # Idempotency: if this exact request has already been processed, replay the
+    # stored response without calling the LLM or awarding points again.
+    if request.idempotency_key:
+        previous = await get_chat_by_idempotency_key(
+            user_profile["name"], "english", request.idempotency_key
+        )
+        if previous:
+            current_total = await get_student_points(user_profile["name"], "english")
+            logger.info(
+                "Idempotent replay for chat request",
+                child_name=user_profile["name"],
+                subject="english",
+                idempotency_key=request.idempotency_key,
+            )
+            return ChatResponse(
+                reply=previous.content,
+                points_earned=0,
+                total_points=current_total,
+            )
+    
+    reply_text, points_earned = await english_tutor.get_llm_response(request.messages, user_profile)
+    total_points = await add_student_points(user_profile["name"], "english", points_earned)
     
     # Persist the new turn and update the English profile summary in the background.
     background_tasks.add_task(
@@ -298,11 +363,49 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
         user_profile["name"],
         user_profile,
         request.messages,
-        reply,
+        reply_text,
         "english",
+        request.idempotency_key,
     )
     
-    return ChatResponse(reply=reply)
+    return ChatResponse(reply=reply_text, points_earned=points_earned, total_points=total_points)
+
+
+@app.get("/api/ping")
+async def ping():
+    """Lightweight authenticated health check for the frontend to validate
+    a stored PIN before revealing the app UI.
+    """
+    return {"status": "ok"}
+
+
+@app.get("/api/history/{child_name}")
+async def get_history(
+    child_name: str,
+    subject: Optional[str] = None,
+    date: Optional[str] = None,
+):
+    """Return a child's chat history, optionally filtered by subject and date.
+    """
+    async with TutorHistorySessionLocal() as db:
+        query = select(ChatHistory).where(ChatHistory.child_name == child_name)
+        if subject:
+            query = query.where(ChatHistory.subject == subject)
+        if date:
+            query = query.where(func.date(ChatHistory.timestamp) == date)
+        result = await db.execute(query.order_by(ChatHistory.timestamp.asc()))
+        rows = result.scalars().all()
+        return {
+            "messages": [
+                {
+                    "role": r.role,
+                    "content": r.content,
+                    "subject": r.subject,
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 @app.post("/api/tutor/speech")

@@ -6,16 +6,32 @@ summary on Telegram, so he can forward the highlights to the family group
 manually.
 """
 import os
+import re
+from typing import Optional
 from datetime import datetime, time as dt_time
 
 import httpx
 from loguru import logger
 from sqlalchemy import select, func
 
-from database import SessionLocal, User, TutorHistorySessionLocal, StudentProfile, ChatHistory
+from database import SessionLocal, User, TutorHistorySessionLocal, StudentProfile, ChatHistory, add_parent_feedback
 
 SUBJECTS = ("math", "english")
 SUBJECT_LABELS = {"math": "חשבון", "english": "אנגלית"}
+
+# In-memory offset for Telegram long-polling. Starting at 0 means the first
+# poll only probes the latest update id to avoid reprocessing old messages.
+_LAST_TELEGRAM_UPDATE_ID = 0
+
+
+def _detect_feedback_subject(text: str) -> Optional[str]:
+    """Guess the subject a parent feedback refers to (math, english, or None)."""
+    lowered = text.lower()
+    if any(k in lowered for k in ("math", "חשבון", "מתמטיקה")):
+        return "math"
+    if any(k in lowered for k in ("english", "אנגלית", "anglit")):
+        return "english"
+    return None
 
 
 def _today_start() -> datetime:
@@ -302,3 +318,67 @@ async def run_daily_orchestration():
     except Exception:
         logger.exception("Daily orchestration run failed")
         raise
+
+
+async def check_telegram_feedback():
+    """Poll Telegram for new parent replies and store them as feedback.
+
+    Uses getUpdates long-polling with an in-memory offset. On first run it
+    simply probes the latest update id so old chat history is not replayed.
+    """
+    global _LAST_TELEGRAM_UPDATE_ID
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return
+
+    base_url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if _LAST_TELEGRAM_UPDATE_ID == 0:
+                # Probe the latest id without processing, then start from there.
+                response = await client.get(base_url, params={"limit": 1})
+                response.raise_for_status()
+                latest = response.json().get("result", [])
+                if latest:
+                    _LAST_TELEGRAM_UPDATE_ID = max(u["update_id"] for u in latest) - 1
+                    if _LAST_TELEGRAM_UPDATE_ID < 0:
+                        _LAST_TELEGRAM_UPDATE_ID = 0
+                return
+
+            response = await client.get(
+                base_url,
+                params={"offset": _LAST_TELEGRAM_UPDATE_ID + 1, "limit": 100},
+            )
+            response.raise_for_status()
+            updates = response.json().get("result", [])
+            if not updates:
+                return
+
+            new_offset = _LAST_TELEGRAM_UPDATE_ID
+            for update in updates:
+                msg = update.get("message") or update.get("edited_message")
+                if not msg:
+                    continue
+                if str(msg.get("chat", {}).get("id")) != str(chat_id):
+                    continue
+                if msg.get("from", {}).get("is_bot"):
+                    continue
+                text = (msg.get("text") or "").strip()
+                if not text:
+                    continue
+
+                subject = _detect_feedback_subject(text)
+                await add_parent_feedback(child_name=None, subject=subject, message=text)
+                logger.info(
+                    "Stored parent feedback from Telegram",
+                    text=text[:120],
+                    subject=subject,
+                )
+                new_offset = max(new_offset, update["update_id"])
+
+            _LAST_TELEGRAM_UPDATE_ID = new_offset
+    except Exception:
+        logger.exception("Telegram feedback polling failed")

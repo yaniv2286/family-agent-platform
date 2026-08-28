@@ -13,3 +13,6 @@ aiosqlite
 apscheduler
 tzlocal
 httpx
+pytest
+pytest-asyncio
+locust

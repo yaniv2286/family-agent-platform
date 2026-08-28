@@ -22,28 +22,28 @@ def seed_database():
             User(
                 name="נויה",
                 role="child",
-                grade_level="כיתה א'",
+                grade_level="5th Grade",
                 interests=None,
                 created_at=datetime.utcnow()
             ),
             User(
                 name="ינאי",
                 role="child",
-                grade_level="כיתה ג'",
+                grade_level="3rd Grade",
                 interests=None,
                 created_at=datetime.utcnow()
             ),
             User(
                 name="לביא",
                 role="child",
-                grade_level="כיתה ה'",
+                grade_level="1st Grade",
                 interests=None,
                 created_at=datetime.utcnow()
             ),
             User(
                 name="ליבי",
                 role="child",
-                grade_level="כיתה ו'",
+                grade_level="Kindergarten",
                 interests=None,
                 created_at=datetime.utcnow()
             )
