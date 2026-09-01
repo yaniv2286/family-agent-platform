@@ -15,6 +15,6 @@ powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $base = (Get-Lo
 
 scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.zip
 
-ssh %SERVER% "cd /root && rm -f koko-deploy.zip koko-deploy.tar.gz && unzip -o koko-deploy.zip && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs koko-backend --tail=20"
+ssh %SERVER% "cd /root && unzip -o koko-deploy.zip && rm -f koko-deploy.zip koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs koko-backend --tail=20"
 
 pause
