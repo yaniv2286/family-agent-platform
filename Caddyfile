@@ -1,4 +1,4 @@
-example.com {
+lugassy-agents.duckdns.org {
     handle_path /api/koko/* {
         rewrite * /api{uri}
         reverse_proxy koko-backend:8000
