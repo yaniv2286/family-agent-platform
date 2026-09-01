@@ -11,7 +11,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $files = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\data\\' -and $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\\.pytest_cache\\' -and $_.FullName -notmatch '\\logs\\' -and $_.Name -ne '.env' -and $_.Name -ne 'cert.pem' -and $_.Name -ne 'key.pem' } | Resolve-Path -Relative; Compress-Archive -LiteralPath $files -DestinationPath '%ARCHIVE%' -Force; Pop-Location"
+powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $base = (Get-Location).Path.Length; $files = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\data\\' -and $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\\.pytest_cache\\' -and $_.FullName -notmatch '\\logs\\' -and $_.Name -ne '.env' -and $_.Name -ne 'cert.pem' -and $_.Name -ne 'key.pem' } | ForEach-Object { $_.FullName.Substring($base + 1) }; Compress-Archive -LiteralPath $files -DestinationPath '%ARCHIVE%' -Force; Pop-Location"
 
 scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.zip
 
