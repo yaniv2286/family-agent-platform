@@ -11,10 +11,8 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $base = (Get-Location).Path.Length; $files = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\data\\' -and $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\\.pytest_cache\\' -and $_.FullName -notmatch '\\logs\\' -and $_.Name -ne '.env' -and $_.Name -ne 'cert.pem' -and $_.Name -ne 'key.pem' } | ForEach-Object { $_.FullName.Substring($base + 1) }; Compress-Archive -LiteralPath $files -DestinationPath '%ARCHIVE%' -Force; Pop-Location"
+powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $base = (Get-Location).Path.Length; $files = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\data\\' -and $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\\.pytest_cache\\' -and $_.FullName -notmatch '\\logs\\' -and $_.FullName -notmatch '\\venv\\' -and $_.FullName -notmatch '\\\.venv\\' -and $_.Name -ne '.env' -and $_.Name -ne 'cert.pem' -and $_.Name -ne 'key.pem' } | ForEach-Object { $_.FullName.Substring($base + 1) }; Compress-Archive -LiteralPath $files -DestinationPath '%ARCHIVE%' -Force; Pop-Location"
 
 scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.zip
 
-ssh %SERVER% "cd /root && unzip -o koko-deploy.zip && rm -f koko-deploy.zip koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs koko-backend --tail=20"
-
-pause
+ssh %SERVER% "cd /root && unzip -o koko-deploy.zip && rm -f koko-deploy.zip koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs -f"
