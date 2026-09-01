@@ -15,4 +15,4 @@ powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $base = (Get-Lo
 
 scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.zip
 
-ssh %SERVER% "cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.tar.gz dataclasses.py numbers.py *.db *.sqlite3 && unzip -o koko-deploy.zip && rm -f koko-deploy.zip && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs -f"
+ssh %SERVER% "cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.tar.gz *.py *.db *.sqlite3 && unzip -o koko-deploy.zip && rm -f koko-deploy.zip && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs -f"
