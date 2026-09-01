@@ -13,6 +13,12 @@ if %ERRORLEVEL% NEQ 0 (
 
 tar -czf "%ARCHIVE%" -C "%PROJECT:~0,-1%" --exclude=".git" --exclude="data" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="logs" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude="cert.pem" --exclude="key.pem" .
 
-scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.tar.gz
+if defined SSH_KEY (
+    set "SSH_OPTS=-i "%SSH_KEY%""
+) else (
+    set "SSH_OPTS="
+)
 
-ssh %SERVER% "cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.zip dataclasses.py numbers.py *.py *.db *.sqlite3 && tar -xzf koko-deploy.tar.gz && rm -f koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs -f"
+scp %SSH_OPTS% "%ARCHIVE%" %SERVER%:/root/koko-deploy.tar.gz
+
+ssh %SSH_OPTS% %SERVER% "cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.zip dataclasses.py numbers.py *.py *.db *.sqlite3 && tar -xzf koko-deploy.tar.gz && rm -f koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs -f"
