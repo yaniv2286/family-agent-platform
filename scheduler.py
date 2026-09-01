@@ -4,10 +4,9 @@ import os
 import tzlocal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
-from orchestrator import run_daily_orchestration, check_telegram_feedback
+from orchestrator import run_daily_orchestration
 
 # Daily run time (24h, local server time), configurable via .env.
 ORCHESTRATOR_HOUR = int(os.getenv("ORCHESTRATOR_HOUR", "21"))
@@ -33,12 +32,6 @@ def start_scheduler():
         _scheduled_job,
         trigger=CronTrigger(hour=ORCHESTRATOR_HOUR, minute=ORCHESTRATOR_MINUTE, timezone=LOCAL_TIMEZONE),
         id="daily_orchestration",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        check_telegram_feedback,
-        trigger=IntervalTrigger(seconds=30),
-        id="telegram_feedback",
         replace_existing=True,
     )
     scheduler.start()

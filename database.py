@@ -44,7 +44,7 @@ class User(Base):
     role = Column(String, nullable=False)  # 'child' or 'parent'
     grade_level = Column(String, nullable=True)
     interests = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     learning_logs = relationship("LearningLog", back_populates="user")
     health_logs = relationship("HealthLog", back_populates="user")

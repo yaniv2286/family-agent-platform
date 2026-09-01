@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - family-agents-net
+
+  koko-backend:
+    build: .
+    container_name: koko-backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///app/data/family_platform.db
+      - TUTOR_HISTORY_DATABASE_URL=sqlite+aiosqlite:///app/data/tutor_history.db
+    env_file:
+      - .env
+    volumes:
+      - ./data/koko:/app/data
+    networks:
+      - family-agents-net
+
+networks:
+  family-agents-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

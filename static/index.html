@@ -518,6 +518,7 @@
             animation: fadeIn 0.3s ease-in;
             word-wrap: break-word;
             overflow-wrap: break-word;
+            white-space: pre-wrap;
         }
 
         @keyframes fadeIn {
@@ -1457,7 +1458,7 @@
                 grouped[date].push(m);
             }
 
-            const dates = Object.keys(grouped).sort();
+            const dates = Object.keys(grouped).sort().reverse();
             if (dates.length === 0) {
                 historyList.innerHTML = '<div class="history-empty">אין הודעות עדיין</div>';
                 return;

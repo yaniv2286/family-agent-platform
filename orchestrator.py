@@ -14,7 +14,16 @@ import httpx
 from loguru import logger
 from sqlalchemy import select, func
 
-from database import SessionLocal, User, TutorHistorySessionLocal, StudentProfile, ChatHistory, add_parent_feedback
+from database import (
+    SessionLocal,
+    User,
+    TutorHistorySessionLocal,
+    StudentProfile,
+    ChatHistory,
+    add_parent_feedback,
+    get_student_profile_summary,
+    update_student_profile_summary,
+)
 
 SUBJECTS = ("math", "english")
 SUBJECT_LABELS = {"math": "חשבון", "english": "אנגלית"}
@@ -27,9 +36,9 @@ _LAST_TELEGRAM_UPDATE_ID = 0
 def _detect_feedback_subject(text: str) -> Optional[str]:
     """Guess the subject a parent feedback refers to (math, english, or None)."""
     lowered = text.lower()
-    if any(k in lowered for k in ("math", "חשבון", "מתמטיקה")):
+    if any(k in lowered for k in ("math", "חשבון", "מתמטיקה", "כפל", "חילוק", "חיבור", "חיסור", "לוח הכפל", "אריתמטיקה")):
         return "math"
-    if any(k in lowered for k in ("english", "אנגלית", "anglit")):
+    if any(k in lowered for k in ("english", "אנגלית", "anglit", "אנגלי", "אנגליה", "grammar", "vocabulary")):
         return "english"
     return None
 
@@ -182,6 +191,22 @@ def _build_internal_data_block(report_data: list) -> str:
     return "\n".join(lines) if lines else "[DATA] no_children_registered=true"
 
 
+def _filter_active_inactive(report_data: list) -> tuple:
+    """Split report data into children who had any activity today and those
+    with zero messages across all subjects. The LLM is only given the active
+    children; inactive names are appended deterministically afterwards.
+    """
+    active = []
+    inactive = []
+    for child in report_data:
+        total_messages = sum(child["subjects"][s]["message_count"] for s in SUBJECTS)
+        if total_messages == 0:
+            inactive.append(child["child_name"])
+        else:
+            active.append(child)
+    return active, inactive
+
+
 async def _generate_summary_text(report_data: list) -> str:
     """Ask the LLM to act as a strict executive analyst and turn Python-
     computed engagement metadata (never raw chat content) into a terse,
@@ -192,9 +217,19 @@ async def _generate_summary_text(report_data: list) -> str:
     Falls back to a plain, deterministic summary if the LLM call fails or no
     API key is configured, so the daily report is never silently skipped.
     """
-    internal_data_block = _build_internal_data_block(report_data)
+    date_str = datetime.now().strftime("%d/%m/%Y")
+    active_children, inactive_names = _filter_active_inactive(report_data)
 
-    system_prompt = """אתה אנליסט ביצועים בכיר ומחמיר בסטייל ישראלי-עסקי, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור ולא כותב לילדים - אתה כותב תמצית מנהלים לאדם בוגר.
+    # Logic gate: children with zero messages today are never fed to the LLM.
+    # They are reported only on the deterministic "did not operate" line.
+    if not active_children:
+        return _build_fallback_summary(report_data)
+
+    internal_data_block = _build_internal_data_block(active_children)
+
+    system_prompt = f"""אתה אנליסט ביצועים בכיר ומחמיר בסטייל ישראלי-עסקי, שמכין ליניב (אבא) דוח מנהלים יומי קצרצר על פעילות הלמידה של ילדיו במערכת מנטור הלמידה הדיגיטלי. אתה לא מנטור ולא כותב לילדים - אתה כותב תמצית מנהלים לאדם בוגר.
+
+תאריך הדוח המבוקש: {date_str}. השתמש/י בו בשורה הראשונה בלבד.
 
 אתה מקבל בהודעת המשתמש נתונים בתגית [DATA] לכל תלמיד/ה ומקצוע: message_count (מספר הודעות היום), average_words_per_message (אורך הודעה ממוצע במילים), is_lazy_spam (True/False - דגל שכבר חושב ונקבע באופן דטרמיניסטי בקוד Python לפי מקצוע: באנגלית - יותר מ-3 הודעות היום וממוצע מילים נמוך מ-2.5; בחשבון - יותר מ-5 הודעות היום וממוצע מילים נמוך מ-1.0, כי תשובות קצרות כמו "4" הן לגיטימיות), ו-profile_summary (סיכום פדגוגי). אין לך גישה לתוכן ההודעות בפועל - רק למספרים האלה. is_lazy_spam הוא המסקנה הסופית, לא רמז - סמוך/י עליו לחלוטין ואל תנסה/י "לנתח" אותו מחדש.
 
@@ -213,7 +248,7 @@ async def _generate_summary_text(report_data: list) -> str:
 - אם כולם היו פעילים, אל תכלול שורה זו כלל.
 
 חובה מוחלטת #4 - פורמט קשיח:
-- שורה ראשונה בלבד: "📅 דוח יומי - DD/MM/YYYY".
+- שורה ראשונה בלבד: "📅 דוח יומי - {date_str}".
 - לכל תלמיד/ה פעיל/ה (message_count>0 באחד המקצועות לפחות): כתוב/י את השם מודגש בכתיב **שם** ומתחתיו עד 2 בולטים קצרים בלבד (•) - לא יותר.
 - כל בולט שמתייחס לחשבון יתחיל באימוג'י 📐, כל בולט שמתייחס לאנגלית יתחיל באימוג'י 🔤.
 - אם is_lazy_spam=True במקצוע מסוים, הבולט של אותו מקצוע חייב להתחיל ב-⚠️ במקום באימוג'י המקצוע.
@@ -233,6 +268,10 @@ async def _generate_summary_text(report_data: list) -> str:
         # models and could silently return an empty response.
         summary = await call_llm(system_prompt, conversation, max_tokens=1000)
         if summary and not summary.strip().startswith("מפתח ה-API"):
+            # Ensure the LLM never fabricates the inactive list: we append it.
+            if inactive_names:
+                if "לא פעלו היום" not in summary:
+                    summary = summary.strip() + f"\n💤 לא פעלו היום: {', '.join(inactive_names)}"
             return summary.strip()
         logger.warning("LLM returned an empty/invalid daily summary; falling back to raw report", summary=summary)
     except Exception:
@@ -320,65 +359,67 @@ async def run_daily_orchestration():
         raise
 
 
-async def check_telegram_feedback():
-    """Poll Telegram for new parent replies and store them as feedback.
-
-    Uses getUpdates long-polling with an in-memory offset. On first run it
-    simply probes the latest update id so old chat history is not replayed.
-    """
+async def check_telegram_feedback(updates):
+    """Process Telegram parent feedback updates delivered by webhook."""
     global _LAST_TELEGRAM_UPDATE_ID
 
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not bot_token or not chat_id:
+    if not chat_id or not updates:
         return
 
-    base_url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+    if isinstance(updates, dict):
+        updates = [updates]
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            if _LAST_TELEGRAM_UPDATE_ID == 0:
-                # Probe the latest id without processing, then start from there.
-                response = await client.get(base_url, params={"limit": 1})
-                response.raise_for_status()
-                latest = response.json().get("result", [])
-                if latest:
-                    _LAST_TELEGRAM_UPDATE_ID = max(u["update_id"] for u in latest) - 1
-                    if _LAST_TELEGRAM_UPDATE_ID < 0:
-                        _LAST_TELEGRAM_UPDATE_ID = 0
-                return
+        children = await _get_children()
+        child_names = [c.name for c in children]
 
-            response = await client.get(
-                base_url,
-                params={"offset": _LAST_TELEGRAM_UPDATE_ID + 1, "limit": 100},
-            )
-            response.raise_for_status()
-            updates = response.json().get("result", [])
-            if not updates:
-                return
+        new_offset = _LAST_TELEGRAM_UPDATE_ID
+        for update in updates:
+            msg = update.get("message") or update.get("edited_message")
+            if not msg:
+                continue
+            if str(msg.get("chat", {}).get("id")) != str(chat_id):
+                continue
+            if msg.get("from", {}).get("is_bot"):
+                continue
+            text = (msg.get("text") or "").strip()
+            if not text:
+                continue
 
-            new_offset = _LAST_TELEGRAM_UPDATE_ID
-            for update in updates:
-                msg = update.get("message") or update.get("edited_message")
-                if not msg:
-                    continue
-                if str(msg.get("chat", {}).get("id")) != str(chat_id):
-                    continue
-                if msg.get("from", {}).get("is_bot"):
-                    continue
-                text = (msg.get("text") or "").strip()
-                if not text:
-                    continue
+            subject = _detect_feedback_subject(text)
 
-                subject = _detect_feedback_subject(text)
+            # Try to identify which child the parent is talking about.
+            matched_child = None
+            for name in child_names:
+                if name and name in text:
+                    matched_child = name
+                    break
+
+            if matched_child:
+                target_subject = subject or "math"
+                current = await get_student_profile_summary(matched_child, target_subject)
+                directive = f"[Parent Directive]: {text}"
+                new_summary = f"{current}\n{directive}".strip() if current else directive
+                await update_student_profile_summary(matched_child, target_subject, new_summary)
+                logger.info(
+                    "Appended parent directive to child profile",
+                    child_name=matched_child,
+                    subject=target_subject,
+                    text=text[:120],
+                )
+            else:
+                # Fallback: keep the old global feedback table for messages
+                # that don't name a specific child.
                 await add_parent_feedback(child_name=None, subject=subject, message=text)
                 logger.info(
                     "Stored parent feedback from Telegram",
                     text=text[:120],
                     subject=subject,
                 )
-                new_offset = max(new_offset, update["update_id"])
 
-            _LAST_TELEGRAM_UPDATE_ID = new_offset
+            new_offset = max(new_offset, update["update_id"])
+
+        _LAST_TELEGRAM_UPDATE_ID = new_offset
     except Exception:
-        logger.exception("Telegram feedback polling failed")
+        logger.exception("Telegram feedback processing failed")

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, File, UploadFile, Request
 import io
 import os
+import re
 import sys
 import time
 import uuid
@@ -28,7 +29,7 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
 from scheduler import start_scheduler, stop_scheduler
-from orchestrator import run_daily_orchestration
+from orchestrator import run_daily_orchestration, check_telegram_feedback
 
 
 # Pydantic models for response
@@ -40,7 +41,7 @@ class UserResponse(BaseModel):
     role: str
     grade_level: Optional[str] = None
     interests: Optional[str] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
 
 class ChatRequest(BaseModel):
@@ -113,7 +114,10 @@ APP_PIN = os.getenv("APP_PIN", "1234")
 
 @app.middleware("http")
 async def pin_middleware(request: Request, call_next):
-    if request.url.path.startswith("/api/"):
+    if (
+        request.url.path.startswith("/api/")
+        and request.url.path != "/api/telegram/webhook"
+    ):
         if request.headers.get("x-app-pin") != APP_PIN:
             return JSONResponse(
                 {"detail": "Unauthorized: missing or incorrect PIN"},
@@ -416,7 +420,8 @@ async def speech(request: SpeakRequest):
     different, and stream it back to the client.
     """
     try:
-        tts_response = await generate_speech(request.text, request.subject)
+        text = re.sub(r'([א-ת])-(\d+)', r'\1 \2', request.text)
+        tts_response = await generate_speech(text, request.subject)
         return StreamingResponse(
             io.BytesIO(tts_response.content),
             media_type="audio/mpeg",
@@ -514,6 +519,20 @@ async def end_session(request: EndSessionRequest, db: AsyncSession = Depends(get
         await db.rollback()
         logger.bind(error=str(e)).exception("End session failed")
         return {"error": str(e)}
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    expected = os.getenv("TELEGRAM_SECRET_TOKEN")
+    if not expected or secret != expected:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid JSON"}, status_code=400)
+    await check_telegram_feedback(data)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

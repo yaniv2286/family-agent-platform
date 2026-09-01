@@ -1,0 +1,13 @@
+example.com {
+    handle_path /api/koko/* {
+        rewrite * /api{uri}
+        reverse_proxy koko-backend:8000
+    }
+
+    # handle_path /api/habits/* {
+    #     rewrite * /api{uri}
+    #     reverse_proxy habits-backend:8000
+    # }
+
+    reverse_proxy koko-backend:8000
+}

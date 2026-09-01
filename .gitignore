@@ -23,3 +23,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated certs and logs
+cert.pem
+key.pem
+logs/

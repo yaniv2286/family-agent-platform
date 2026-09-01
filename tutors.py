@@ -42,29 +42,63 @@ _unavailable_models: set = set()
 
 
 def _parse_json_reply(raw: str) -> Tuple[str, int]:
-    """Try to parse a JSON response of the form
-    {"reply_text": "...", "points_earned": N}.
-    Hard-caps points to 1-5 before returning. Falls back to using the whole
-    text as the reply with 1 point (the minimum allowed award).
+    """Parse the LLM's JSON reply before it ever reaches the frontend or TTS.
+
+    The model returns a stringified JSON object such as:
+        {"reply_text": "...", "points_earned": N}
+    This function uses json.loads() first, then a regex fallback for
+    malformed/truncated LLM output, to extract the clean conversational
+    text and the capped point value. If parsing fails, it falls back to
+    the raw string with 1 point.
     """
     raw = (raw or "").strip()
+
+    def _unescape(s: str) -> str:
+        return s.replace('\\n', '\n').replace('\\t', '\t')
+
+    def _extract(data) -> Tuple[str, int]:
+        reply_text = str(data.get("reply_text", "")).strip()
+        points = data.get("points_earned") or data.get("_points") or 1
+        if points is None:
+            points = 1
+        try:
+            points = int(points)
+        except (ValueError, TypeError):
+            points = 1
+        return (_unescape(reply_text), max(1, min(points, 5)))
+
+    # Try to parse the whole string as a clean JSON object first.
     try:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            if isinstance(data, dict) and "reply_text" in data:
-                reply_text = str(data["reply_text"]).strip()
-                points = data.get("points_earned", 1)
-                if points is None:
-                    points = 1
-                try:
-                    points = int(points)
-                except (ValueError, TypeError):
-                    points = 1
-                return (reply_text, max(1, min(points, 5)))
+        data = json.loads(raw)
+        if isinstance(data, dict) and "reply_text" in data:
+            return _extract(data)
     except Exception:
-        logger.debug("Failed to parse JSON tutor reply; using raw text", raw=raw[:200])
-    return (raw, 1)
+        pass
+
+    # Otherwise find the first JSON object inside the raw text and parse it.
+    # JSONDecoder.raw_decode lets json.loads() do the heavy lifting while
+    # gracefully ignoring any surrounding noise (markdown, extra text, etc.).
+    try:
+        data, _ = json.JSONDecoder().raw_decode(raw)
+        if isinstance(data, dict) and "reply_text" in data:
+            return _extract(data)
+    except Exception:
+        pass
+
+    # Regex fallback for malformed/truncated JSON produced by some models.
+    reply_match = re.search(r'"reply_text"\s*:\s*"((?:\\.|[^"\\])*)"', raw)
+    if reply_match:
+        reply_text = _unescape(reply_match.group(1)).strip()
+        points_match = re.search(r'"(?:points_earned|_points)"\s*:\s*(\d+)', raw)
+        points = 1
+        if points_match:
+            try:
+                points = int(points_match.group(1))
+            except ValueError:
+                points = 1
+        return (reply_text, max(1, min(points, 5)))
+
+    return (_unescape(raw), 1)
 
 
 _async_client: Optional[AsyncOpenAI] = None
