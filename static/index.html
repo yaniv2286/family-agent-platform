@@ -1488,12 +1488,13 @@
             title.textContent = date;
             historyList.appendChild(title);
 
-            for (const m of msgs) {
+            for (const m of msgs.slice().reverse()) {
                 const row = document.createElement('div');
                 row.style.marginBottom = '12px';
                 row.style.padding = '10px';
                 row.style.background = m.role === 'assistant' ? '#f8f9fa' : '#e9ecef';
                 row.style.borderRadius = '8px';
+                row.style.whiteSpace = 'pre-wrap';
                 const role = m.role === 'assistant' ? 'Koko' : 'תלמיד';
                 row.innerHTML = `<strong>${role}:</strong> ${m.content}`;
                 historyList.appendChild(row);
