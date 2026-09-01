@@ -1,11 +1,11 @@
 import time
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from dotenv import load_dotenv
 
 from loguru import logger
-from sqlalchemy import Column, Integer, String, DateTime, Float, Text, ForeignKey, select, func, text, Index
+from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Text, ForeignKey, select, func, text, Index
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -70,13 +70,24 @@ class HealthLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    log_type = Column(String, nullable=False)  # 'workout' or 'nutrition'
-    details_json = Column(Text, nullable=True)
-    calories = Column(Integer, nullable=True)
-    protein_g = Column(Float, nullable=True)
+    date = Column(Date, default=date.today, nullable=False)
+    workout_type = Column(String, nullable=False)
+    exercises_json = Column(Text, nullable=False)
+    status = Column(String, nullable=False)
+    notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="health_logs")
+
+
+class UserFitnessProfile(Base):
+    __tablename__ = "user_fitness_profile"
+
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    equipment = Column(Text, nullable=False)
+    health_constraints = Column(Text, nullable=False)
+    goal_type = Column(String, nullable=False)
+    supplement_stack = Column(Text, nullable=False)
 
 
 class ScheduledReport(Base):

@@ -965,6 +965,15 @@
                     <p>נלמד מילים ומשפטים חדשים באנגלית!</p>
                 </div>
             </div>
+            <div id="fitness-agent-widget" style="background: #1e1e2e; color: #cdd6f4; padding: 20px; border-radius: 12px; margin-top: 20px; font-family: sans-serif;">
+                <h3>💪 סוכן כושר ותזונה (Tiny Habits)</h3>
+                <p><b>מטרה:</b> חיטוב, עיצוב והעלאת מסת שריר | <b>בטיחות:</b> מותאם לרגישות Tilt Test (כוח מבוקר)</p>
+                <div style="display: flex; gap: 15px; margin-top: 15px;">
+                    <button onclick="logTinyWorkout('balance_board')" style="background: #89b4fa; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; font-weight: bold;">איזון ויציבות</button>
+                    <button onclick="logTinyWorkout('strength_routine')" style="background: #a6e3a1; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; font-weight: bold;">כוח מבוקר (TRX/מוט)</button>
+                </div>
+                <div id="fitness-status" style="margin-top: 10px; font-size: 0.9em; color: #fab387;"></div>
+            </div>
         </div>
 
         <!-- Tutoring Screen -->
@@ -1308,6 +1317,36 @@
             setTimeout(() => {
                 showScreen('subject');
             }, 300);
+        }
+
+        async function logTinyWorkout(type) {
+            const status = document.getElementById('fitness-status');
+            if (!selectedUserId) {
+                if (status) status.innerText = '❌ בחר תלמיד קודם.';
+                return;
+            }
+            try {
+                const response = await safeFetch('/api/fitness/log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: selectedUserId,
+                        workout_type: type,
+                        exercises: [type],
+                        status: 'completed',
+                        notes: 'Tiny habits daily routine completed safely.'
+                    })
+                });
+                if (response.ok) {
+                    if (status) status.innerText = '✅ האימון נרשם בהצלחה! סוכן התזונה עודכן לגבי צריכת החלבון והקריאטין.';
+                } else {
+                    const text = await response.text();
+                    if (status) status.innerText = '❌ שגיאה ברישום האימון: ' + text.slice(0, 200);
+                }
+            } catch (error) {
+                console.error('Fitness log error:', error);
+                if (status) status.innerText = '❌ שגיאה ברישום האימון.';
+            }
         }
 
         // Select subject and start tutoring

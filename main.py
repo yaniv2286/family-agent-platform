@@ -30,6 +30,7 @@ from datetime import datetime
 from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
 from scheduler import start_scheduler, stop_scheduler
 from orchestrator import run_daily_orchestration, check_telegram_feedback
+from fitness_agent import router as fitness_router
 
 
 # Pydantic models for response
@@ -146,8 +147,9 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-# Mount static files
+# Mount static files and include routers
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(fitness_router)
 
 
 @app.exception_handler(Exception)
