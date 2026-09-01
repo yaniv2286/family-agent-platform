@@ -3,7 +3,7 @@ setlocal
 
 set "SERVER=root@207.154.218.23"
 set "PROJECT=%~dp0"
-set "ARCHIVE=%TEMP%\koko-deploy-%RANDOM%.tar.gz"
+set "ARCHIVE=%TEMP%\koko-deploy-%RANDOM%.zip"
 
 python -m pytest "%PROJECT%\tests" -v --ignore="%PROJECT%\tests\test_live_llm.py"
 if %ERRORLEVEL% NEQ 0 (
@@ -11,10 +11,10 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-tar -czf "%ARCHIVE%" --exclude=.git --exclude=data --exclude=.env --exclude=__pycache__ --exclude=.pytest_cache -C "%PROJECT%" .
+powershell -NoProfile -Command "Push-Location '%PROJECT:~0,-1%'; $files = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\data\\' -and $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\\.pytest_cache\\' -and $_.FullName -notmatch '\\logs\\' -and $_.Name -ne '.env' -and $_.Name -ne 'cert.pem' -and $_.Name -ne 'key.pem' } | Resolve-Path -Relative; Compress-Archive -LiteralPath $files -DestinationPath '%ARCHIVE%' -Force; Pop-Location"
 
-scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.tar.gz
+scp "%ARCHIVE%" %SERVER%:/root/koko-deploy.zip
 
-ssh %SERVER% "cd /root && tar -xzf koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs koko-backend --tail=20"
+ssh %SERVER% "cd /root && rm -f koko-deploy.zip koko-deploy.tar.gz && unzip -o koko-deploy.zip && docker compose down && docker compose up -d --build && docker compose ps && docker compose logs koko-backend --tail=20"
 
 pause
