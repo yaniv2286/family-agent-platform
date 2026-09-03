@@ -23,9 +23,18 @@
         }
 
         .page-header {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
             text-align: center;
             color: white;
             margin-bottom: 30px;
+        }
+
+        .page-header > div {
+            flex: 1 1 auto;
         }
 
         .page-header h1 {
@@ -362,6 +371,48 @@
             margin-top: 8px;
         }
 
+        .control-center {
+            max-width: 1200px;
+            margin: 0 auto 30px auto;
+        }
+
+        .control-header {
+            color: white;
+            font-size: 1.5em;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .command-type, .command-payload {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-family: inherit;
+        }
+
+        .command-payload {
+            min-height: 60px;
+        }
+
+        .role-badge {
+            background: #f0f0f0;
+            color: #667eea;
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 12px;
+        }
+
+        pre.ctx-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         @media (max-width: 480px) {
             .dashboard-grid {
                 grid-template-columns: 1fr;
@@ -371,9 +422,14 @@
 </head>
 <body>
     <div class="page-header">
-        <h1>📊 לוח בקרה להורים</h1>
-        <p>מעקב התקדמות למידה - חשבון ואנגלית</p>
+        <div>
+            <h1>📊 לוח בקרה להורים</h1>
+            <p>מעקב התקדמות למידה - חשבון ואנגלית</p>
+        </div>
+        <span class="role-badge" id="role-badge">loading...</span>
     </div>
+
+    <div class="control-center" id="control-center"></div>
 
     <div class="pin-modal" id="pin-modal">
         <div class="pin-content">
@@ -714,6 +770,141 @@
             }
         }
 
+        let CURRENT_ROLE = null;
+
+        async function loadRole() {
+            const resp = await apiFetch('/api/control/me');
+            const data = await resp.json();
+            CURRENT_ROLE = data.role || 'unknown';
+            const badge = document.getElementById('role-badge');
+            if (badge) badge.textContent = CURRENT_ROLE;
+        }
+
+        async function loadControlCenter() {
+            const container = document.getElementById('control-center');
+            try {
+                await loadRole();
+                const resp = await apiFetch('/api/control/agents');
+                const data = await resp.json();
+                const agents = data.agents || [];
+                container.textContent = '';
+                const header = el('div', 'control-header');
+                header.appendChild(el('span', '', '\u{1F3A8} Agent Control Center'));
+                const roleHint = el('span', 'role-badge', CURRENT_ROLE || '');
+                header.appendChild(roleHint);
+                container.appendChild(header);
+
+                const grid = el('div', 'dashboard-grid');
+                agents.forEach(function(agent) {
+                    grid.appendChild(renderAgentCard(agent));
+                });
+                container.appendChild(grid);
+            } catch (e) {
+                console.error('Failed to load control center', e);
+                container.textContent = '';
+                container.appendChild(el('div', 'error-message', 'Failed to load agent control center.'));
+            }
+        }
+
+        function renderAgentCard(agent) {
+            const card = el('div', 'child-card');
+
+            const header = el('div', 'child-card-header');
+            header.appendChild(el('h2', '', agent.name));
+            header.appendChild(el('span', 'grade-badge', agent.kind));
+            card.appendChild(header);
+
+            card.appendChild(el('div', 'profile-summary', 'Status: ' + agent.status));
+            const caps = (agent.capabilities || []).join(', ');
+            card.appendChild(el('div', 'profile-summary', 'Capabilities: ' + caps));
+
+            const healthDetails = el('details', 'recent-logs');
+            healthDetails.appendChild(el('summary', '', '\u{1F4E1} Health & Snapshot'));
+            const healthWrap = el('div', '');
+            loadAgentHealthSnapshot(agent.agent_id, healthWrap);
+            healthDetails.appendChild(healthWrap);
+            card.appendChild(healthDetails);
+
+            if (agent.kind === 'trading') {
+                const analyticsDetails = el('details', 'recent-logs');
+                analyticsDetails.appendChild(el('summary', '', '\u{1F4C8} Trading Analytics'));
+                const analyticsWrap = el('div', '');
+                loadAgentAnalytics(agent.agent_id, analyticsWrap);
+                analyticsDetails.appendChild(analyticsWrap);
+                card.appendChild(analyticsDetails);
+            }
+
+            if (CURRENT_ROLE === 'admin' && agent.agent_id !== 'volatilityhunter') {
+                card.appendChild(renderCommandForm(agent.agent_id));
+            }
+
+            return card;
+        }
+
+        async function loadAgentHealthSnapshot(agentId, wrap) {
+            try {
+                const [healthResp, snapResp] = await Promise.all([
+                    apiFetch('/api/control/agents/' + agentId + '/health').then(function(r) { return r.json(); }),
+                    apiFetch('/api/control/agents/' + agentId + '/snapshot').then(function(r) { return r.json(); }),
+                ]);
+                wrap.appendChild(el('div', 'ctx-item', 'Health: ' + (healthResp.status || 'unknown')));
+                wrap.appendChild(el('div', 'ctx-item', 'Snapshot cached: ' + (snapResp.cached_at ? formatTimestamp(snapResp.cached_at) : 'never')));
+                const snapPre = el('pre', 'ctx-content', JSON.stringify(snapResp.snapshot || {}, null, 2));
+                wrap.appendChild(snapPre);
+            } catch (e) {
+                wrap.appendChild(el('div', 'no-logs', 'Health data unavailable.'));
+            }
+        }
+
+        async function loadAgentAnalytics(agentId, wrap) {
+            try {
+                const data = await (await apiFetch('/api/control/agents/' + agentId + '/analytics')).json();
+                const pre = el('pre', 'ctx-content', JSON.stringify(data.analytics || {}, null, 2));
+                wrap.appendChild(pre);
+            } catch (e) {
+                wrap.appendChild(el('div', 'no-logs', 'Analytics unavailable.'));
+            }
+        }
+
+        function renderCommandForm(agentId) {
+            const section = el('div', 'collab-section');
+            section.appendChild(el('div', 'collab-title', '\u2699\uFE0F Command'));
+
+            const typeInput = el('input', 'command-type');
+            typeInput.placeholder = 'command_type';
+            typeInput.value = 'paper_trade';
+            section.appendChild(typeInput);
+
+            const payloadInput = el('textarea', 'command-payload');
+            payloadInput.placeholder = '{"symbol":"AAPL","qty":1}';
+            section.appendChild(payloadInput);
+
+            const btn = el('button', 'directive-btn complete', 'Send');
+            btn.addEventListener('click', function() {
+                let payload = {};
+                try { payload = payloadInput.value ? JSON.parse(payloadInput.value) : {}; }
+                catch (err) { alert('Invalid JSON payload'); return; }
+                issueCommand(agentId, typeInput.value, payload);
+            });
+            section.appendChild(btn);
+
+            return section;
+        }
+
+        async function issueCommand(agentId, commandType, payload) {
+            try {
+                const resp = await apiFetch('/api/control/agents/' + agentId + '/commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command_type: commandType, payload: payload }),
+                });
+                const data = await resp.json();
+                alert('Command status: ' + (data.status || 'unknown'));
+            } catch (e) {
+                alert('Command failed');
+            }
+        }
+
         function showPinModal(msg) {
             var modal = document.getElementById('pin-modal');
             var err = document.getElementById('pin-error');
@@ -735,6 +926,7 @@
                     document.getElementById('pin-modal').classList.remove('show');
                     if (err) err.textContent = '';
                     loadDashboard();
+                    loadControlCenter();
                 } else {
                     if (err) err.textContent = '\u05E7\u05D5\u05D3 \u05E9\u05D2\u05D5\u05D9, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1';
                 }
@@ -748,7 +940,7 @@
             if (stored) {
                 try {
                     var resp = await fetch('/api/ping', { method: 'GET', headers: { 'x-app-pin': stored } });
-                    if (resp.ok) { loadDashboard(); return; }
+                    if (resp.ok) { loadDashboard(); loadControlCenter(); return; }
                 } catch (e) { /* fall through */ }
                 localStorage.removeItem('app_pin');
             }

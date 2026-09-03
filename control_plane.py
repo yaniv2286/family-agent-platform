@@ -1,0 +1,408 @@
+"""Generic agent control-plane API.
+
+Provides:
+  - agent registry, health, capabilities
+  - telemetry snapshot + refresh
+  - analytics proxy/cache
+  - permitted command dispatch with audit
+  - signed inbound webhook handler with replay protection
+"""
+import json
+from datetime import datetime, timedelta
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from agent_connector import AgentConnector, verify_webhook_signature
+from database import (
+    AgentCapability,
+    AgentHealthSnapshot,
+    AgentTelemetryCache,
+    ExternalCommandAudit,
+    RegisteredAgent,
+    SessionLocal,
+    WebhookReceipt,
+    get_db,
+)
+from rbac import Role, get_current_role, require_permission
+
+router = APIRouter(prefix="/api/control", tags=["Control Plane"])
+
+AGENT_ID_PATH = "{agent_id}"
+
+
+def _json_loads(value: Optional[str]) -> dict:
+    try:
+        return json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+class AgentRegister(BaseModel):
+    agent_id: str = Field(..., min_length=1, max_length=80)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    kind: str = Field("generic")
+    remote_url: Optional[str] = None
+    secret_env: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+
+
+class HealthUpdate(BaseModel):
+    status: str = Field(..., min_length=1, max_length=50)
+    detail: Optional[dict] = None
+
+
+class CommandRequest(BaseModel):
+    command_type: str = Field(..., min_length=1, max_length=100)
+    payload: Optional[dict] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+async def _get_agent(db: AsyncSession, agent_id: str) -> RegisteredAgent:
+    agent = (
+        await db.execute(select(RegisteredAgent).where(RegisteredAgent.agent_id == agent_id))
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(404, detail="agent not found")
+    return agent
+
+
+def _agent_dict(agent: RegisteredAgent, capabilities: Optional[List[str]] = None) -> dict:
+    return {
+        "agent_id": agent.agent_id,
+        "name": agent.name,
+        "description": agent.description,
+        "kind": agent.kind,
+        "status": agent.status,
+        "registered_at": agent.registered_at,
+        "remote_url": agent.remote_url,
+        "capabilities": capabilities or [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+@router.get("/agents")
+async def list_agents(request: Request, db: AsyncSession = Depends(get_db)):
+    """List registered agents. Filtered by caller role."""
+    role = get_current_role(request)
+    allowed = None
+    if role == Role.CHILD:
+        allowed = {"koko_math", "koko_english", "fitness"}
+
+    agents = (await db.execute(select(RegisteredAgent))).scalars().all()
+    result = []
+    for agent in agents:
+        if allowed is not None and agent.agent_id not in allowed:
+            continue
+        caps = (
+            await db.execute(
+                select(AgentCapability.capability).where(AgentCapability.agent_id == agent.agent_id)
+            )
+        ).scalars().all()
+        result.append(_agent_dict(agent, list(caps)))
+    return {"agents": result}
+
+
+@router.post("/agents")
+async def register_agent(
+    request: Request,
+    data: AgentRegister,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new agent (admin only)."""
+    require_permission(request, "control", "admin")
+    existing = (
+        await db.execute(select(RegisteredAgent).where(RegisteredAgent.agent_id == data.agent_id))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, detail="agent already registered")
+
+    agent = RegisteredAgent(
+        agent_id=data.agent_id,
+        name=data.name,
+        description=data.description,
+        kind=data.kind,
+        remote_url=data.remote_url,
+        secret_env=data.secret_env,
+        config_json="{}",
+    )
+    db.add(agent)
+    await db.flush()
+
+    for cap in set(data.capabilities):
+        db.add(AgentCapability(agent_id=data.agent_id, capability=cap, meta_json="{}"))
+
+    await db.commit()
+    await db.refresh(agent)
+    return _agent_dict(agent, list(set(data.capabilities)))
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    require_permission(request, agent_id, "read")
+    agent = await _get_agent(db, agent_id)
+    caps = (
+        await db.execute(
+            select(AgentCapability.capability).where(AgentCapability.agent_id == agent_id)
+        )
+    ).scalars().all()
+    return _agent_dict(agent, list(caps))
+
+
+@router.get("/agents/{agent_id}/capabilities")
+async def get_capabilities(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    require_permission(request, agent_id, "read")
+    await _get_agent(db, agent_id)
+    rows = (
+        await db.execute(
+            select(AgentCapability).where(AgentCapability.agent_id == agent_id)
+        )
+    ).scalars().all()
+    return [
+        {"capability": r.capability, "meta": _json_loads(r.meta_json), "created_at": r.created_at}
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+@router.get("/agents/{agent_id}/health")
+async def get_health(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    require_permission(request, agent_id, "read")
+    await _get_agent(db, agent_id)
+    row = (
+        await db.execute(
+            select(AgentHealthSnapshot)
+            .where(AgentHealthSnapshot.agent_id == agent_id)
+            .order_by(AgentHealthSnapshot.recorded_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        return {"status": "unknown", "detail": {}, "recorded_at": None}
+    return {"status": row.status, "detail": _json_loads(row.detail_json), "recorded_at": row.recorded_at}
+
+
+@router.post("/agents/{agent_id}/health")
+async def post_health(
+    agent_id: str,
+    data: HealthUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit a health snapshot (admin can submit for any agent; parent for family)."""
+    require_permission(request, agent_id, "command")
+    await _get_agent(db, agent_id)
+    snapshot = AgentHealthSnapshot(
+        agent_id=agent_id,
+        status=data.status,
+        detail_json=json.dumps(data.detail or {}, ensure_ascii=False),
+    )
+    db.add(snapshot)
+    await db.commit()
+    await db.refresh(snapshot)
+    return {"status": snapshot.status, "recorded_at": snapshot.recorded_at}
+
+
+# ---------------------------------------------------------------------------
+# Telemetry snapshot / refresh
+# ---------------------------------------------------------------------------
+@router.get("/agents/{agent_id}/snapshot")
+async def get_snapshot(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    require_permission(request, agent_id, "read")
+    await _get_agent(db, agent_id)
+    row = (
+        await db.execute(
+            select(AgentTelemetryCache).where(AgentTelemetryCache.agent_id == agent_id)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        return {"agent_id": agent_id, "snapshot": {}, "cached_at": None}
+    return {"agent_id": agent_id, "snapshot": _json_loads(row.snapshot_json), "cached_at": row.cached_at}
+
+
+@router.post("/agents/{agent_id}/snapshot/refresh")
+async def refresh_snapshot(
+    agent_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Refresh cached telemetry by calling the agent over the signed connector."""
+    role = require_permission(request, agent_id, "read")
+    await _get_agent(db, agent_id)
+
+    try:
+        snapshot = await AgentConnector(agent_id).fetch_telemetry()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, detail=f"failed to refresh telemetry: {exc}") from exc
+
+    cached = (
+        await db.execute(select(AgentTelemetryCache).where(AgentTelemetryCache.agent_id == agent_id))
+    ).scalar_one_or_none()
+    if cached:
+        cached.snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+        cached.cached_at = datetime.utcnow()
+        cached.expires_at = datetime.utcnow() + timedelta(minutes=5)
+    else:
+        cached = AgentTelemetryCache(
+            agent_id=agent_id,
+            snapshot_json=json.dumps(snapshot, ensure_ascii=False),
+            cached_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(minutes=5),
+        )
+        db.add(cached)
+    await db.commit()
+    await db.refresh(cached)
+    return {"agent_id": agent_id, "snapshot": snapshot, "cached_at": cached.cached_at}
+
+
+# ---------------------------------------------------------------------------
+# Analytics proxy / cache
+# ---------------------------------------------------------------------------
+@router.get("/agents/{agent_id}/analytics")
+async def get_analytics(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Return analytics for an agent, proxying from the agent and updating cache."""
+    role = require_permission(request, agent_id, "read")
+    if role == Role.CHILD and agent_id in {"neuraltrader", "volatilityhunter"}:
+        raise HTTPException(403, detail="children cannot access trading analytics")
+    await _get_agent(db, agent_id)
+
+    try:
+        analytics = await AgentConnector(agent_id).send("GET", "/analytics")
+    except HTTPException:
+        # Fall back to cached snapshot if available.
+        cached = (
+            await db.execute(select(AgentTelemetryCache).where(AgentTelemetryCache.agent_id == agent_id))
+        ).scalar_one_or_none()
+        if cached:
+            analytics = _json_loads(cached.snapshot_json)
+        else:
+            analytics = {}
+    except Exception:
+        cached = (
+            await db.execute(select(AgentTelemetryCache).where(AgentTelemetryCache.agent_id == agent_id))
+        ).scalar_one_or_none()
+        analytics = _json_loads(cached.snapshot_json) if cached else {}
+
+    return {"agent_id": agent_id, "analytics": analytics}
+
+
+# ---------------------------------------------------------------------------
+# Permitted commands
+# ---------------------------------------------------------------------------
+@router.post("/agents/{agent_id}/commands")
+async def send_command(
+    agent_id: str,
+    data: CommandRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    issued_by_user: Optional[str] = None,
+):
+    """Issue an external command to an agent, subject to RBAC and audit."""
+    role = require_permission(request, agent_id, "command")
+    await _get_agent(db, agent_id)
+
+    audit = ExternalCommandAudit(
+        agent_id=agent_id,
+        command_type=data.command_type,
+        payload_json=json.dumps(data.payload or {}, ensure_ascii=False),
+        issued_by_role=role,
+        issued_by_user=issued_by_user,
+        status="pending",
+    )
+    db.add(audit)
+    await db.flush()
+
+    try:
+        result = await AgentConnector(agent_id).send_command(data.command_type, data.payload or {})
+        audit.status = "completed"
+        audit.response_json = json.dumps(result, ensure_ascii=False)
+    except HTTPException as exc:
+        audit.status = "failed"
+        audit.response_json = json.dumps({"error": exc.detail}, ensure_ascii=False)
+        await db.commit()
+        raise
+    except Exception as exc:
+        audit.status = "failed"
+        audit.response_json = json.dumps({"error": str(exc)}, ensure_ascii=False)
+        await db.commit()
+        raise HTTPException(502, detail=f"command failed: {exc}") from exc
+    finally:
+        audit.completed_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(audit)
+    return {"command_id": audit.id, "agent_id": agent_id, "status": audit.status, "result": result}
+
+
+# ---------------------------------------------------------------------------
+# Signed inbound webhook with replay protection
+# ---------------------------------------------------------------------------
+@router.post("/webhooks/inbound")
+async def inbound_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive a signed webhook from an external agent."""
+    agent_id = request.headers.get("X-Agent-ID")
+    timestamp_header = request.headers.get("X-Agent-Timestamp")
+    signature = request.headers.get("X-Agent-Signature")
+    nonce = request.headers.get("X-Nonce")
+
+    if not agent_id or not timestamp_header or not signature or not nonce:
+        raise HTTPException(401, detail="missing signature headers")
+
+    try:
+        timestamp = int(timestamp_header)
+    except (TypeError, ValueError):
+        raise HTTPException(401, detail="invalid timestamp")
+
+    body = await request.body()
+    path = request.url.path
+
+    if not verify_webhook_signature(agent_id, timestamp, path, body, signature):
+        raise HTTPException(401, detail="invalid signature")
+
+    await _get_agent(db, agent_id)
+
+    existing = (
+        await db.execute(select(WebhookReceipt).where(WebhookReceipt.nonce == nonce))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, detail="replay: nonce already used")
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except ValueError:
+        payload = {"raw": body.decode("utf-8", errors="replace")}
+
+    receipt = WebhookReceipt(
+        agent_id=agent_id,
+        nonce=nonce,
+        signature=signature,
+        payload_json=json.dumps(payload, ensure_ascii=False),
+    )
+    db.add(receipt)
+    await db.commit()
+    await db.refresh(receipt)
+    return {"status": "ok", "receipt_id": receipt.id}
+
+
+# ---------------------------------------------------------------------------
+# Role introspection
+# ---------------------------------------------------------------------------
+@router.get("/me")
+async def whoami(request: Request):
+    role = getattr(request.state, "role", None)
+    return {"role": role or "unknown"}

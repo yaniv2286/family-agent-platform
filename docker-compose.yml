@@ -26,6 +26,8 @@ services:
       - TUTOR_HISTORY_DATABASE_URL=sqlite+aiosqlite:///app/data/tutor_history.db
       - TZ=Asia/Jerusalem
       - APP_TIMEZONE=Asia/Jerusalem
+      - AGENT_NEURALTRADER_URL=http://neuraltrader-control:8000
+      - AGENT_VOLATILITYHUNTER_URL=http://volatilityhunter_monitoring:8080
     env_file:
       - .env
     volumes:
@@ -35,6 +37,7 @@ services:
 
 networks:
   family-agents-net:
+    name: family-agents-net
     driver: bridge
 
 volumes:

@@ -299,6 +299,152 @@ class ProfileRevision(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class RegisteredAgent(Base):
+    __tablename__ = "registered_agents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    kind = Column(String, nullable=False, default="generic")
+    status = Column(String, nullable=False, default="active")
+    registered_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    remote_url = Column(String, nullable=True)
+    secret_env = Column(String, nullable=True)
+    config_json = Column(Text, nullable=False, default="{}")
+
+
+class AgentCapability(Base):
+    __tablename__ = "agent_capabilities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("registered_agents.agent_id"), nullable=False, index=True)
+    capability = Column(String, nullable=False)
+    meta_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("uq_agent_capability", "agent_id", "capability", unique=True),)
+
+
+class AgentHealthSnapshot(Base):
+    __tablename__ = "agent_health_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("registered_agents.agent_id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="unknown")
+    detail_json = Column(Text, nullable=False, default="{}")
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_health_agent_recorded", "agent_id", "recorded_at"),)
+
+
+class WebhookReceipt(Base):
+    __tablename__ = "webhook_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("registered_agents.agent_id"), nullable=False, index=True)
+    nonce = Column(String, unique=True, index=True, nullable=False)
+    signature = Column(String, nullable=False)
+    payload_json = Column(Text, nullable=False, default="{}")
+    received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+
+
+class ExternalCommandAudit(Base):
+    __tablename__ = "external_command_audit"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("registered_agents.agent_id"), nullable=False, index=True)
+    command_type = Column(String, nullable=False)
+    payload_json = Column(Text, nullable=False, default="{}")
+    issued_by_role = Column(String, nullable=True)
+    issued_by_user = Column(String, nullable=True)
+    signature = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending")
+    response_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class AgentTelemetryCache(Base):
+    __tablename__ = "agent_telemetry_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, ForeignKey("registered_agents.agent_id"), nullable=False, unique=True, index=True)
+    snapshot_json = Column(Text, nullable=False, default="{}")
+    cached_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+
+
+BUILTIN_AGENTS = [
+    {
+        "agent_id": "koko_math",
+        "name": "Koko Math Tutor",
+        "description": "Interactive math mentor for children.",
+        "kind": "tutor",
+        "capabilities": ["chat", "session_end", "speech"],
+    },
+    {
+        "agent_id": "koko_english",
+        "name": "Koko English Tutor",
+        "description": "Interactive English mentor for children.",
+        "kind": "tutor",
+        "capabilities": ["chat", "session_end", "speech"],
+    },
+    {
+        "agent_id": "fitness",
+        "name": "Fitness Agent",
+        "description": "Family fitness planning and tracking.",
+        "kind": "wellness",
+        "capabilities": ["plan", "log", "analytics", "habits"],
+    },
+    {
+        "agent_id": "nutrition",
+        "name": "Nutrition Agent",
+        "description": "Post-activity nutrition recommendations.",
+        "kind": "wellness",
+        "capabilities": ["recommend", "advise"],
+    },
+    {
+        "agent_id": "neuraltrader",
+        "name": "NeuralTrader",
+        "description": "Paper trading execution agent.",
+        "kind": "trading",
+        "capabilities": ["paper_trade", "analytics"],
+    },
+    {
+        "agent_id": "volatilityhunter",
+        "name": "VolatilityHunter",
+        "description": "Market volatility monitoring agent.",
+        "kind": "trading",
+        "capabilities": ["monitor", "analytics"],
+    },
+]
+
+
+async def _seed_registered_agents(conn):
+    for agent in BUILTIN_AGENTS:
+        caps = agent.get("capabilities", [])
+        await conn.execute(
+            text(
+                "INSERT INTO registered_agents (agent_id, name, description, kind, status, registered_at, config_json) "
+                "VALUES (:agent_id, :name, :description, :kind, 'active', CURRENT_TIMESTAMP, '{}') "
+                "ON CONFLICT(agent_id) DO UPDATE SET name=excluded.name, "
+                "description=excluded.description, kind=excluded.kind, status=excluded.status"
+            ),
+            agent,
+        )
+        for cap in caps:
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_capabilities (agent_id, capability, meta_json, created_at) "
+                    "VALUES (:agent_id, :cap, '{}', CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(agent_id, capability) DO NOTHING"
+                ),
+                {"agent_id": agent["agent_id"], "cap": cap},
+            )
+
+
 async def _migrate_main_schema(conn):
     """Additive SQLite migrations: never drop production health/fitness data."""
     profile = await _table_columns(conn, "user_fitness_profile")
@@ -352,6 +498,7 @@ async def init_db():
         await _migrate_main_schema(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _seed_exercises(conn)
+        await _seed_registered_agents(conn)
 
 
 async def get_db():

@@ -32,6 +32,8 @@ from scheduler import start_scheduler, stop_scheduler
 from orchestrator import run_daily_orchestration, check_telegram_feedback
 from fitness_agent import router as fitness_router
 from collaboration_api import router as collaboration_router
+from control_plane import router as control_plane_router
+from rbac import resolve_role
 
 
 # Pydantic models for response
@@ -109,22 +111,20 @@ logger.add(
 )
 logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True)
 
-# Application-level PIN. The default is for local development only; set
-# APP_PIN in .env for any shared/local-network deployment.
-APP_PIN = os.getenv("APP_PIN", "1234")
-
-
 @app.middleware("http")
 async def pin_middleware(request: Request, call_next):
     if (
         request.url.path.startswith("/api/")
         and request.url.path != "/api/telegram/webhook"
     ):
-        if request.headers.get("x-app-pin") != APP_PIN:
+        pin = request.headers.get("x-app-pin")
+        role = resolve_role(pin)
+        if not role:
             return JSONResponse(
                 {"detail": "Unauthorized: missing or incorrect PIN"},
                 status_code=401,
             )
+        request.state.role = role
     return await call_next(request)
 
 
@@ -152,6 +152,7 @@ async def request_id_middleware(request: Request, call_next):
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(fitness_router)
 app.include_router(collaboration_router)
+app.include_router(control_plane_router)
 
 
 @app.exception_handler(Exception)
