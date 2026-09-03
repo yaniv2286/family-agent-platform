@@ -726,41 +726,61 @@
         }
 
         /* ── Fitness Agent UI ── */
-        .fitness-screen { display: none; padding: 0; width: 100%; }
-        .fitness-screen.show { display: block; }
-        .fitness-tabs { display: flex; gap: 0; border-bottom: 2px solid #e9ecef; background: #f8f9fa; overflow-x: auto; }
-        .fitness-tab { flex: 1; padding: 14px 8px; text-align: center; cursor: pointer; font-weight: 600; font-size: 14px; border: none; background: transparent; color: #6c757d; white-space: nowrap; transition: all 0.2s; border-bottom: 3px solid transparent; }
-        .fitness-tab.active { color: #667eea; border-bottom-color: #667eea; background: white; }
-        .fitness-panel { display: none; padding: 25px; max-height: 60vh; overflow-y: auto; }
-        .fitness-panel.active { display: block; }
-        .fitness-form label { display: block; font-weight: 600; margin: 12px 0 4px; color: #495057; font-size: 14px; }
-        .fitness-form input, .fitness-form select, .fitness-form textarea { width: 100%; padding: 10px 12px; border: 2px solid #dee2e6; border-radius: 10px; font-size: 15px; margin-bottom: 4px; }
-        .fitness-form input:focus, .fitness-form select:focus { outline: none; border-color: #667eea; }
-        .fitness-btn { padding: 12px 24px; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; font-size: 15px; transition: all 0.2s; }
-        .fitness-btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-        .fitness-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
-        .fitness-btn-success { background: #28a745; color: white; }
-        .fitness-btn-success:hover { background: #218838; }
-        .fitness-btn-sm { padding: 8px 16px; font-size: 13px; }
-        .fitness-card { background: #f8f9fa; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid #e9ecef; }
-        .fitness-card h4 { margin: 0 0 8px; color: #333; font-size: 15px; }
-        .fitness-card p { margin: 4px 0; color: #6c757d; font-size: 13px; }
-        .fitness-safety { background: #fff3cd; border: 1px solid #ffc107; border-radius: 10px; padding: 12px; margin: 12px 0; font-size: 13px; color: #856404; }
-        .fitness-safety li { margin: 4px 0; }
-        .fitness-exercise { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: white; border-radius: 10px; margin: 6px 0; border: 1px solid #e9ecef; }
-        .fitness-exercise .name { font-weight: 600; color: #333; }
-        .fitness-exercise .detail { color: #6c757d; font-size: 13px; }
-        .fitness-slider-group { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
-        .fitness-slider-group label { min-width: 90px; margin: 0; }
-        .fitness-slider-group input[type=range] { flex: 1; padding: 0; border: none; margin: 0; }
-        .fitness-slider-group .val { min-width: 30px; text-align: center; font-weight: 700; color: #667eea; }
-        .fitness-stat { display: inline-block; background: #667eea; color: white; border-radius: 8px; padding: 8px 14px; margin: 4px; font-size: 13px; font-weight: 600; }
-        .fitness-streak { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
-        .fitness-streak:last-child { border-bottom: none; }
-        .chip-container { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
-        .chip { display: inline-block; padding: 4px 10px; border-radius: 16px; background: #e9ecef; font-size: 12px; color: #495057; }
-        .chip.active-chip { background: #667eea; color: white; cursor: pointer; }
-        .chip .remove-chip { cursor: pointer; margin-right: 4px; font-weight: bold; }
+        .fitness-screen { display:none; width:100%; background:#f5f7f3; min-height:640px; direction:rtl; }
+        .fitness-screen.show { display:block; }
+        .fitness-hero { padding:28px 28px 22px; color:white; background:linear-gradient(135deg,#176b57,#2f9273); }
+        .fitness-hero h2 { margin:0 0 5px; font-size:1.7rem; }
+        .fitness-hero p { margin:0; opacity:.9; }
+        .fitness-tabs { display:flex; gap:5px; padding:9px 12px; background:white; box-shadow:0 2px 12px rgba(22,72,58,.08); overflow-x:auto; position:sticky; top:0; z-index:3; }
+        .fitness-tab { flex:1; min-width:76px; padding:11px 7px; border:0; border-radius:12px; background:transparent; color:#66736d; cursor:pointer; font-weight:700; white-space:nowrap; }
+        .fitness-tab.active { color:#176b57; background:#e5f4ed; }
+        .fitness-panel { display:none; padding:22px; max-height:62vh; overflow-y:auto; }
+        .fitness-panel.active { display:block; }
+        .fitness-section-title { margin:0 0 14px; color:#183c32; font-size:1.25rem; }
+        .fitness-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+        .fitness-card { background:white; border:1px solid #e1ebe6; border-radius:18px; padding:18px; margin-bottom:14px; box-shadow:0 5px 18px rgba(28,79,65,.06); }
+        .fitness-card h3,.fitness-card h4 { margin:0 0 8px; color:#183c32; }
+        .fitness-card p { margin:5px 0; color:#64726d; line-height:1.55; font-size:14px; }
+        .fitness-today { background:linear-gradient(145deg,#fff,#edf8f2); border-color:#cce7da; }
+        .fitness-btn { padding:12px 20px; border:0; border-radius:12px; font-weight:700; cursor:pointer; font-size:15px; transition:.2s; }
+        .fitness-btn:disabled { opacity:.55; cursor:default; }
+        .fitness-btn-primary { color:white; background:#176b57; }
+        .fitness-btn-primary:hover { background:#105443; transform:translateY(-1px); }
+        .fitness-btn-success { color:white; background:#dd6b3f; }
+        .fitness-btn-soft { color:#176b57; background:#e5f4ed; }
+        .fitness-btn-sm { padding:9px 14px; font-size:13px; }
+        .fitness-actions { display:flex; gap:9px; flex-wrap:wrap; margin-top:14px; }
+        .fitness-stat-row { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+        .fitness-stat { text-align:center; color:#176b57; background:#eaf6f0; border-radius:14px; padding:12px 7px; font-weight:800; }
+        .fitness-stat small { display:block; color:#65756f; margin-top:4px; font-weight:600; }
+        .fitness-exercise { background:#fbfdfc; border:1px solid #e1ebe6; border-radius:15px; padding:14px; margin:9px 0; }
+        .fitness-exercise.done { opacity:.6; background:#edf8f2; }
+        .fitness-exercise-head { display:flex; justify-content:space-between; gap:10px; align-items:start; }
+        .fitness-exercise .name { font-weight:800; color:#183c32; }
+        .fitness-exercise .detail { color:#66736d; font-size:13px; margin-top:4px; }
+        .fitness-minimum { margin-top:8px; padding:8px 10px; background:#fff5e8; border-radius:9px; color:#8b542f; font-size:13px; }
+        .fitness-safety { background:#fff8e8; border-right:4px solid #e2a640; border-radius:12px; padding:12px; margin:12px 0; color:#725328; font-size:13px; }
+        .fitness-form label { display:block; font-weight:700; margin:16px 0 7px; color:#28493f; }
+        .fitness-form input,.fitness-form textarea { width:100%; padding:11px; border:1px solid #cfdcd6; border-radius:11px; font:inherit; }
+        .fitness-slider-group { display:grid; grid-template-columns:110px 1fr 34px; align-items:center; gap:8px; margin:15px 0; }
+        .fitness-slider-group .val { text-align:center; font-weight:800; color:#176b57; }
+        .chip-container { display:flex; flex-wrap:wrap; gap:8px; }
+        .chip { padding:9px 13px; border:1px solid #cfdcd6; border-radius:20px; background:white; color:#52615c; cursor:pointer; font-size:13px; user-select:none; }
+        .chip.active-chip { color:white; border-color:#176b57; background:#176b57; }
+        .fitness-empty { text-align:center; color:#71807b; padding:25px 10px; }
+        .fitness-nutrition { border-right:4px solid #dd6b3f; }
+        .fitness-preset { cursor:pointer; }
+        .fitness-preset:hover { border-color:#176b57; }
+        @media(max-width:768px) {
+            .fitness-hero { padding:72px 18px 18px; }
+            .fitness-panel { padding:15px; max-height:none; }
+            .fitness-grid { grid-template-columns:1fr; }
+            .fitness-tabs { justify-content:flex-start; }
+            .fitness-tab { flex:0 0 auto; }
+            .fitness-stat-row { gap:6px; }
+            .fitness-slider-group { grid-template-columns:88px 1fr 28px; }
+            .fitness-actions .fitness-btn { flex:1; }
+        }
 
         @media (max-width: 768px) {
             body {
@@ -1018,103 +1038,24 @@
 
         <!-- Fitness Agent Screen -->
         <div class="fitness-screen" id="fitness-screen">
-            <div class="fitness-tabs">
-                <button class="fitness-tab active" data-panel="fitness-profile-panel">פרופיל</button>
-                <button class="fitness-tab" data-panel="fitness-plan-panel">תוכנית</button>
-                <button class="fitness-tab" data-panel="fitness-complete-panel">דיווח</button>
-                <button class="fitness-tab" data-panel="fitness-habits-panel">הרגלים</button>
-                <button class="fitness-tab" data-panel="fitness-analytics-panel">סטטיסטיקה</button>
-            </div>
-
-            <!-- Profile Panel -->
-            <div class="fitness-panel active" id="fitness-profile-panel">
-                <div class="fitness-form" id="fitness-profile-form">
-                    <label>ציוד זמין (הפרד בפסיקים)</label>
-                    <input type="text" id="fp-equipment" placeholder="none, resistance_bands, trx...">
-                    <label>מגבלות בריאותיות</label>
-                    <input type="text" id="fp-constraints" placeholder="tilt_test_sensitivity...">
-                    <label>מטרות</label>
-                    <input type="text" id="fp-goals" placeholder="hypertrophy, fat_loss...">
-                    <label>תוספי תזונה</label>
-                    <input type="text" id="fp-supplements" placeholder="creatine, whey_protein...">
-                    <label>משך אימון מועדף (דקות)</label>
-                    <input type="number" id="fp-duration" min="5" max="120" value="30">
-                    <label>ימי אימון</label>
-                    <div class="chip-container" id="fp-days-chips">
-                        <span class="chip active-chip" data-day="sunday">ראשון</span>
-                        <span class="chip active-chip" data-day="monday">שני</span>
-                        <span class="chip active-chip" data-day="tuesday">שלישי</span>
-                        <span class="chip active-chip" data-day="wednesday">רביעי</span>
-                        <span class="chip active-chip" data-day="thursday">חמישי</span>
-                        <span class="chip active-chip" data-day="friday">שישי</span>
-                        <span class="chip active-chip" data-day="saturday">שבת</span>
-                    </div>
-                    <div style="margin-top: 16px;">
-                        <button class="fitness-btn fitness-btn-primary" id="fp-save-btn">שמור פרופיל</button>
-                    </div>
-                    <div id="fp-status" style="margin-top: 8px; font-size: 13px; color: #28a745;"></div>
-                </div>
-            </div>
-
-            <!-- Plan Panel -->
-            <div class="fitness-panel" id="fitness-plan-panel">
-                <button class="fitness-btn fitness-btn-primary" id="fp-generate-btn" style="width:100%; margin-bottom: 16px;">צור תוכנית אימון חדשה</button>
-                <div id="fitness-plan-display"></div>
-            </div>
-
-            <!-- Completion Panel -->
-            <div class="fitness-panel" id="fitness-complete-panel">
-                <div id="fitness-complete-noplan" style="color: #6c757d; text-align: center; padding: 30px;">
-                    <p>בחר תוכנית אימון מהלשונית "תוכנית" כדי לדווח על ביצוע</p>
-                </div>
-                <div id="fitness-complete-form" style="display:none;">
-                    <h4 style="margin-bottom: 12px;">דיווח ביצוע אימון #<span id="fc-plan-id"></span></h4>
-                    <div class="fitness-slider-group">
-                        <label>מאמץ נתפס (RPE)</label>
-                        <input type="range" id="fc-rpe" min="1" max="10" value="5">
-                        <span class="val" id="fc-rpe-val">5</span>
-                    </div>
-                    <div class="fitness-slider-group">
-                        <label>עייפות</label>
-                        <input type="range" id="fc-fatigue" min="0" max="10" value="3">
-                        <span class="val" id="fc-fatigue-val">3</span>
-                    </div>
-                    <div class="fitness-slider-group">
-                        <label>כאב</label>
-                        <input type="range" id="fc-pain" min="0" max="10" value="0">
-                        <span class="val" id="fc-pain-val">0</span>
-                    </div>
-                    <div class="fitness-slider-group">
-                        <label>משך (דקות)</label>
-                        <input type="number" id="fc-duration" min="1" max="300" value="30" style="flex:1; padding: 8px;">
-                    </div>
-                    <label style="display:block; font-weight:600; margin: 10px 0 4px;">הערות</label>
-                    <textarea id="fc-notes" rows="2" style="width:100%; padding:10px; border:2px solid #dee2e6; border-radius:10px; font-size:14px;"></textarea>
-                    <div style="margin-top: 12px;">
-                        <button class="fitness-btn fitness-btn-success" id="fc-submit-btn" style="width:100%;">שלח דיווח</button>
-                    </div>
-                    <div id="fc-result" style="margin-top: 10px; font-size: 13px;"></div>
-                </div>
-            </div>
-
-            <!-- Habits Panel -->
-            <div class="fitness-panel" id="fitness-habits-panel">
-                <div class="fitness-form" id="fitness-habit-form" style="margin-bottom: 16px; padding: 16px; background: #f0f4ff; border-radius: 12px;">
-                    <h4 style="margin: 0 0 10px;">הרגל חדש</h4>
-                    <input type="text" id="fh-name" placeholder="שם ההרגל">
-                    <input type="text" id="fh-anchor" placeholder="אחרי מה? (עוגן)">
-                    <input type="text" id="fh-routine" placeholder="מה עושים? (מינימום)">
-                    <button class="fitness-btn fitness-btn-primary fitness-btn-sm" id="fh-add-btn" style="margin-top:8px;">הוסף הרגל</button>
-                </div>
-                <div id="fitness-habits-list"></div>
-            </div>
-
-            <!-- Analytics Panel -->
-            <div class="fitness-panel" id="fitness-analytics-panel">
-                <div id="fitness-analytics-content">
-                    <div style="text-align:center; color:#6c757d; padding:30px;">טוען נתונים...</div>
-                </div>
-            </div>
+            <div class="fitness-hero"><h2 id="fitness-greeting">היי! מוכנים לזוז? 💪</h2><p>צעד קטן היום בונה כוח למחר</p></div>
+            <nav class="fitness-tabs" aria-label="ניווט כושר">
+                <button class="fitness-tab active" data-panel="fitness-home-panel">🏠 היום</button>
+                <button class="fitness-tab" data-panel="fitness-plan-panel">🏋️ תוכנית</button>
+                <button class="fitness-tab" data-panel="fitness-habits-panel">🌱 הרגלים</button>
+                <button class="fitness-tab" data-panel="fitness-analytics-panel">📈 התקדמות</button>
+                <button class="fitness-tab" data-panel="fitness-settings-panel">⚙️ הגדרות</button>
+            </nav>
+            <section class="fitness-panel active" id="fitness-home-panel">
+                <div class="fitness-card fitness-today"><h3>האימון של היום</h3><div id="fitness-home-workout" class="fitness-empty">בודקים מה מחכה לך היום...</div><div class="fitness-actions"><button class="fitness-btn fitness-btn-primary" id="fitness-home-start">צור אימון והתחל</button><button class="fitness-btn fitness-btn-soft" id="fitness-five-minute">יש לי רק 5 דקות</button></div></div>
+                <div class="fitness-stat-row" id="fitness-home-stats"><div class="fitness-stat">0<small>אימונים השבוע</small></div><div class="fitness-stat">0%<small>התמדה</small></div><div class="fitness-stat">0<small>רצף הרגלים</small></div></div>
+                <div class="fitness-card fitness-nutrition"><h3>🥗 המלצה תזונתית אחרונה</h3><p id="fitness-home-nutrition">אין המלצה חדשה כרגע.</p></div>
+            </section>
+            <section class="fitness-panel" id="fitness-plan-panel"><h3 class="fitness-section-title">התוכנית שלי</h3><button class="fitness-btn fitness-btn-primary" id="fp-generate-btn" style="width:100%;margin-bottom:14px">צור אימון חדש</button><div id="fitness-plan-display"></div></section>
+            <section class="fitness-panel" id="fitness-complete-panel"><div class="fitness-card"><div id="fitness-complete-noplan" class="fitness-empty">משוב ייפתח רק אחרי סיום האימון.</div><div id="fitness-complete-form" class="fitness-form" style="display:none"><h3>כל הכבוד שסיימת! 🎉</h3><p>איך הגוף מרגיש? אין תשובה נכונה — המידע עוזר לשמור עליך.</p><span id="fc-plan-id" hidden></span><div class="fitness-slider-group"><label>מאמץ</label><input type="range" id="fc-rpe" min="1" max="10" value="5"><span class="val" id="fc-rpe-val">5</span></div><div class="fitness-slider-group"><label>עייפות</label><input type="range" id="fc-fatigue" min="0" max="10" value="3"><span class="val" id="fc-fatigue-val">3</span></div><div class="fitness-slider-group"><label>כאב</label><input type="range" id="fc-pain" min="0" max="10" value="0"><span class="val" id="fc-pain-val">0</span></div><label>משך האימון בדקות</label><input type="number" id="fc-duration" min="1" max="300" value="30"><label>משהו שחשוב לספר?</label><textarea id="fc-notes" rows="2"></textarea><div class="fitness-safety">אם יש כאב, סחרחורת או תחושה לא רגילה — עוצרים, מספרים למבוגר ופונים לאיש מקצוע לפי הצורך. המשוב אינו אבחון רפואי.</div><button class="fitness-btn fitness-btn-success" id="fc-submit-btn" style="width:100%">שמור וסיים</button><div id="fc-result"></div></div></div></section>
+            <section class="fitness-panel" id="fitness-habits-panel"><h3 class="fitness-section-title">הרגלים קטנים, הצלחות גדולות</h3><div class="fitness-grid"><button class="fitness-card fitness-preset" data-preset="balance"><h4>⚖️ דקת שיווי משקל</h4><p>אחרי צחצוח שיניים, עומדים ליד תמיכה יציבה למשך דקה.</p></button><button class="fitness-card fitness-preset" data-preset="strength"><h4>🧱 כוח בשליטה</h4><p>אחרי שמניחים את התיק, עושים 5 קימות איטיות מכיסא.</p></button></div><div class="fitness-card fitness-form"><h4>יצירת הרגל אישי</h4><label>שם ההרגל</label><input id="fh-name" maxlength="100" placeholder="למשל: מתיחת בוקר"><label>אחרי מה אעשה אותו?</label><input id="fh-anchor" maxlength="200" placeholder="אחרי שאני קם מהמיטה"><label>הגרסה הכי קטנה</label><input id="fh-routine" maxlength="300" placeholder="מתיחה אחת איטית"><button class="fitness-btn fitness-btn-primary" id="fh-add-btn" style="margin-top:12px">הוסף הרגל</button></div><div id="fitness-habits-list"></div></section>
+            <section class="fitness-panel" id="fitness-analytics-panel"><h3 class="fitness-section-title">ההתקדמות שלי</h3><div id="fitness-analytics-content" class="fitness-empty">טוען נתונים...</div><div class="fitness-card fitness-nutrition"><h3>🥗 המלצת תזונה</h3><p id="fitness-progress-nutrition">אין המלצה חדשה כרגע.</p></div></section>
+            <section class="fitness-panel" id="fitness-settings-panel"><h3 class="fitness-section-title">הגדרות האימון</h3><div class="fitness-card fitness-form" id="fitness-profile-form"><label>ציוד זמין</label><div class="chip-container" id="fp-equipment"></div><label>מטרות</label><div class="chip-container" id="fp-goals"></div><label>ימי אימון</label><div class="chip-container" id="fp-days-chips"></div><label>דגשים ומגבלות</label><div class="chip-container" id="fp-constraints"></div><label>תוספים שנמצאים בשימוש</label><div class="chip-container" id="fp-supplements"></div><label>משך אימון מועדף</label><div class="chip-container" id="fp-duration"></div><div class="fitness-safety">המידע על תוספים הוא תיעוד העדפות בלבד ואינו המלצה רפואית או תזונתית.</div><button class="fitness-btn fitness-btn-primary" id="fp-save-btn">שמור הגדרות</button><div id="fp-status"></div></div></section>
         </div>
 
         <!-- Tutoring Screen -->
@@ -1997,78 +1938,41 @@
         // ── Fitness Agent Logic ──
         let fitnessActivePlanId = null;
         let fitnessActivePlanExercises = [];
-        const escapeFitnessHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-        })[char]);
-
-        // Tab switching
-        document.querySelectorAll('.fitness-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.fitness-tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.fitness-panel').forEach(p => p.classList.remove('active'));
-                tab.classList.add('active');
-                const panel = document.getElementById(tab.dataset.panel);
-                if (panel) panel.classList.add('active');
-                if (tab.dataset.panel === 'fitness-analytics-panel') loadFitnessAnalytics();
-                if (tab.dataset.panel === 'fitness-habits-panel') loadFitnessHabits();
-                if (tab.dataset.panel === 'fitness-plan-panel') loadFitnessPlans();
-            });
-        });
-
-        // Day chips toggle
-        document.querySelectorAll('#fp-days-chips .chip').forEach(chip => {
-            chip.addEventListener('click', () => chip.classList.toggle('active-chip'));
-        });
-
-        // Open fitness screen
-        document.getElementById('fitness-card-btn').addEventListener('click', () => {
-            if (!selectedUserId) { alert('בחר תלמיד קודם'); return; }
-            showScreen('fitness');
-            loadFitnessProfile();
-        });
-
-        // Load fitness profile
-        async function loadFitnessProfile() {
-            if (!selectedUserId) return;
-            try {
-                const r = await safeFetch(`/api/fitness/profile/${selectedUserId}`);
-                if (r.ok) {
-                    const d = await r.json();
-                    document.getElementById('fp-equipment').value = (d.equipment || []).join(', ');
-                    document.getElementById('fp-constraints').value = (d.health_constraints || []).join(', ');
-                    document.getElementById('fp-goals').value = (d.goals || []).join(', ');
-                    document.getElementById('fp-supplements').value = (d.supplements || []).join(', ');
-                    document.getElementById('fp-duration').value = d.preferred_duration_minutes || 30;
-                    const days = d.training_days || [];
-                    document.querySelectorAll('#fp-days-chips .chip').forEach(c => {
-                        c.classList.toggle('active-chip', days.includes(c.dataset.day));
-                    });
-                }
-            } catch (e) { console.log('No fitness profile yet'); }
+        const fitnessOptions = {
+            equipment: { none:'ללא ציוד', balance_board:'לוח שיווי משקל', balance_pad:'כרית שיווי משקל', fitball:'כדור פיזיו', pull_up_bar:'מתח', resistance_bands:'גומיות התנגדות', pilates_mat:'מזרן', trx:'רצועות TRX' },
+            goals: { hypertrophy_body_recomposition_fat_loss:'חיזוק, עיצוב והרכב גוף', hypertrophy:'בניית כוח ושריר', fat_loss:'שיפור כושר והרכב גוף', strength:'כוח', balance:'שיווי משקל', mobility:'תנועתיות' },
+            constraints: { tilt_test_sensitivity:'רגישות במעברי תנוחה', avoid_sudden_orthostatic_drops:'להימנע מקימה פתאומית', low_impact_strength:'חיזוק בעצימות נמוכה', no_jumping:'ללא קפיצות', knee_sensitivity:'רגישות בברכיים', back_sensitivity:'רגישות בגב' },
+            supplements: { creatine:'קריאטין', whey_protein:'אבקת חלבון', none:'ללא תוספים' },
+            days: { sunday:'ראשון', monday:'שני', tuesday:'שלישי', wednesday:'רביעי', thursday:'חמישי', friday:'שישי', saturday:'שבת' },
+            duration: { 5:'5 דקות', 15:'15 דקות', 30:'30 דקות', 45:'45 דקות', 60:'60 דקות' }
+        };
+        const fitnessTermTranslations = {
+            'resistance band row':'חתירה עם גומייה', 'chair squat':'קימה מכיסא', 'wall push-up':'שכיבות סמיכה מול קיר',
+            'resistance band curl':'כפיפת מרפקים עם גומייה', 'seated march':'צעידה בישיבה', 'dead bug':'יד ורגל נגדית בשכיבה',
+            'jumping jacks':'קפיצות פישוק', 'trx row':'חתירה ברצועות TRX', 'balance board stand':'עמידה על לוח שיווי משקל',
+            'balance pad squat':'סקוואט על כרית שיווי משקל', 'fitball plank':'פלאנק על כדור פיזיו', 'pull-up negative':'ירידה מבוקרת ממתח',
+            'resistance band pull-apart':'פתיחת גומייה מול החזה', 'pilates bridge':'הרמת אגן על מזרן', 'trx squat':'סקוואט עם TRX',
+            'standing calf raise':'עלייה על קצות האצבעות', 'resistance band lateral walk':'הליכה צידית עם גומייה',
+            'fitball wall squat':'סקוואט קיר עם כדור פיזיו', 'bird dog':'יד ורגל נגדית על שש', 'trx chest press':'לחיצת חזה עם TRX'
+        };
+        const translateFitness = value => fitnessTermTranslations[String(value || '').toLowerCase()] || fitnessOptions.equipment[value] || fitnessOptions.goals[value] || fitnessOptions.constraints[value] || 'תרגיל בתנועה מבוקרת';
+        const escapeFitnessHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[char]);
+        const selectedChipValues = id => Array.from(document.querySelectorAll(`#${id} .chip.active-chip`)).map(c => c.dataset.value);
+        function buildFitnessChips(id, options) {
+            const host = document.getElementById(id); host.replaceChildren();
+            Object.entries(options).forEach(([value,label]) => { const chip=document.createElement('button'); chip.type='button'; chip.className='chip'; chip.dataset.value=value; chip.textContent=label; chip.addEventListener('click',()=>chip.classList.toggle('active-chip')); host.appendChild(chip); });
         }
+        buildFitnessChips('fp-equipment',fitnessOptions.equipment); buildFitnessChips('fp-goals',fitnessOptions.goals); buildFitnessChips('fp-days-chips',fitnessOptions.days); buildFitnessChips('fp-constraints',fitnessOptions.constraints); buildFitnessChips('fp-supplements',fitnessOptions.supplements); buildFitnessChips('fp-duration',fitnessOptions.duration);
+        function activateFitnessPanel(panelId) { document.querySelectorAll('.fitness-tab').forEach(t=>t.classList.toggle('active',t.dataset.panel===panelId)); document.querySelectorAll('.fitness-panel').forEach(p=>p.classList.toggle('active',p.id===panelId)); }
+        document.querySelectorAll('.fitness-tab').forEach(tab => tab.addEventListener('click',()=>{ activateFitnessPanel(tab.dataset.panel); if(tab.dataset.panel==='fitness-analytics-panel') loadFitnessAnalytics(); if(tab.dataset.panel==='fitness-habits-panel') loadFitnessHabits(); if(tab.dataset.panel==='fitness-plan-panel') loadFitnessPlans(); if(tab.dataset.panel==='fitness-settings-panel') loadFitnessProfile(); }));
+        document.getElementById('fitness-card-btn').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if(!selectedUserId){alert('בחר תלמיד קודם');return;} selectedSubject=null; showScreen('fitness'); activateFitnessPanel('fitness-home-panel'); document.getElementById('fitness-greeting').textContent=`היי ${selectedUserProfile?.name || ''}! מוכנים לזוז? 💪`; loadFitnessHome(); loadFitnessProfile(); });
+        async function loadFitnessProfile() { if(!selectedUserId)return; try { const r=await safeFetch(`/api/fitness/profile/${selectedUserId}`); if(!r.ok)return; const d=await r.json(); const groups={ 'fp-equipment':d.equipment||[], 'fp-goals':d.goals||[], 'fp-days-chips':d.training_days||[], 'fp-constraints':d.health_constraints||[], 'fp-supplements':d.supplements||[], 'fp-duration':[String(d.preferred_duration_minutes||30)] }; Object.entries(groups).forEach(([id,values])=>document.querySelectorAll(`#${id} .chip`).forEach(c=>c.classList.toggle('active-chip',values.map(String).includes(c.dataset.value)))); } catch(e){ console.log('No fitness profile yet'); } }
+        document.getElementById('fp-save-btn').addEventListener('click',async()=>{ const duration=Number(selectedChipValues('fp-duration')[0]||30); const body={equipment:selectedChipValues('fp-equipment'),health_constraints:selectedChipValues('fp-constraints'),goals:selectedChipValues('fp-goals'),supplements:selectedChipValues('fp-supplements'),preferred_duration_minutes:duration,training_days:selectedChipValues('fp-days-chips')}; const st=document.getElementById('fp-status'); try { const r=await safeFetch(`/api/fitness/profile/${selectedUserId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); st.textContent=r.ok?'ההגדרות נשמרו בהצלחה!':'לא הצלחנו לשמור. נסו שוב.'; st.style.color=r.ok?'#176b57':'#b33'; } catch(e){st.textContent='שגיאת רשת';} });
 
-        // Save fitness profile
-        document.getElementById('fp-save-btn').addEventListener('click', async () => {
-            const split = v => v.split(',').map(s => s.trim()).filter(Boolean);
-            const days = [];
-            document.querySelectorAll('#fp-days-chips .chip.active-chip').forEach(c => days.push(c.dataset.day));
-            const body = {
-                equipment: split(document.getElementById('fp-equipment').value),
-                health_constraints: split(document.getElementById('fp-constraints').value),
-                goals: split(document.getElementById('fp-goals').value),
-                supplements: split(document.getElementById('fp-supplements').value),
-                preferred_duration_minutes: parseInt(document.getElementById('fp-duration').value) || 30,
-                training_days: days
-            };
-            try {
-                const r = await safeFetch(`/api/fitness/profile/${selectedUserId}`, {
-                    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-                });
-                const st = document.getElementById('fp-status');
-                if (r.ok) { st.textContent = 'הפרופיל נשמר בהצלחה!'; st.style.color = '#28a745'; }
-                else { const e = await r.text(); st.textContent = 'שגיאה: ' + e.slice(0, 150); st.style.color = '#dc3545'; }
-            } catch (e) { document.getElementById('fp-status').textContent = 'שגיאת רשת'; }
-        });
+        async function loadNutritionRecommendation() { const targets=[document.getElementById('fitness-home-nutrition'),document.getElementById('fitness-progress-nutrition')]; try { const r=await safeFetch(`/api/collaboration/context/${selectedUserId}?domain=nutrition`); if(!r.ok)return; const items=await r.json(); const recommendation=Array.isArray(items)?items.find(x=>x.category==='recommendation'||x.kind==='directive'):null; targets.forEach(el=>el.textContent=recommendation?.content||'אין המלצה חדשה כרגע.'); } catch(e){ targets.forEach(el=>el.textContent='אין המלצה חדשה כרגע.'); } }
+        async function loadFitnessHome() { const workout=document.getElementById('fitness-home-workout'); workout.textContent='בודקים מה מחכה לך היום...'; try { const [plansResponse,analyticsResponse]=await Promise.all([safeFetch(`/api/fitness/plans/${selectedUserId}`),safeFetch(`/api/fitness/analytics/${selectedUserId}`)]); if(plansResponse.ok){const plans=await plansResponse.json();const today=plans.find(p=>p.status!=='completed');workout.textContent=today?`${Number(today.duration_minutes)||30} דקות · ${(today.exercises||[]).length} תרגילים בקצב נעים`:'אין עדיין אימון מתוכנן — אפשר ליצור אחד בלחיצה.';} if(analyticsResponse.ok){const d=await analyticsResponse.json();const stats=document.getElementById('fitness-home-stats');stats.children[0].firstChild.textContent=String(d.adherence?.completed||0);stats.children[1].firstChild.textContent=`${Math.round((d.adherence?.rate||0)*100)}%`;stats.children[2].firstChild.textContent=String(Math.max(0,...(d.streaks||[]).map(s=>Number(s.current)||0)));} } catch(e){workout.textContent='לא הצלחנו לטעון כרגע. אפשר לנסות שוב.';} loadNutritionRecommendation(); }
+        document.getElementById('fitness-home-start').addEventListener('click',()=>{activateFitnessPanel('fitness-plan-panel');document.getElementById('fp-generate-btn').click();});
+        document.getElementById('fitness-five-minute').addEventListener('click',async()=>{const btn=document.getElementById('fitness-five-minute');btn.disabled=true;try{const r=await safeFetch('/api/fitness/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:selectedUserId,workout_type:'five_minute_minimum',exercises:['controlled_mobility','supported_balance'],status:'completed',notes:'Five-minute minimum routine completed safely.'})});btn.textContent=r.ok?'נרשם! כל הכבוד 🎉':'לא הצלחנו לרשום';if(r.ok)loadFitnessHome();}catch(e){btn.textContent='שגיאת רשת';}finally{setTimeout(()=>{btn.disabled=false;btn.textContent='יש לי רק 5 דקות';},1800);}});
 
         // Generate plan
         document.getElementById('fp-generate-btn').addEventListener('click', async () => {
@@ -2098,26 +2002,14 @@
         }
 
         function renderPlan(plan, container) {
-            const div = document.createElement('div');
-            div.className = 'fitness-card';
-            const safetyNotes = plan.safety_notes || [];
-            const safetyHtml = safetyNotes.length ? `<div class="fitness-safety"><ul>${safetyNotes.map(n => `<li>${escapeFitnessHtml(n)}</li>`).join('')}</ul></div>` : '';
-            const exercisesHtml = (plan.exercises || []).map(ex =>
-                `<div class="fitness-exercise"><span class="name">${escapeFitnessHtml(ex.name)}</span><span class="detail">${Number(ex.sets)}x${Number(ex.reps) || '--'} | מנוחה ${Number(ex.rest_seconds)}s</span></div>`
-            ).join('');
-            const statusBadge = plan.status === 'completed' ? '<span class="fitness-stat" style="background:#28a745;">הושלם</span>' : '<span class="fitness-stat">מתוכנן</span>';
-            div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><h4>תוכנית #${plan.id} - ${plan.date}</h4>${statusBadge}</div>
-                <p style="color:#6c757d; font-size:13px;">${plan.duration_minutes} דקות</p>
-                ${safetyHtml}${exercisesHtml}`;
-            if (plan.status !== 'completed') {
-                const btn = document.createElement('button');
-                btn.className = 'fitness-btn fitness-btn-success fitness-btn-sm';
-                btn.style.marginTop = '10px';
-                btn.textContent = 'דווח ביצוע';
-                btn.addEventListener('click', () => startCompletion(plan));
-                div.appendChild(btn);
-            }
-            container.appendChild(div);
+            const card=document.createElement('article'); card.className='fitness-card';
+            const head=document.createElement('div'); head.className='fitness-exercise-head';
+            const title=document.createElement('h3'); title.textContent=plan.status==='completed'?'אימון שהושלם':'האימון הבא שלך';
+            const duration=document.createElement('span'); duration.className='fitness-stat'; duration.textContent=`${Number(plan.duration_minutes)||0} דקות`; head.append(title,duration); card.appendChild(head);
+            (plan.safety_notes||[]).forEach(note=>{const box=document.createElement('div');box.className='fitness-safety';const raw=String(note);box.textContent=raw.startsWith('Parent directive:')?`הנחיית הורה: ${raw.slice(17).trim()}`:(raw.includes('Low-impact')?'האימון כולל תרגילים עדינים בלבד.':raw.includes('slow, controlled')?'עוברים בין תנוחות לאט ובשליטה.':raw.includes('dizzy')?'עוצרים במקרה של סחרחורת, חולשה או כאב ומשתפים מבוגר.':'מבצעים בשליטה ועוצרים אם מופיעים כאב או סימן מדאיג.');card.appendChild(box);});
+            (plan.exercises||[]).forEach((ex,index)=>{const item=document.createElement('div');item.className='fitness-exercise';const itemHead=document.createElement('div');itemHead.className='fitness-exercise-head';const name=document.createElement('span');name.className='name';name.textContent=`${index+1}. ${translateFitness(ex.name)}`;const detail=document.createElement('span');detail.className='detail';detail.textContent=`${Number(ex.sets)||1} סטים × ${Number(ex.reps)||'זמן'} · מנוחה ${Number(ex.rest_seconds)||0} שנ׳`;itemHead.append(name,detail);const instruction=document.createElement('p');instruction.textContent='מבצעים לאט ובשליטה, נושמים רגיל ועוצרים אם משהו לא מרגיש טוב.';const minimum=document.createElement('div');minimum.className='fitness-minimum';minimum.textContent=`גרסת מינימום: ${ex.minimum_version?'סט אחד של 5 חזרות בשליטה':'חזרה אחת נוחה ובשליטה'}`;item.append(itemHead,instruction,minimum);if(plan.status!=='completed'){const actions=document.createElement('div');actions.className='fitness-actions';['סיימתי','דלג/י כרגע'].forEach((label,i)=>{const b=document.createElement('button');b.className=`fitness-btn fitness-btn-sm ${i?'fitness-btn-soft':'fitness-btn-primary'}`;b.textContent=label;b.addEventListener('click',()=>{item.classList.add('done');actions.replaceChildren();const done=document.createElement('span');done.textContent=i?'דילגנו — ממשיכים בלי לחץ':'בוצע, מצוין!';actions.appendChild(done);});actions.appendChild(b);});item.appendChild(actions);}card.appendChild(item);});
+            if(plan.status!=='completed'){const finish=document.createElement('button');finish.className='fitness-btn fitness-btn-success';finish.textContent='סיימתי את האימון';finish.addEventListener('click',()=>startCompletion(plan));card.appendChild(finish);}
+            container.appendChild(card);
         }
 
         // Start completion form
@@ -2162,9 +2054,10 @@
                 if (r.ok) {
                     const d = await r.json();
                     const color = d.progression_allowed ? '#28a745' : '#dc3545';
-                    result.innerHTML = `<div style="color:${color}; padding:10px; background:#f8f9fa; border-radius:8px; margin-top:8px;">
-                        <strong>${d.progression_allowed ? 'ניתן להתקדם!' : 'לא להתקדם כרגע'}</strong><br>${escapeFitnessHtml(d.guidance)}</div>`;
-                    fitnessActivePlanId = null;
+                    const feedback=document.createElement('div');feedback.style.cssText=`color:${color};padding:12px;background:#f8f9fa;border-radius:8px;margin-top:8px`;
+                    const strong=document.createElement('strong');strong.textContent=d.progression_allowed?'נעים ובטוח — ממשיכים באותה רמה':'הגוף מבקש מנוחה — לא מתקדמים כרגע';
+                    const guidance=document.createElement('p');guidance.textContent=d.progression_allowed?'אחרי עוד אימון נוח אפשר לשקול תוספת קטנה אחת.':'אם כאב או תחושה מדאיגה נמשכים, עוצרים ומשתפים מבוגר ואיש מקצוע לפי הצורך.';feedback.append(strong,guidance);result.replaceChildren(feedback);
+                    fitnessActivePlanId = null; loadFitnessHome();
                 } else {
                     result.textContent = 'לא ניתן לשמור את הדיווח. בדוק את הנתונים ונסה שוב.';
                     result.style.color = '#dc3545';
@@ -2214,6 +2107,9 @@
             } catch (e) { list.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
         }
 
+        async function createFitnessHabit(name,anchor,routine) { if(!selectedUserId)return false; const r=await safeFetch('/api/fitness/habits',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:selectedUserId,name,anchor,minimum_routine:routine,schedule:[]})}); if(r.ok)loadFitnessHabits(); return r.ok; }
+        document.querySelectorAll('.fitness-preset').forEach(card=>card.addEventListener('click',async()=>{const preset=card.dataset.preset==='balance'?['דקת שיווי משקל','אחרי צחצוח שיניים','עמידה של דקה ליד תמיכה יציבה']:['כוח בשליטה','אחרי שמניחים את התיק','5 קימות איטיות מכיסא'];card.disabled=true;try{card.disabled=await createFitnessHabit(...preset);}catch(e){card.disabled=false;alert('שגיאת רשת');}}));
+
         // Add new habit
         document.getElementById('fh-add-btn').addEventListener('click', async () => {
             if (!selectedUserId) return;
@@ -2238,6 +2134,7 @@
         // Load analytics
         async function loadFitnessAnalytics() {
             if (!selectedUserId) return;
+            loadNutritionRecommendation();
             const content = document.getElementById('fitness-analytics-content');
             content.innerHTML = '<div style="text-align:center; color:#6c757d; padding:20px;">טוען...</div>';
             try {
@@ -2259,6 +2156,11 @@
                     });
                 }
 
+                if (d.progression && d.progression.length) {
+                    html += '<h4 style="margin:16px 0 8px">המלצת התקדמות</h4>';
+                    const latest = d.progression[0];
+                    html += `<div class="fitness-card"><p>${escapeFitnessHtml(latest.recommendation)}</p></div>`;
+                }
                 if (d.streaks && d.streaks.length) {
                     html += '<h4 style="margin: 16px 0 8px;">רצפי הרגלים</h4>';
                     d.streaks.forEach(s => {
