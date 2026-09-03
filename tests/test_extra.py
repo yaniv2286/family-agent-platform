@@ -1,11 +1,19 @@
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
 
-from database import ChatHistory, StudentProfile, TutorHistorySessionLocal, engine, tutor_history_engine
+from database import (
+    ChatHistory,
+    StudentProfile,
+    TutorHistorySessionLocal,
+    get_latest_parent_feedback,
+    tutor_history_engine,
+)
 
 APP_PIN = "test-pin-1234"
 
@@ -276,6 +284,57 @@ class TestSubjectSeparation:
         )
         assert len(math_hist.json()["messages"]) == 2
         assert len(english_hist.json()["messages"]) == 2
+
+
+class TestOrchestrator:
+    async def test_israel_day_is_converted_to_utc_bounds(self, monkeypatch):
+        import orchestrator
+
+        israel_time = datetime(2026, 9, 1, 21, 30, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        monkeypatch.setattr(orchestrator, "_local_now", lambda: israel_time)
+
+        since, until = orchestrator._today_utc_bounds()
+
+        assert since == datetime(2026, 8, 31, 21, 0)
+        assert until.date() == datetime(2026, 9, 1).date()
+        assert until.hour == 20
+        assert until.minute == 59
+
+    async def test_telegram_feedback_is_stored_per_child_and_acknowledged(
+        self, monkeypatch
+    ):
+        import orchestrator
+
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
+        monkeypatch.setattr(
+            orchestrator,
+            "_get_children",
+            AsyncMock(
+                return_value=[SimpleNamespace(name="נויה"), SimpleNamespace(name="ינאי")]
+            ),
+        )
+        send_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(orchestrator, "send_telegram_message", send_mock)
+
+        await orchestrator.check_telegram_feedback(
+            {
+                "update_id": 987654,
+                "message": {
+                    "chat": {"id": 123456},
+                    "from": {"is_bot": False},
+                    "text": "נויה - לחזק תרגילי לוח הכפל\nינאי - לתרגל אנגלית",
+                },
+            }
+        )
+
+        noya_directives = await get_latest_parent_feedback("נויה", "math")
+        yanai_directives = await get_latest_parent_feedback("ינאי", "english")
+        assert "נויה - לחזק תרגילי לוח הכפל" in noya_directives
+        assert "ינאי - לתרגל אנגלית" in yanai_directives
+        acknowledgement = send_mock.await_args.args[0]
+        assert "ההנחיות התקבלו ונשמרו" in acknowledgement
+        assert "נויה / חשבון" in acknowledgement
+        assert "ינאי / אנגלית" in acknowledgement
 
 
 class TestDatabaseMigrations:

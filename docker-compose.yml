@@ -24,6 +24,8 @@ services:
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///app/data/family_platform.db
       - TUTOR_HISTORY_DATABASE_URL=sqlite+aiosqlite:///app/data/tutor_history.db
+      - TZ=Asia/Jerusalem
+      - APP_TIMEZONE=Asia/Jerusalem
     env_file:
       - .env
     volumes:

@@ -8,11 +8,12 @@ manually.
 import os
 import re
 from typing import Optional
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 from loguru import logger
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from database import (
     SessionLocal,
@@ -21,12 +22,11 @@ from database import (
     StudentProfile,
     ChatHistory,
     add_parent_feedback,
-    get_student_profile_summary,
-    update_student_profile_summary,
 )
 
 SUBJECTS = ("math", "english")
 SUBJECT_LABELS = {"math": "חשבון", "english": "אנגלית"}
+APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Jerusalem"))
 
 # In-memory offset for Telegram long-polling. Starting at 0 means the first
 # poll only probes the latest update id to avoid reprocessing old messages.
@@ -43,8 +43,18 @@ def _detect_feedback_subject(text: str) -> Optional[str]:
     return None
 
 
-def _today_start() -> datetime:
-    return datetime.combine(datetime.now().date(), dt_time.min)
+def _local_now() -> datetime:
+    return datetime.now(APP_TIMEZONE)
+
+
+def _today_utc_bounds() -> tuple[datetime, datetime]:
+    local_date = _local_now().date()
+    local_start = datetime.combine(local_date, dt_time.min, tzinfo=APP_TIMEZONE)
+    local_end = datetime.combine(local_date, dt_time.max, tzinfo=APP_TIMEZONE)
+    return (
+        local_start.astimezone(timezone.utc).replace(tzinfo=None),
+        local_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
 
 
 async def _get_children():
@@ -122,7 +132,7 @@ async def gather_daily_report_data() -> list:
         }
     """
     children = await _get_children()
-    since = _today_start()
+    since, until = _today_utc_bounds()
     report = []
 
     async with TutorHistorySessionLocal() as history_db:
@@ -137,6 +147,7 @@ async def gather_daily_report_data() -> list:
                         ChatHistory.subject == subject,
                         ChatHistory.role == "user",
                         ChatHistory.timestamp >= since,
+                        ChatHistory.timestamp <= until,
                     )
                 )
                 # Raw content is used only inside _compute_engagement_stats
@@ -217,7 +228,7 @@ async def _generate_summary_text(report_data: list) -> str:
     Falls back to a plain, deterministic summary if the LLM call fails or no
     API key is configured, so the daily report is never silently skipped.
     """
-    date_str = datetime.now().strftime("%d/%m/%Y")
+    date_str = _local_now().strftime("%d/%m/%Y")
     active_children, inactive_names = _filter_active_inactive(report_data)
 
     # Logic gate: children with zero messages today are never fed to the LLM.
@@ -286,7 +297,7 @@ def _build_fallback_summary(report_data: list) -> str:
     line) and surfaces the Python-computed is_lazy_spam flag directly, so
     the report is never a raw data dump even in the failure path.
     """
-    date_str = datetime.now().strftime("%d/%m/%Y")
+    date_str = _local_now().strftime("%d/%m/%Y")
     active_lines = []
     inactive_names = []
 
@@ -387,38 +398,42 @@ async def check_telegram_feedback(updates):
             if not text:
                 continue
 
-            subject = _detect_feedback_subject(text)
+            stored_targets = []
+            instruction_lines = [line.strip(" -•\t") for line in text.splitlines() if line.strip(" -•\t")]
+            for instruction in instruction_lines:
+                subject = _detect_feedback_subject(instruction)
+                matched_children = [name for name in child_names if name and name in instruction]
+                if matched_children:
+                    for child_name in matched_children:
+                        await add_parent_feedback(
+                            child_name=child_name,
+                            subject=subject,
+                            message=instruction,
+                        )
+                        stored_targets.append(
+                            f"{child_name} / {SUBJECT_LABELS.get(subject, 'כל המקצועות')}"
+                        )
+                else:
+                    await add_parent_feedback(
+                        child_name=None,
+                        subject=subject,
+                        message=instruction,
+                    )
+                    stored_targets.append(
+                        f"כל הילדים / {SUBJECT_LABELS.get(subject, 'כל המקצועות')}"
+                    )
 
-            # Try to identify which child the parent is talking about.
-            matched_child = None
-            for name in child_names:
-                if name and name in text:
-                    matched_child = name
-                    break
+            logger.info(
+                "Stored parent directives from Telegram",
+                targets=stored_targets,
+                text=text[:120],
+            )
+            targets_text = "\n".join(f"• {target}" for target in stored_targets)
+            await send_telegram_message(
+                f"✅ ההנחיות התקבלו ונשמרו בזיכרון המתמשך:\n{targets_text}"
+            )
 
-            if matched_child:
-                target_subject = subject or "math"
-                current = await get_student_profile_summary(matched_child, target_subject)
-                directive = f"[Parent Directive]: {text}"
-                new_summary = f"{current}\n{directive}".strip() if current else directive
-                await update_student_profile_summary(matched_child, target_subject, new_summary)
-                logger.info(
-                    "Appended parent directive to child profile",
-                    child_name=matched_child,
-                    subject=target_subject,
-                    text=text[:120],
-                )
-            else:
-                # Fallback: keep the old global feedback table for messages
-                # that don't name a specific child.
-                await add_parent_feedback(child_name=None, subject=subject, message=text)
-                logger.info(
-                    "Stored parent feedback from Telegram",
-                    text=text[:120],
-                    subject=subject,
-                )
-
-            new_offset = max(new_offset, update["update_id"])
+            new_offset = max(new_offset, update.get("update_id", new_offset))
 
         _LAST_TELEGRAM_UPDATE_ID = new_offset
     except Exception:

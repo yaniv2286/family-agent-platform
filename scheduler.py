@@ -1,7 +1,8 @@
 """APScheduler setup for the daily orchestrator job."""
 import os
 
-import tzlocal
+from zoneinfo import ZoneInfo
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
@@ -12,9 +13,8 @@ from orchestrator import run_daily_orchestration
 ORCHESTRATOR_HOUR = int(os.getenv("ORCHESTRATOR_HOUR", "21"))
 ORCHESTRATOR_MINUTE = int(os.getenv("ORCHESTRATOR_MINUTE", "30"))
 
-# Explicitly pin the trigger to the server's local timezone so the schedule
-# doesn't silently shift if the scheduler's default ever resolves to UTC.
-LOCAL_TIMEZONE = tzlocal.get_localzone()
+TIMEZONE_NAME = os.getenv("APP_TIMEZONE", "Asia/Jerusalem")
+LOCAL_TIMEZONE = ZoneInfo(TIMEZONE_NAME)
 
 scheduler = AsyncIOScheduler(timezone=LOCAL_TIMEZONE)
 
