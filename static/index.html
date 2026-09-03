@@ -725,6 +725,43 @@
             font-size: 1.2em;
         }
 
+        /* ── Fitness Agent UI ── */
+        .fitness-screen { display: none; padding: 0; width: 100%; }
+        .fitness-screen.show { display: block; }
+        .fitness-tabs { display: flex; gap: 0; border-bottom: 2px solid #e9ecef; background: #f8f9fa; overflow-x: auto; }
+        .fitness-tab { flex: 1; padding: 14px 8px; text-align: center; cursor: pointer; font-weight: 600; font-size: 14px; border: none; background: transparent; color: #6c757d; white-space: nowrap; transition: all 0.2s; border-bottom: 3px solid transparent; }
+        .fitness-tab.active { color: #667eea; border-bottom-color: #667eea; background: white; }
+        .fitness-panel { display: none; padding: 25px; max-height: 60vh; overflow-y: auto; }
+        .fitness-panel.active { display: block; }
+        .fitness-form label { display: block; font-weight: 600; margin: 12px 0 4px; color: #495057; font-size: 14px; }
+        .fitness-form input, .fitness-form select, .fitness-form textarea { width: 100%; padding: 10px 12px; border: 2px solid #dee2e6; border-radius: 10px; font-size: 15px; margin-bottom: 4px; }
+        .fitness-form input:focus, .fitness-form select:focus { outline: none; border-color: #667eea; }
+        .fitness-btn { padding: 12px 24px; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; font-size: 15px; transition: all 0.2s; }
+        .fitness-btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .fitness-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+        .fitness-btn-success { background: #28a745; color: white; }
+        .fitness-btn-success:hover { background: #218838; }
+        .fitness-btn-sm { padding: 8px 16px; font-size: 13px; }
+        .fitness-card { background: #f8f9fa; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid #e9ecef; }
+        .fitness-card h4 { margin: 0 0 8px; color: #333; font-size: 15px; }
+        .fitness-card p { margin: 4px 0; color: #6c757d; font-size: 13px; }
+        .fitness-safety { background: #fff3cd; border: 1px solid #ffc107; border-radius: 10px; padding: 12px; margin: 12px 0; font-size: 13px; color: #856404; }
+        .fitness-safety li { margin: 4px 0; }
+        .fitness-exercise { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: white; border-radius: 10px; margin: 6px 0; border: 1px solid #e9ecef; }
+        .fitness-exercise .name { font-weight: 600; color: #333; }
+        .fitness-exercise .detail { color: #6c757d; font-size: 13px; }
+        .fitness-slider-group { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+        .fitness-slider-group label { min-width: 90px; margin: 0; }
+        .fitness-slider-group input[type=range] { flex: 1; padding: 0; border: none; margin: 0; }
+        .fitness-slider-group .val { min-width: 30px; text-align: center; font-weight: 700; color: #667eea; }
+        .fitness-stat { display: inline-block; background: #667eea; color: white; border-radius: 8px; padding: 8px 14px; margin: 4px; font-size: 13px; font-weight: 600; }
+        .fitness-streak { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+        .fitness-streak:last-child { border-bottom: none; }
+        .chip-container { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+        .chip { display: inline-block; padding: 4px 10px; border-radius: 16px; background: #e9ecef; font-size: 12px; color: #495057; }
+        .chip.active-chip { background: #667eea; color: white; cursor: pointer; }
+        .chip .remove-chip { cursor: pointer; margin-right: 4px; font-weight: bold; }
+
         @media (max-width: 768px) {
             body {
                 padding: 0;
@@ -900,6 +937,11 @@
                 width: 100%;
                 padding: 14px;
             }
+
+            .fitness-panel { padding: 15px; max-height: 55vh; }
+            .fitness-tab { padding: 10px 6px; font-size: 12px; }
+            .fitness-slider-group { flex-wrap: wrap; }
+            .fitness-slider-group label { min-width: 70px; font-size: 13px; }
         }
     </style>
 </head>
@@ -965,14 +1007,113 @@
                     <p>נלמד מילים ומשפטים חדשים באנגלית!</p>
                 </div>
             </div>
-            <div id="fitness-agent-widget" style="background: #1e1e2e; color: #cdd6f4; padding: 20px; border-radius: 12px; margin-top: 20px; font-family: sans-serif;">
-                <h3>💪 סוכן כושר ותזונה (Tiny Habits)</h3>
-                <p><b>מטרה:</b> חיטוב, עיצוב והעלאת מסת שריר | <b>בטיחות:</b> מותאם לרגישות Tilt Test (כוח מבוקר)</p>
-                <div style="display: flex; gap: 15px; margin-top: 15px;">
-                    <button onclick="logTinyWorkout('balance_board')" style="background: #89b4fa; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; font-weight: bold;">איזון ויציבות</button>
-                    <button onclick="logTinyWorkout('strength_routine')" style="background: #a6e3a1; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; font-weight: bold;">כוח מבוקר (TRX/מוט)</button>
+            <div class="subject-grid" style="margin-top: 20px;">
+                <div class="subject-card" id="fitness-card-btn">
+                    <div class="icon">💪</div>
+                    <h3>סוכן כושר</h3>
+                    <p>תוכניות אימון, הרגלים ומעקב התקדמות</p>
                 </div>
-                <div id="fitness-status" style="margin-top: 10px; font-size: 0.9em; color: #fab387;"></div>
+            </div>
+        </div>
+
+        <!-- Fitness Agent Screen -->
+        <div class="fitness-screen" id="fitness-screen">
+            <div class="fitness-tabs">
+                <button class="fitness-tab active" data-panel="fitness-profile-panel">פרופיל</button>
+                <button class="fitness-tab" data-panel="fitness-plan-panel">תוכנית</button>
+                <button class="fitness-tab" data-panel="fitness-complete-panel">דיווח</button>
+                <button class="fitness-tab" data-panel="fitness-habits-panel">הרגלים</button>
+                <button class="fitness-tab" data-panel="fitness-analytics-panel">סטטיסטיקה</button>
+            </div>
+
+            <!-- Profile Panel -->
+            <div class="fitness-panel active" id="fitness-profile-panel">
+                <div class="fitness-form" id="fitness-profile-form">
+                    <label>ציוד זמין (הפרד בפסיקים)</label>
+                    <input type="text" id="fp-equipment" placeholder="none, resistance_bands, trx...">
+                    <label>מגבלות בריאותיות</label>
+                    <input type="text" id="fp-constraints" placeholder="tilt_test_sensitivity...">
+                    <label>מטרות</label>
+                    <input type="text" id="fp-goals" placeholder="hypertrophy, fat_loss...">
+                    <label>תוספי תזונה</label>
+                    <input type="text" id="fp-supplements" placeholder="creatine, whey_protein...">
+                    <label>משך אימון מועדף (דקות)</label>
+                    <input type="number" id="fp-duration" min="5" max="120" value="30">
+                    <label>ימי אימון</label>
+                    <div class="chip-container" id="fp-days-chips">
+                        <span class="chip active-chip" data-day="sunday">ראשון</span>
+                        <span class="chip active-chip" data-day="monday">שני</span>
+                        <span class="chip active-chip" data-day="tuesday">שלישי</span>
+                        <span class="chip active-chip" data-day="wednesday">רביעי</span>
+                        <span class="chip active-chip" data-day="thursday">חמישי</span>
+                        <span class="chip active-chip" data-day="friday">שישי</span>
+                        <span class="chip active-chip" data-day="saturday">שבת</span>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <button class="fitness-btn fitness-btn-primary" id="fp-save-btn">שמור פרופיל</button>
+                    </div>
+                    <div id="fp-status" style="margin-top: 8px; font-size: 13px; color: #28a745;"></div>
+                </div>
+            </div>
+
+            <!-- Plan Panel -->
+            <div class="fitness-panel" id="fitness-plan-panel">
+                <button class="fitness-btn fitness-btn-primary" id="fp-generate-btn" style="width:100%; margin-bottom: 16px;">צור תוכנית אימון חדשה</button>
+                <div id="fitness-plan-display"></div>
+            </div>
+
+            <!-- Completion Panel -->
+            <div class="fitness-panel" id="fitness-complete-panel">
+                <div id="fitness-complete-noplan" style="color: #6c757d; text-align: center; padding: 30px;">
+                    <p>בחר תוכנית אימון מהלשונית "תוכנית" כדי לדווח על ביצוע</p>
+                </div>
+                <div id="fitness-complete-form" style="display:none;">
+                    <h4 style="margin-bottom: 12px;">דיווח ביצוע אימון #<span id="fc-plan-id"></span></h4>
+                    <div class="fitness-slider-group">
+                        <label>מאמץ נתפס (RPE)</label>
+                        <input type="range" id="fc-rpe" min="1" max="10" value="5">
+                        <span class="val" id="fc-rpe-val">5</span>
+                    </div>
+                    <div class="fitness-slider-group">
+                        <label>עייפות</label>
+                        <input type="range" id="fc-fatigue" min="0" max="10" value="3">
+                        <span class="val" id="fc-fatigue-val">3</span>
+                    </div>
+                    <div class="fitness-slider-group">
+                        <label>כאב</label>
+                        <input type="range" id="fc-pain" min="0" max="10" value="0">
+                        <span class="val" id="fc-pain-val">0</span>
+                    </div>
+                    <div class="fitness-slider-group">
+                        <label>משך (דקות)</label>
+                        <input type="number" id="fc-duration" min="1" max="300" value="30" style="flex:1; padding: 8px;">
+                    </div>
+                    <label style="display:block; font-weight:600; margin: 10px 0 4px;">הערות</label>
+                    <textarea id="fc-notes" rows="2" style="width:100%; padding:10px; border:2px solid #dee2e6; border-radius:10px; font-size:14px;"></textarea>
+                    <div style="margin-top: 12px;">
+                        <button class="fitness-btn fitness-btn-success" id="fc-submit-btn" style="width:100%;">שלח דיווח</button>
+                    </div>
+                    <div id="fc-result" style="margin-top: 10px; font-size: 13px;"></div>
+                </div>
+            </div>
+
+            <!-- Habits Panel -->
+            <div class="fitness-panel" id="fitness-habits-panel">
+                <div class="fitness-form" id="fitness-habit-form" style="margin-bottom: 16px; padding: 16px; background: #f0f4ff; border-radius: 12px;">
+                    <h4 style="margin: 0 0 10px;">הרגל חדש</h4>
+                    <input type="text" id="fh-name" placeholder="שם ההרגל">
+                    <input type="text" id="fh-anchor" placeholder="אחרי מה? (עוגן)">
+                    <input type="text" id="fh-routine" placeholder="מה עושים? (מינימום)">
+                    <button class="fitness-btn fitness-btn-primary fitness-btn-sm" id="fh-add-btn" style="margin-top:8px;">הוסף הרגל</button>
+                </div>
+                <div id="fitness-habits-list"></div>
+            </div>
+
+            <!-- Analytics Panel -->
+            <div class="fitness-panel" id="fitness-analytics-panel">
+                <div id="fitness-analytics-content">
+                    <div style="text-align:center; color:#6c757d; padding:30px;">טוען נתונים...</div>
+                </div>
             </div>
         </div>
 
@@ -1380,10 +1521,12 @@
         }
 
         // Show specific screen
+        const fitnessScreen = document.getElementById('fitness-screen');
         function showScreen(screenName) {
             profileScreen.classList.add('hidden');
             subjectScreen.classList.add('hidden');
             tutoringScreen.classList.remove('show');
+            fitnessScreen.classList.remove('show');
             backBtn.classList.remove('show');
             switchChildBtn.classList.remove('show');
             
@@ -1396,12 +1539,18 @@
                 tutoringScreen.classList.add('show');
                 backBtn.classList.add('show');
                 switchChildBtn.classList.add('show');
+            } else if (screenName === 'fitness') {
+                fitnessScreen.classList.add('show');
+                backBtn.classList.add('show');
+                switchChildBtn.classList.add('show');
             }
         }
 
         // Go back to previous screen
         function goBack() {
-            if (tutoringScreen.classList.contains('show')) {
+            if (fitnessScreen.classList.contains('show')) {
+                showScreen('subject');
+            } else if (tutoringScreen.classList.contains('show')) {
                 if (historyBtn) historyBtn.style.display = 'none';
                 closeHistoryPanel();
                 showScreen('subject');
@@ -1845,13 +1994,291 @@
             }
         }
 
+        // ── Fitness Agent Logic ──
+        let fitnessActivePlanId = null;
+        let fitnessActivePlanExercises = [];
+        const escapeFitnessHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+        })[char]);
+
+        // Tab switching
+        document.querySelectorAll('.fitness-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.fitness-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.fitness-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                const panel = document.getElementById(tab.dataset.panel);
+                if (panel) panel.classList.add('active');
+                if (tab.dataset.panel === 'fitness-analytics-panel') loadFitnessAnalytics();
+                if (tab.dataset.panel === 'fitness-habits-panel') loadFitnessHabits();
+                if (tab.dataset.panel === 'fitness-plan-panel') loadFitnessPlans();
+            });
+        });
+
+        // Day chips toggle
+        document.querySelectorAll('#fp-days-chips .chip').forEach(chip => {
+            chip.addEventListener('click', () => chip.classList.toggle('active-chip'));
+        });
+
+        // Open fitness screen
+        document.getElementById('fitness-card-btn').addEventListener('click', () => {
+            if (!selectedUserId) { alert('בחר תלמיד קודם'); return; }
+            showScreen('fitness');
+            loadFitnessProfile();
+        });
+
+        // Load fitness profile
+        async function loadFitnessProfile() {
+            if (!selectedUserId) return;
+            try {
+                const r = await safeFetch(`/api/fitness/profile/${selectedUserId}`);
+                if (r.ok) {
+                    const d = await r.json();
+                    document.getElementById('fp-equipment').value = (d.equipment || []).join(', ');
+                    document.getElementById('fp-constraints').value = (d.health_constraints || []).join(', ');
+                    document.getElementById('fp-goals').value = (d.goals || []).join(', ');
+                    document.getElementById('fp-supplements').value = (d.supplements || []).join(', ');
+                    document.getElementById('fp-duration').value = d.preferred_duration_minutes || 30;
+                    const days = d.training_days || [];
+                    document.querySelectorAll('#fp-days-chips .chip').forEach(c => {
+                        c.classList.toggle('active-chip', days.includes(c.dataset.day));
+                    });
+                }
+            } catch (e) { console.log('No fitness profile yet'); }
+        }
+
+        // Save fitness profile
+        document.getElementById('fp-save-btn').addEventListener('click', async () => {
+            const split = v => v.split(',').map(s => s.trim()).filter(Boolean);
+            const days = [];
+            document.querySelectorAll('#fp-days-chips .chip.active-chip').forEach(c => days.push(c.dataset.day));
+            const body = {
+                equipment: split(document.getElementById('fp-equipment').value),
+                health_constraints: split(document.getElementById('fp-constraints').value),
+                goals: split(document.getElementById('fp-goals').value),
+                supplements: split(document.getElementById('fp-supplements').value),
+                preferred_duration_minutes: parseInt(document.getElementById('fp-duration').value) || 30,
+                training_days: days
+            };
+            try {
+                const r = await safeFetch(`/api/fitness/profile/${selectedUserId}`, {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+                });
+                const st = document.getElementById('fp-status');
+                if (r.ok) { st.textContent = 'הפרופיל נשמר בהצלחה!'; st.style.color = '#28a745'; }
+                else { const e = await r.text(); st.textContent = 'שגיאה: ' + e.slice(0, 150); st.style.color = '#dc3545'; }
+            } catch (e) { document.getElementById('fp-status').textContent = 'שגיאת רשת'; }
+        });
+
+        // Generate plan
+        document.getElementById('fp-generate-btn').addEventListener('click', async () => {
+            if (!selectedUserId) return;
+            const display = document.getElementById('fitness-plan-display');
+            display.innerHTML = '<div style="text-align:center; color:#6c757d;">יוצר תוכנית...</div>';
+            try {
+                const r = await safeFetch(`/api/fitness/plans/generate/${selectedUserId}`, { method: 'POST' });
+                if (!r.ok) { display.textContent = 'לא ניתן ליצור תוכנית. בדוק שהפרופיל נשמר ונסה שוב.'; display.style.color = '#dc3545'; return; }
+                const plan = await r.json();
+                renderPlan(plan, display);
+            } catch (e) { display.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
+        });
+
+        // Load existing plans
+        async function loadFitnessPlans() {
+            if (!selectedUserId) return;
+            const display = document.getElementById('fitness-plan-display');
+            try {
+                const r = await safeFetch(`/api/fitness/plans/${selectedUserId}`);
+                if (!r.ok) return;
+                const plans = await r.json();
+                if (plans.length === 0) { display.innerHTML = '<div style="text-align:center; color:#6c757d; padding:20px;">אין תוכניות עדיין. צור תוכנית חדשה!</div>'; return; }
+                display.innerHTML = '';
+                plans.forEach(plan => renderPlan(plan, display));
+            } catch (e) { console.error('Error loading plans:', e); }
+        }
+
+        function renderPlan(plan, container) {
+            const div = document.createElement('div');
+            div.className = 'fitness-card';
+            const safetyNotes = plan.safety_notes || [];
+            const safetyHtml = safetyNotes.length ? `<div class="fitness-safety"><ul>${safetyNotes.map(n => `<li>${escapeFitnessHtml(n)}</li>`).join('')}</ul></div>` : '';
+            const exercisesHtml = (plan.exercises || []).map(ex =>
+                `<div class="fitness-exercise"><span class="name">${escapeFitnessHtml(ex.name)}</span><span class="detail">${Number(ex.sets)}x${Number(ex.reps) || '--'} | מנוחה ${Number(ex.rest_seconds)}s</span></div>`
+            ).join('');
+            const statusBadge = plan.status === 'completed' ? '<span class="fitness-stat" style="background:#28a745;">הושלם</span>' : '<span class="fitness-stat">מתוכנן</span>';
+            div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><h4>תוכנית #${plan.id} - ${plan.date}</h4>${statusBadge}</div>
+                <p style="color:#6c757d; font-size:13px;">${plan.duration_minutes} דקות</p>
+                ${safetyHtml}${exercisesHtml}`;
+            if (plan.status !== 'completed') {
+                const btn = document.createElement('button');
+                btn.className = 'fitness-btn fitness-btn-success fitness-btn-sm';
+                btn.style.marginTop = '10px';
+                btn.textContent = 'דווח ביצוע';
+                btn.addEventListener('click', () => startCompletion(plan));
+                div.appendChild(btn);
+            }
+            container.appendChild(div);
+        }
+
+        // Start completion form
+        function startCompletion(plan) {
+            fitnessActivePlanId = plan.id;
+            fitnessActivePlanExercises = plan.exercises || [];
+            document.getElementById('fc-plan-id').textContent = plan.id;
+            document.getElementById('fitness-complete-noplan').style.display = 'none';
+            document.getElementById('fitness-complete-form').style.display = 'block';
+            document.getElementById('fc-result').textContent = '';
+            // Switch to completion tab
+            document.querySelectorAll('.fitness-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.fitness-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector('[data-panel="fitness-complete-panel"]').classList.add('active');
+            document.getElementById('fitness-complete-panel').classList.add('active');
+        }
+
+        // Slider value displays
+        ['rpe', 'fatigue', 'pain'].forEach(name => {
+            const slider = document.getElementById(`fc-${name}`);
+            const display = document.getElementById(`fc-${name}-val`);
+            if (slider && display) slider.addEventListener('input', () => display.textContent = slider.value);
+        });
+
+        // Submit completion
+        document.getElementById('fc-submit-btn').addEventListener('click', async () => {
+            if (!fitnessActivePlanId || !selectedUserId) return;
+            const body = {
+                user_id: selectedUserId,
+                exercises: fitnessActivePlanExercises.map(ex => ({ exercise_id: ex.exercise_id, sets: [] })),
+                perceived_exertion: parseInt(document.getElementById('fc-rpe').value),
+                fatigue: parseInt(document.getElementById('fc-fatigue').value),
+                pain: parseInt(document.getElementById('fc-pain').value),
+                duration_minutes: parseInt(document.getElementById('fc-duration').value) || 30,
+                notes: document.getElementById('fc-notes').value
+            };
+            const result = document.getElementById('fc-result');
+            try {
+                const r = await safeFetch(`/api/fitness/plans/${fitnessActivePlanId}/complete`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+                });
+                if (r.ok) {
+                    const d = await r.json();
+                    const color = d.progression_allowed ? '#28a745' : '#dc3545';
+                    result.innerHTML = `<div style="color:${color}; padding:10px; background:#f8f9fa; border-radius:8px; margin-top:8px;">
+                        <strong>${d.progression_allowed ? 'ניתן להתקדם!' : 'לא להתקדם כרגע'}</strong><br>${escapeFitnessHtml(d.guidance)}</div>`;
+                    fitnessActivePlanId = null;
+                } else {
+                    result.textContent = 'לא ניתן לשמור את הדיווח. בדוק את הנתונים ונסה שוב.';
+                    result.style.color = '#dc3545';
+                }
+            } catch (e) { result.textContent = 'שגיאת רשת'; }
+        });
+
+        // Load habits
+        async function loadFitnessHabits() {
+            if (!selectedUserId) return;
+            const list = document.getElementById('fitness-habits-list');
+            try {
+                const r = await safeFetch(`/api/fitness/habits/${selectedUserId}`);
+                if (!r.ok) { list.innerHTML = '<div style="color:#dc3545;">שגיאה בטעינת הרגלים</div>'; return; }
+                const habits = await r.json();
+                if (habits.length === 0) { list.innerHTML = '<div style="color:#6c757d; text-align:center; padding:20px;">אין הרגלים עדיין. הוסף הרגל חדש!</div>'; return; }
+                list.innerHTML = '';
+                habits.forEach(h => {
+                    const card = document.createElement('div');
+                    card.className = 'fitness-card';
+                    card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h4>${escapeFitnessHtml(h.name)}</h4>
+                        <span class="fitness-stat" style="font-size:12px;">${Number(h.current_streak)} ימים רצופים</span>
+                    </div>
+                    <p><strong>עוגן:</strong> ${escapeFitnessHtml(h.anchor)}</p>
+                    <p><strong>מינימום:</strong> ${escapeFitnessHtml(h.minimum_routine)}</p>
+                    <p>שיא: ${h.best_streak} ימים | ${h.active ? 'פעיל' : 'לא פעיל'}</p>`;
+                    if (h.active) {
+                        const btn = document.createElement('button');
+                        btn.className = 'fitness-btn fitness-btn-success fitness-btn-sm';
+                        btn.style.marginTop = '8px';
+                        btn.textContent = 'בוצע היום!';
+                        btn.addEventListener('click', async () => {
+                            try {
+                                const cr = await safeFetch(`/api/fitness/habits/${h.id}/complete`, {
+                                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({ user_id: selectedUserId })
+                                });
+                                if (cr.ok) { btn.textContent = 'נרשם!'; btn.disabled = true; setTimeout(() => loadFitnessHabits(), 500); }
+                                else { const e = await cr.text(); alert(e.slice(0, 150)); }
+                            } catch (e) { alert('שגיאת רשת'); }
+                        });
+                        card.appendChild(btn);
+                    }
+                    list.appendChild(card);
+                });
+            } catch (e) { list.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
+        }
+
+        // Add new habit
+        document.getElementById('fh-add-btn').addEventListener('click', async () => {
+            if (!selectedUserId) return;
+            const name = document.getElementById('fh-name').value.trim();
+            const anchor = document.getElementById('fh-anchor').value.trim();
+            const routine = document.getElementById('fh-routine').value.trim();
+            if (!name || !anchor || !routine) { alert('מלא את כל השדות'); return; }
+            try {
+                const r = await safeFetch('/api/fitness/habits', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_id: selectedUserId, name, anchor, minimum_routine: routine, schedule: [] })
+                });
+                if (r.ok) {
+                    document.getElementById('fh-name').value = '';
+                    document.getElementById('fh-anchor').value = '';
+                    document.getElementById('fh-routine').value = '';
+                    loadFitnessHabits();
+                } else { const e = await r.text(); alert('שגיאה: ' + e.slice(0, 150)); }
+            } catch (e) { alert('שגיאת רשת'); }
+        });
+
+        // Load analytics
+        async function loadFitnessAnalytics() {
+            if (!selectedUserId) return;
+            const content = document.getElementById('fitness-analytics-content');
+            content.innerHTML = '<div style="text-align:center; color:#6c757d; padding:20px;">טוען...</div>';
+            try {
+                const r = await safeFetch(`/api/fitness/analytics/${selectedUserId}`);
+                if (!r.ok) { content.innerHTML = '<div style="color:#dc3545;">שגיאה בטעינת נתונים</div>'; return; }
+                const d = await r.json();
+                let html = '<div style="margin-bottom:16px;"><h4 style="margin-bottom:8px;">עמידה ביעדים</h4>';
+                html += `<div class="fitness-stat">מתוכנן: ${d.adherence.planned}</div>`;
+                html += `<div class="fitness-stat" style="background:#28a745;">הושלם: ${d.adherence.completed}</div>`;
+                html += `<div class="fitness-stat" style="background:#ffc107; color:#333;">שיעור: ${(d.adherence.rate * 100).toFixed(0)}%</div></div>`;
+
+                if (d.recent_sessions && d.recent_sessions.length) {
+                    html += '<h4 style="margin: 16px 0 8px;">אימונים אחרונים</h4>';
+                    d.recent_sessions.forEach(s => {
+                        const color = s.progression_allowed ? '#28a745' : '#dc3545';
+                        html += `<div class="fitness-card"><div style="display:flex; justify-content:space-between;">
+                            <span>${s.duration_minutes} דק' | RPE ${s.rpe} | עייפות ${s.fatigue} | כאב ${s.pain}</span>
+                            <span style="color:${color}; font-weight:600;">${s.progression_allowed ? 'התקדמות' : 'עצירה'}</span></div></div>`;
+                    });
+                }
+
+                if (d.streaks && d.streaks.length) {
+                    html += '<h4 style="margin: 16px 0 8px;">רצפי הרגלים</h4>';
+                    d.streaks.forEach(s => {
+                        html += `<div class="fitness-streak"><span class="fitness-stat fitness-btn-sm">${s.current}</span>
+                            <span>${escapeFitnessHtml(s.name)} (שיא: ${Number(s.best)})</span></div>`;
+                    });
+                }
+
+                html += `<h4 style="margin: 16px 0 8px;">סטטוס</h4><div class="fitness-stat">${d.goal_status.status === 'in_progress' ? 'בתהליך' : 'לא התחיל'}</div>`;
+                content.innerHTML = html;
+            } catch (e) { content.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
+        }
+
         // Event listeners
         backBtn.addEventListener('click', goBack);
         switchChildBtn.addEventListener('click', switchChild);
 
         subjectGrid.addEventListener('click', async (e) => {
             const card = e.target.closest('.subject-card');
-            if (card) {
+            if (card && card.dataset.subject) {
                 const subject = card.dataset.subject;
                 const subjectName = card.querySelector('h3').textContent;
                 try {

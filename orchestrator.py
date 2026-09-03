@@ -21,6 +21,8 @@ from database import (
     TutorHistorySessionLocal,
     StudentProfile,
     ChatHistory,
+    WorkoutPerformance,
+    MemoryFact,
     add_parent_feedback,
 )
 
@@ -168,10 +170,34 @@ async def gather_daily_report_data() -> list:
                     "profile_summary": profile.profile_summary if profile else None,
                 }
 
+            async with SessionLocal() as main_db:
+                fitness_rows = (await main_db.execute(
+                    select(WorkoutPerformance).where(
+                        WorkoutPerformance.user_id == child.id,
+                        WorkoutPerformance.completed_at >= since,
+                        WorkoutPerformance.completed_at <= until,
+                    )
+                )).scalars().all()
+                recommendations = (await main_db.execute(
+                    select(MemoryFact).where(
+                        MemoryFact.child_id == child.id,
+                        MemoryFact.domain.in_(("fitness", "nutrition")),
+                        MemoryFact.category == "recommendation",
+                        MemoryFact.active == 1,
+                    ).order_by(MemoryFact.updated_at.desc()).limit(4)
+                )).scalars().all()
             report.append({
                 "child_name": child_name,
                 "grade_level": child.grade_level,
                 "subjects": subjects_data,
+                "wellness": {
+                    "workouts_completed": len(fitness_rows),
+                    "activity_minutes": sum(row.duration_minutes for row in fitness_rows),
+                    "recommendations": [
+                        {"domain": fact.domain, "summary": fact.value[:240]}
+                        for fact in recommendations
+                    ],
+                },
             })
 
     return report
@@ -199,6 +225,12 @@ def _build_internal_data_block(report_data: list) -> str:
                 f"is_lazy_spam={data['is_lazy_spam']}; "
                 f"profile_summary={data['profile_summary'] or 'NONE'}"
             )
+        wellness = child.get("wellness", {})
+        lines.append(
+            f"[WELLNESS] child_name={name}; workouts_completed={wellness.get('workouts_completed', 0)}; "
+            f"activity_minutes={wellness.get('activity_minutes', 0)}; "
+            f"recommendations={wellness.get('recommendations', [])}"
+        )
     return "\n".join(lines) if lines else "[DATA] no_children_registered=true"
 
 
@@ -211,7 +243,7 @@ def _filter_active_inactive(report_data: list) -> tuple:
     inactive = []
     for child in report_data:
         total_messages = sum(child["subjects"][s]["message_count"] for s in SUBJECTS)
-        if total_messages == 0:
+        if total_messages == 0 and child.get("wellness", {}).get("workouts_completed", 0) == 0:
             inactive.append(child["child_name"])
         else:
             active.append(child)
@@ -269,6 +301,8 @@ async def _generate_summary_text(report_data: list) -> str:
 חובה מוחלטת #5 - טון:
 - תמציתי באכזריות, ישיר, סטייל דוח מנהלים ישראלי. אפס פלואף, אפס משפטי נימוס.
 
+נתוני [WELLNESS] כוללים רק ספירת אימונים, דקות פעילות והמלצות בטיחות/תזונה מובנות. אם הייתה פעילות, הוסף/י בולט 🏃 תמציתי; אפשר לציין המלצה רלוונטית בלי לחשוף מגבלות רפואיות או פרטים פרטיים. אל תציג/י את תגיות הנתונים או מפתחותיהן.
+
 אל תמציא/י מידע שלא קיים בנתונים."""
 
     try:
@@ -304,11 +338,14 @@ def _build_fallback_summary(report_data: list) -> str:
     for child in report_data:
         name = child["child_name"]
         total_messages = sum(child["subjects"][s]["message_count"] for s in SUBJECTS)
-        if total_messages == 0:
+        wellness = child.get("wellness", {})
+        if total_messages == 0 and wellness.get("workouts_completed", 0) == 0:
             inactive_names.append(name)
             continue
 
         active_lines.append(f"**{name}**")
+        if wellness.get("workouts_completed", 0):
+            active_lines.append(f"🏃 {wellness['workouts_completed']} אימונים, {wellness.get('activity_minutes', 0)} דקות פעילות.")
         for subject in SUBJECTS:
             data = child["subjects"][subject]
             if data["message_count"] == 0:

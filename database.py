@@ -76,6 +76,10 @@ class HealthLog(Base):
     status = Column(String, nullable=False)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    log_type = Column(String, nullable=True)
+    details_json = Column(Text, nullable=True)
+    calories = Column(Integer, nullable=True)
+    protein_g = Column(Float, nullable=True)
 
     user = relationship("User", back_populates="health_logs")
 
@@ -88,6 +92,108 @@ class UserFitnessProfile(Base):
     health_constraints = Column(Text, nullable=False)
     goal_type = Column(String, nullable=False)
     supplement_stack = Column(Text, nullable=False)
+    preferred_duration_minutes = Column(Integer, nullable=False, default=30)
+    training_days = Column(Text, nullable=False, default="[]")
+
+
+class Exercise(Base):
+    __tablename__ = "exercises"
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=False, index=True)
+    equipment = Column(String, nullable=False, index=True)
+    goals_json = Column(Text, nullable=False, default="[]")
+    instructions = Column(Text, nullable=False)
+    low_impact = Column(Integer, nullable=False, default=1)
+    transition = Column(String, nullable=False, default="standing")
+    high_impact = Column(Integer, nullable=False, default=0)
+
+
+class WorkoutPlan(Base):
+    __tablename__ = "workout_plans"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    planned_date = Column(Date, nullable=False, default=date.today, index=True)
+    status = Column(String, nullable=False, default="planned")
+    safety_notes_json = Column(Text, nullable=False, default="[]")
+    duration_minutes = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class PlannedWorkoutExercise(Base):
+    __tablename__ = "planned_workout_exercises"
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("workout_plans.id"), nullable=False, index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id"), nullable=False)
+    position = Column(Integer, nullable=False)
+    sets = Column(Integer, nullable=False)
+    reps = Column(Integer, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    rest_seconds = Column(Integer, nullable=False)
+    minimum_version = Column(String, nullable=False)
+
+
+class WorkoutPerformance(Base):
+    __tablename__ = "workout_performances"
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("workout_plans.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    workout_type = Column(String, nullable=False, default="planned")
+    perceived_exertion = Column(Integer, nullable=False)
+    fatigue = Column(Integer, nullable=False)
+    pain = Column(Integer, nullable=False, default=0)
+    duration_minutes = Column(Integer, nullable=False)
+    notes = Column(Text, nullable=True)
+    guidance = Column(Text, nullable=False)
+    progression_allowed = Column(Integer, nullable=False, default=0)
+    completed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class WorkoutSet(Base):
+    __tablename__ = "workout_sets"
+    id = Column(Integer, primary_key=True)
+    performance_id = Column(Integer, ForeignKey("workout_performances.id"), nullable=False, index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id"), nullable=True)
+    set_number = Column(Integer, nullable=False)
+    reps = Column(Integer, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    resistance = Column(Float, nullable=True)
+
+
+class TinyHabit(Base):
+    __tablename__ = "tiny_habits"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    anchor = Column(String, nullable=False)
+    minimum_routine = Column(String, nullable=False)
+    schedule_json = Column(Text, nullable=False, default="[]")
+    current_streak = Column(Integer, nullable=False, default=0)
+    best_streak = Column(Integer, nullable=False, default=0)
+    last_completion = Column(Date, nullable=True)
+    active = Column(Integer, nullable=False, default=1)
+
+
+class TinyHabitCompletion(Base):
+    __tablename__ = "tiny_habit_completions"
+    id = Column(Integer, primary_key=True)
+    habit_id = Column(Integer, ForeignKey("tiny_habits.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    completed_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ProgressionHistory(Base):
+    __tablename__ = "progression_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    exercise_id = Column(Integer, ForeignKey("exercises.id"), nullable=False, index=True)
+    performance_id = Column(Integer, ForeignKey("workout_performances.id"), nullable=False)
+    recommendation = Column(Text, nullable=False)
+    evidence_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class ScheduledReport(Base):
@@ -193,9 +299,59 @@ class ProfileRevision(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+async def _migrate_main_schema(conn):
+    """Additive SQLite migrations: never drop production health/fitness data."""
+    profile = await _table_columns(conn, "user_fitness_profile")
+    if profile and "preferred_duration_minutes" not in profile:
+        await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN preferred_duration_minutes INTEGER NOT NULL DEFAULT 30"))
+    if profile and "training_days" not in profile:
+        await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN training_days TEXT NOT NULL DEFAULT '[]'"))
+    health = await _table_columns(conn, "health_logs")
+    legacy_columns = {
+        "date": "DATE",
+        "workout_type": "VARCHAR NOT NULL DEFAULT 'legacy'",
+        "exercises_json": "TEXT NOT NULL DEFAULT '[]'",
+        "status": "VARCHAR NOT NULL DEFAULT 'completed'",
+        "notes": "TEXT",
+        "created_at": "DATETIME",
+    }
+    for name, ddl in legacy_columns.items():
+        if health and name not in health:
+            await conn.execute(text(f"ALTER TABLE health_logs ADD COLUMN {name} {ddl}"))
+
+
+async def _seed_exercises(conn):
+    rows = [
+        ("band-row", "Resistance band row", "strength", "resistance_bands", '["strength","hypertrophy"]', "Stand tall and pull with controlled tempo.", 1, "standing", 0),
+        ("chair-squat", "Chair squat", "strength", "none", '["strength","fat_loss"]', "Sit back to a stable chair and rise slowly.", 1, "standing", 0),
+        ("wall-pushup", "Wall push-up", "strength", "none", '["strength","hypertrophy"]', "Use a wall and keep a straight controlled line.", 1, "standing", 0),
+        ("band-curl", "Resistance band curl", "strength", "resistance_bands", '["strength","hypertrophy"]', "Curl without swinging.", 1, "standing", 0),
+        ("seated-march", "Seated march", "cardio", "none", '["fat_loss","mobility"]', "March gently while seated.", 1, "seated", 0),
+        ("dead-bug", "Dead bug", "core", "pilates_mat", '["strength","mobility"]', "Move opposite limbs slowly while supine.", 1, "floor", 0),
+        ("jumping-jacks", "Jumping jacks", "cardio", "none", '["fat_loss"]', "Jump feet and arms apart and together.", 0, "standing", 1),
+        ("trx-row", "TRX row", "strength", "trx", '["strength","hypertrophy"]', "Maintain body alignment and row slowly.", 1, "standing", 0),
+        ("balance-board-stand", "Balance board stand", "balance", "balance_board", '["mobility","strength"]', "Stand on the balance board with soft knees and hold steady.", 1, "standing", 0),
+        ("balance-pad-squat", "Balance pad squat", "strength", "balance_pad", '["strength","mobility"]', "Squat on the balance pad with controlled descent.", 1, "standing", 0),
+        ("fitball-plank", "Fitball plank", "core", "fitball", '["strength","hypertrophy"]', "Hold a plank with forearms on the fitball.", 1, "floor", 0),
+        ("pullup-negative", "Pull-up negative", "strength", "pull_up_bar", '["strength","hypertrophy"]', "Use a stable step to reach the top position without jumping, then lower slowly.", 1, "standing", 0),
+        ("band-pull-apart", "Resistance band pull-apart", "strength", "resistance_bands", '["strength","hypertrophy","mobility"]', "Pull the band apart at chest height with straight arms.", 1, "standing", 0),
+        ("pilates-bridge", "Pilates bridge", "core", "pilates_mat", '["strength","mobility"]', "Lie supine and lift hips with slow control.", 1, "floor", 0),
+        ("trx-squat", "TRX squat", "strength", "trx", '["strength","fat_loss"]', "Hold TRX handles and squat with upright torso.", 1, "standing", 0),
+        ("standing-calf-raise", "Standing calf raise", "strength", "none", '["strength","hypertrophy"]', "Rise onto toes slowly, hold briefly, and lower.", 1, "standing", 0),
+        ("band-lateral-walk", "Resistance band lateral walk", "strength", "resistance_bands", '["strength","fat_loss"]', "Walk sideways against band tension with soft knees.", 1, "standing", 0),
+        ("fitball-wall-squat", "Fitball wall squat", "strength", "fitball", '["strength","fat_loss"]', "Lean back against fitball on wall and squat to 90 degrees.", 1, "standing", 0),
+        ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", 1, "floor", 0),
+        ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", 1, "standing", 0),
+    ]
+    for row in rows:
+        await conn.execute(text("INSERT INTO exercises (slug,name,category,equipment,goals_json,instructions,low_impact,transition,high_impact) VALUES (:s,:n,:c,:e,:g,:i,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), dict(zip(("s","n","c","e","g","i","l","t","h"), row)))
+
+
 async def init_db():
     async with engine.begin() as conn:
+        await _migrate_main_schema(conn)
         await conn.run_sync(Base.metadata.create_all)
+        await _seed_exercises(conn)
 
 
 async def get_db():
