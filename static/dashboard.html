@@ -181,6 +181,187 @@
             margin-top: 60px;
         }
 
+        .collab-section {
+            margin-top: 14px;
+            border: 2px solid #e0d6f5;
+            border-radius: 14px;
+            padding: 14px 16px;
+        }
+
+        .collab-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 1.05em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .collab-group-title {
+            font-weight: 600;
+            font-size: 0.9em;
+            color: #667eea;
+            margin: 10px 0 6px;
+        }
+
+        .collab-group-title:first-child {
+            margin-top: 0;
+        }
+
+        .ctx-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+
+        .ctx-item .ctx-label {
+            font-weight: 600;
+            color: #764ba2;
+            font-size: 0.8em;
+        }
+
+        .ctx-item .ctx-content {
+            color: #333;
+            word-break: break-word;
+        }
+
+        .directive-item {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 0.85em;
+            margin-bottom: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .directive-msg {
+            color: #333;
+            word-break: break-word;
+        }
+
+        .directive-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .directive-badge {
+            display: inline-block;
+            font-size: 0.75em;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 8px;
+            background: #e8e0f5;
+            color: #764ba2;
+        }
+
+        .directive-badge.priority-high {
+            background: #fce4ec;
+            color: #c62828;
+        }
+
+        .directive-btn {
+            font-size: 0.78em;
+            padding: 3px 10px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            background: white;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .directive-btn:hover {
+            background: #f0f0f0;
+        }
+
+        .directive-btn.complete {
+            color: #2e7d32;
+            border-color: #a5d6a7;
+        }
+
+        .directive-btn.cancel {
+            color: #c62828;
+            border-color: #ef9a9a;
+        }
+
+        .event-item, .action-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 0.83em;
+            margin-bottom: 4px;
+        }
+
+        .event-item .ev-type, .action-item .act-agent {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .event-item .ev-status, .action-item .act-status {
+            font-size: 0.8em;
+            color: #999;
+        }
+
+        .pin-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+        }
+
+        .pin-modal.show {
+            display: flex;
+        }
+
+        .pin-content {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            min-width: 280px;
+        }
+
+        .pin-content h2 {
+            margin-bottom: 12px;
+            color: #333;
+        }
+
+        .pin-content input {
+            padding: 10px 14px;
+            font-size: 1.1em;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            text-align: center;
+            width: 80%;
+            margin-bottom: 12px;
+        }
+
+        .pin-content button {
+            padding: 8px 24px;
+            border-radius: 10px;
+            border: none;
+            background: #667eea;
+            color: white;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .pin-error {
+            color: #c62828;
+            font-size: 0.85em;
+            margin-top: 8px;
+        }
+
         @media (max-width: 480px) {
             .dashboard-grid {
                 grid-template-columns: 1fr;
@@ -194,104 +375,389 @@
         <p>מעקב התקדמות למידה - חשבון ואנגלית</p>
     </div>
 
+    <div class="pin-modal" id="pin-modal">
+        <div class="pin-content">
+            <h2>קוד כניסה</h2>
+            <input type="password" id="pin-input" placeholder="קוד כניסה" inputmode="numeric" pattern="[0-9]*" maxlength="10">
+            <button id="pin-submit">כניסה</button>
+            <p class="pin-error" id="pin-error"></p>
+        </div>
+    </div>
+
     <div id="dashboard-content">
         <div class="loading">טוען נתונים...</div>
     </div>
 
     <script>
         const SUBJECT_META = {
-            math: { icon: '📐', label: 'חשבון' },
-            english: { icon: '🔤', label: 'אנגלית' },
+            math: { icon: '\u{1F4D0}', label: '\u05D7\u05E9\u05D1\u05D5\u05DF' },
+            english: { icon: '\u{1F524}', label: '\u05D0\u05E0\u05D2\u05DC\u05D9\u05EA' },
         };
 
-        function escapeHtml(str) {
-            const div = document.createElement('div');
-            div.textContent = str ?? '';
-            return div.innerHTML;
+        const CATEGORY_LABELS = {
+            safety_constraint: '\u05D1\u05D8\u05D9\u05D7\u05D5\u05EA',
+            parent_directive: '\u05D4\u05E0\u05D7\u05D9\u05D9\u05EA \u05D4\u05D5\u05E8\u05D4',
+            goal: '\u05DE\u05D8\u05E8\u05D4',
+            recommendation: '\u05D4\u05DE\u05DC\u05E6\u05D4',
+            preference: '\u05D4\u05E2\u05D3\u05E4\u05D4',
+        };
+
+        function getPin() {
+            return localStorage.getItem('app_pin') || '';
+        }
+
+        function pinHeaders() {
+            const pin = getPin();
+            return pin ? { 'x-app-pin': pin } : {};
+        }
+
+        async function apiFetch(url, options) {
+            const headers = Object.assign({}, pinHeaders(), (options && options.headers) || {});
+            const resp = await fetch(url, Object.assign({}, options, { headers: headers }));
+            if (resp.status === 401) {
+                localStorage.removeItem('app_pin');
+                showPinModal('\u05E7\u05D5\u05D3 \u05E9\u05D2\u05D5\u05D9, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1');
+                throw new Error('PIN required');
+            }
+            return resp;
         }
 
         function formatTimestamp(ts) {
             if (!ts) return '';
-            try {
-                return new Date(ts).toLocaleString('he-IL');
-            } catch (e) {
-                return ts;
-            }
+            try { return new Date(ts).toLocaleString('he-IL'); }
+            catch (e) { return String(ts); }
+        }
+
+        function el(tag, cls, textContent) {
+            var e = document.createElement(tag);
+            if (cls) e.className = cls;
+            if (textContent != null) e.textContent = textContent;
+            return e;
         }
 
         function renderSubjectBlock(subjectKey, data) {
-            const meta = SUBJECT_META[subjectKey] || { icon: '📚', label: subjectKey };
-            const summaryHtml = data.profile_summary
-                ? `<div class="profile-summary">${escapeHtml(data.profile_summary)}</div>`
-                : `<div class="profile-summary empty">אין עדיין סיכום למידה בנושא זה.</div>`;
-            const updatedHtml = data.updated_at
-                ? `<div class="updated-at">עודכן לאחרונה: ${formatTimestamp(data.updated_at)}</div>`
-                : '';
+            var meta = SUBJECT_META[subjectKey] || { icon: '\u{1F4DA}', label: subjectKey };
+            var block = el('div', 'subject-block ' + subjectKey);
 
-            const messages = data.recent_messages || [];
-            const logsHtml = messages.length
-                ? `<div class="chat-log-list">` +
-                  messages.map(m => `
-                    <div class="chat-log-item ${m.role === 'assistant' ? 'assistant' : 'user'}">
-                        <div class="role">${m.role === 'assistant' ? 'מנטור' : 'תלמיד'}</div>
-                        <div class="content">${escapeHtml(m.content)}</div>
-                    </div>
-                  `).join('') +
-                  `</div>`
-                : `<div class="no-logs">אין עדיין הודעות בנושא זה.</div>`;
+            var title = el('div', 'subject-title', meta.icon + ' ' + meta.label);
+            block.appendChild(title);
 
-            return `
-                <div class="subject-block ${subjectKey}">
-                    <div class="subject-title">${meta.icon} ${meta.label}</div>
-                    ${summaryHtml}
-                    ${updatedHtml}
-                    <details class="recent-logs">
-                        <summary>💬 יומן שיחות אחרון</summary>
-                        ${logsHtml}
-                    </details>
-                </div>
-            `;
+            if (data.profile_summary) {
+                var ps = el('div', 'profile-summary', data.profile_summary);
+                block.appendChild(ps);
+            } else {
+                var ps = el('div', 'profile-summary empty', '\u05D0\u05D9\u05DF \u05E2\u05D3\u05D9\u05D9\u05DF \u05E1\u05D9\u05DB\u05D5\u05DD \u05DC\u05DE\u05D9\u05D3\u05D4 \u05D1\u05E0\u05D5\u05E9\u05D0 \u05D6\u05D4.');
+                block.appendChild(ps);
+            }
+
+            if (data.updated_at) {
+                var ua = el('div', 'updated-at', '\u05E2\u05D5\u05D3\u05DB\u05DF \u05DC\u05D0\u05D7\u05E8\u05D5\u05E0\u05D4: ' + formatTimestamp(data.updated_at));
+                block.appendChild(ua);
+            }
+
+            var details = document.createElement('details');
+            details.className = 'recent-logs';
+            var summary = document.createElement('summary');
+            summary.textContent = '\u{1F4AC} \u05D9\u05D5\u05DE\u05DF \u05E9\u05D9\u05D7\u05D5\u05EA \u05D0\u05D7\u05E8\u05D5\u05DF';
+            details.appendChild(summary);
+
+            var messages = data.recent_messages || [];
+            if (messages.length) {
+                var list = el('div', 'chat-log-list');
+                messages.forEach(function(m) {
+                    var item = el('div', 'chat-log-item' + (m.role === 'assistant' ? ' assistant' : ''));
+                    var role = el('div', 'role', m.role === 'assistant' ? '\u05DE\u05E0\u05D8\u05D5\u05E8' : '\u05EA\u05DC\u05DE\u05D9\u05D3');
+                    var content = el('div', 'content', m.content);
+                    item.appendChild(role);
+                    item.appendChild(content);
+                    list.appendChild(item);
+                });
+                details.appendChild(list);
+            } else {
+                details.appendChild(el('div', 'no-logs', '\u05D0\u05D9\u05DF \u05E2\u05D3\u05D9\u05D9\u05DF \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D1\u05E0\u05D5\u05E9\u05D0 \u05D6\u05D4.'));
+            }
+            block.appendChild(details);
+            return block;
         }
 
-        function renderChildCard(child) {
-            const subjectsHtml = Object.entries(child.subjects || {})
-                .map(([subjectKey, data]) => renderSubjectBlock(subjectKey, data))
-                .join('');
-
-            return `
-                <div class="child-card">
-                    <div class="child-card-header">
-                        <h2>👤 ${escapeHtml(child.child_name)}</h2>
-                        ${child.grade_level ? `<span class="grade-badge">${escapeHtml(child.grade_level)}</span>` : ''}
-                    </div>
-                    ${subjectsHtml}
-                </div>
-            `;
+        function renderContextGroup(items) {
+            var wrap = document.createDocumentFragment();
+            var grouped = {};
+            items.forEach(function(item) {
+                var cat = item.category || 'preference';
+                if (!grouped[cat]) grouped[cat] = [];
+                grouped[cat].push(item);
+            });
+            var order = ['safety_constraint', 'parent_directive', 'goal', 'recommendation', 'preference'];
+            order.forEach(function(cat) {
+                if (!grouped[cat] || !grouped[cat].length) return;
+                var heading = el('div', 'collab-group-title', CATEGORY_LABELS[cat] || cat);
+                wrap.appendChild(heading);
+                grouped[cat].forEach(function(item) {
+                    var row = el('div', 'ctx-item');
+                    var label = el('div', 'ctx-label', (item.kind === 'directive' ? '\u05D4\u05E0\u05D7\u05D9\u05D9\u05D4' : '\u05E2\u05D5\u05D1\u05D3\u05D4') + ' (' + Math.round((item.confidence || 1) * 100) + '%)');
+                    var content = el('div', 'ctx-content', item.content);
+                    row.appendChild(label);
+                    row.appendChild(content);
+                    wrap.appendChild(row);
+                });
+            });
+            return wrap;
         }
 
-        async function loadDashboard() {
-            const container = document.getElementById('dashboard-content');
-            try {
-                const response = await fetch('/api/dashboard/stats');
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
+        function renderDirectives(directives, childId) {
+            var wrap = document.createDocumentFragment();
+            if (!directives.length) {
+                wrap.appendChild(el('div', 'no-logs', '\u05D0\u05D9\u05DF \u05D4\u05E0\u05D7\u05D9\u05D5\u05EA \u05E4\u05E2\u05D9\u05DC\u05D5\u05EA.'));
+                return wrap;
+            }
+            directives.forEach(function(d) {
+                var row = el('div', 'directive-item');
+                row.appendChild(el('div', 'directive-msg', d.message));
+
+                var meta = el('div', 'directive-meta');
+                if (d.subject) {
+                    var sm = SUBJECT_META[d.subject];
+                    meta.appendChild(el('span', 'directive-badge', sm ? sm.label : d.subject));
                 }
-                const data = await response.json();
-                const children = data.children || [];
+                var prBadge = el('span', 'directive-badge' + (d.priority > 70 ? ' priority-high' : ''), '\u05E2\u05D3\u05D9\u05E4\u05D5\u05EA ' + d.priority);
+                meta.appendChild(prBadge);
+                meta.appendChild(el('span', 'directive-badge', d.scope));
 
-                if (!children.length) {
-                    container.innerHTML = '<div class="error-message">לא נמצאו תלמידים רשומים.</div>';
+                var completeBtn = el('button', 'directive-btn complete', '\u2713 \u05D4\u05D5\u05E9\u05DC\u05DD');
+                completeBtn.dataset.directiveId = d.id;
+                completeBtn.addEventListener('click', function() { patchDirective(d.id, 'completed', childId); });
+                meta.appendChild(completeBtn);
+
+                var cancelBtn = el('button', 'directive-btn cancel', '\u2717 \u05D1\u05D9\u05D8\u05D5\u05DC');
+                cancelBtn.dataset.directiveId = d.id;
+                cancelBtn.addEventListener('click', function() { patchDirective(d.id, 'cancelled', childId); });
+                meta.appendChild(cancelBtn);
+
+                row.appendChild(meta);
+                wrap.appendChild(row);
+            });
+            return wrap;
+        }
+
+        function renderEvents(events) {
+            var wrap = document.createDocumentFragment();
+            if (!events.length) {
+                wrap.appendChild(el('div', 'no-logs', '\u05D0\u05D9\u05DF \u05D0\u05D9\u05E8\u05D5\u05E2\u05D9\u05DD.'));
+                return wrap;
+            }
+            events.forEach(function(ev) {
+                var row = el('div', 'event-item');
+                row.appendChild(el('span', 'ev-type', ev.type));
+                row.appendChild(document.createTextNode(' \u2190 '));
+                row.appendChild(el('span', '', ev.source_agent));
+                row.appendChild(document.createTextNode(' '));
+                row.appendChild(el('span', 'ev-status', '[' + ev.status + '] ' + formatTimestamp(ev.created_at)));
+                wrap.appendChild(row);
+            });
+            return wrap;
+        }
+
+        function renderActions(actions) {
+            var wrap = document.createDocumentFragment();
+            if (!actions.length) {
+                wrap.appendChild(el('div', 'no-logs', '\u05D0\u05D9\u05DF \u05E4\u05E2\u05D5\u05DC\u05D5\u05EA.'));
+                return wrap;
+            }
+            actions.forEach(function(a) {
+                var row = el('div', 'action-item');
+                row.appendChild(el('span', 'act-agent', a.agent));
+                row.appendChild(document.createTextNode(' \u2192 ' + a.action + ' '));
+                row.appendChild(el('span', 'act-status', '[' + a.status + '] ' + formatTimestamp(a.created_at)));
+                wrap.appendChild(row);
+            });
+            return wrap;
+        }
+
+        async function loadCollaboration(childId) {
+            var context = [], directives = [], events = [], actions = [];
+            try {
+                var results = await Promise.all([
+                    apiFetch('/api/collaboration/context/' + childId).then(function(r) { return r.json(); }),
+                    apiFetch('/api/collaboration/directives/' + childId).then(function(r) { return r.json(); }),
+                    apiFetch('/api/collaboration/events/' + childId + '?limit=10').then(function(r) { return r.json(); }),
+                    apiFetch('/api/collaboration/actions/' + childId + '?limit=10').then(function(r) { return r.json(); }),
+                ]);
+                context = results[0] || [];
+                directives = results[1] || [];
+                events = results[2] || [];
+                actions = results[3] || [];
+            } catch (e) {
+                console.error('Collaboration load failed for child ' + childId, e);
+            }
+            return { context: context, directives: directives, events: events, actions: actions };
+        }
+
+        function buildCollabSection(collab, childId) {
+            var section = el('div', 'collab-section');
+            section.appendChild(el('div', 'collab-title', '\u{1F916} \u05E9\u05D9\u05EA\u05D5\u05E3 \u05E4\u05E2\u05D5\u05DC\u05D4 \u05D5\u05D6\u05D9\u05DB\u05E8\u05D5\u05DF'));
+
+            if (collab.context.length) {
+                var ctxDetails = document.createElement('details');
+                ctxDetails.className = 'recent-logs';
+                var ctxSummary = document.createElement('summary');
+                ctxSummary.textContent = '\u{1F9E0} \u05D4\u05E7\u05E9\u05E8 \u05DE\u05D5\u05D1\u05E0\u05D4 (' + collab.context.length + ')';
+                ctxDetails.appendChild(ctxSummary);
+                ctxDetails.appendChild(renderContextGroup(collab.context));
+                section.appendChild(ctxDetails);
+            }
+
+            var dirDetails = document.createElement('details');
+            dirDetails.className = 'recent-logs';
+            dirDetails.id = 'directives-' + childId;
+            var dirSummary = document.createElement('summary');
+            dirSummary.textContent = '\u{1F4CB} \u05D4\u05E0\u05D7\u05D9\u05D5\u05EA \u05E4\u05E2\u05D9\u05DC\u05D5\u05EA (' + collab.directives.length + ')';
+            dirDetails.appendChild(dirSummary);
+            var dirWrap = el('div', '');
+            dirWrap.id = 'dir-list-' + childId;
+            dirWrap.appendChild(renderDirectives(collab.directives, childId));
+            dirDetails.appendChild(dirWrap);
+            section.appendChild(dirDetails);
+
+            if (collab.events.length) {
+                var evDetails = document.createElement('details');
+                evDetails.className = 'recent-logs';
+                var evSummary = document.createElement('summary');
+                evSummary.textContent = '\u{1F4E1} \u05D0\u05D9\u05E8\u05D5\u05E2\u05D9\u05DD \u05D0\u05D7\u05E8\u05D5\u05E0\u05D9\u05DD (' + collab.events.length + ')';
+                evDetails.appendChild(evSummary);
+                evDetails.appendChild(renderEvents(collab.events));
+                section.appendChild(evDetails);
+            }
+
+            if (collab.actions.length) {
+                var actDetails = document.createElement('details');
+                actDetails.className = 'recent-logs';
+                var actSummary = document.createElement('summary');
+                actSummary.textContent = '\u{2699}\u{FE0F} \u05E4\u05E2\u05D5\u05DC\u05D5\u05EA \u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA (' + collab.actions.length + ')';
+                actDetails.appendChild(actSummary);
+                actDetails.appendChild(renderActions(collab.actions));
+                section.appendChild(actDetails);
+            }
+
+            return section;
+        }
+
+        async function patchDirective(directiveId, newStatus, childId) {
+            try {
+                var resp = await apiFetch('/api/collaboration/directives/' + directiveId, {
+                    method: 'PATCH',
+                    headers: Object.assign({ 'Content-Type': 'application/json' }, pinHeaders()),
+                    body: JSON.stringify({ status: newStatus }),
+                });
+                if (!resp.ok) {
+                    var err = await resp.json().catch(function() { return {}; });
+                    alert(err.detail || 'Error');
                     return;
                 }
-
-                container.innerHTML = `<div class="dashboard-grid">${children.map(renderChildCard).join('')}</div>`;
-            } catch (error) {
-                console.error('Failed to load dashboard stats:', error);
-                container.innerHTML = '<div class="error-message">שגיאה בטעינת נתוני לוח הבקרה. אנא נסה לרענן.</div>';
+                var dirResp = await apiFetch('/api/collaboration/directives/' + childId);
+                var directives = await dirResp.json();
+                var dirWrap = document.getElementById('dir-list-' + childId);
+                if (dirWrap) {
+                    dirWrap.textContent = '';
+                    dirWrap.appendChild(renderDirectives(directives, childId));
+                }
+            } catch (e) {
+                console.error('Failed to update directive', e);
             }
         }
 
-        loadDashboard();
+        function renderChildCard(child, collab) {
+            var card = el('div', 'child-card');
+
+            var header = el('div', 'child-card-header');
+            header.appendChild(el('h2', '', '\u{1F464} ' + child.child_name));
+            if (child.grade_level) {
+                header.appendChild(el('span', 'grade-badge', child.grade_level));
+            }
+            card.appendChild(header);
+
+            Object.entries(child.subjects || {}).forEach(function(entry) {
+                card.appendChild(renderSubjectBlock(entry[0], entry[1]));
+            });
+
+            card.appendChild(buildCollabSection(collab, child.user_id));
+            return card;
+        }
+
+        async function loadDashboard() {
+            var container = document.getElementById('dashboard-content');
+            try {
+                var response = await apiFetch('/api/dashboard/stats');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                var data = await response.json();
+                var children = data.children || [];
+
+                if (!children.length) {
+                    container.textContent = '';
+                    container.appendChild(el('div', 'error-message', '\u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D5 \u05EA\u05DC\u05DE\u05D9\u05D3\u05D9\u05DD \u05E8\u05E9\u05D5\u05DE\u05D9\u05DD.'));
+                    return;
+                }
+
+                var collabs = await Promise.all(children.map(function(c) { return loadCollaboration(c.user_id); }));
+
+                var grid = el('div', 'dashboard-grid');
+                children.forEach(function(child, i) {
+                    grid.appendChild(renderChildCard(child, collabs[i]));
+                });
+                container.textContent = '';
+                container.appendChild(grid);
+            } catch (error) {
+                if (error.message === 'PIN required') return;
+                console.error('Failed to load dashboard stats:', error);
+                container.textContent = '';
+                container.appendChild(el('div', 'error-message', '\u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05D8\u05E2\u05D9\u05E0\u05EA \u05E0\u05EA\u05D5\u05E0\u05D9 \u05DC\u05D5\u05D7 \u05D4\u05D1\u05E7\u05E8\u05D4. \u05D0\u05E0\u05D0 \u05E0\u05E1\u05D4 \u05DC\u05E8\u05E2\u05E0\u05DF.'));
+            }
+        }
+
+        function showPinModal(msg) {
+            var modal = document.getElementById('pin-modal');
+            var err = document.getElementById('pin-error');
+            var inp = document.getElementById('pin-input');
+            if (modal) modal.classList.add('show');
+            if (err) err.textContent = msg || '';
+            if (inp) inp.value = '';
+        }
+
+        async function submitPin() {
+            var inp = document.getElementById('pin-input');
+            var err = document.getElementById('pin-error');
+            var pin = inp ? inp.value.trim() : '';
+            if (!pin) { if (err) err.textContent = '\u05D4\u05D6\u05DF \u05E7\u05D5\u05D3 \u05DB\u05E0\u05D9\u05E1\u05D4'; return; }
+            try {
+                var resp = await fetch('/api/ping', { method: 'GET', headers: { 'x-app-pin': pin } });
+                if (resp.ok) {
+                    localStorage.setItem('app_pin', pin);
+                    document.getElementById('pin-modal').classList.remove('show');
+                    if (err) err.textContent = '';
+                    loadDashboard();
+                } else {
+                    if (err) err.textContent = '\u05E7\u05D5\u05D3 \u05E9\u05D2\u05D5\u05D9, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1';
+                }
+            } catch (e) {
+                if (err) err.textContent = '\u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05D0\u05D9\u05DE\u05D5\u05EA \u05D4\u05E7\u05D5\u05D3';
+            }
+        }
+
+        async function checkPinAndLoad() {
+            var stored = localStorage.getItem('app_pin');
+            if (stored) {
+                try {
+                    var resp = await fetch('/api/ping', { method: 'GET', headers: { 'x-app-pin': stored } });
+                    if (resp.ok) { loadDashboard(); return; }
+                } catch (e) { /* fall through */ }
+                localStorage.removeItem('app_pin');
+            }
+            showPinModal();
+        }
+
+        document.getElementById('pin-submit').addEventListener('click', submitPin);
+        document.getElementById('pin-input').addEventListener('keypress', function(e) { if (e.key === 'Enter') submitPin(); });
+        checkPinAndLoad();
     </script>
 </body>
 </html>

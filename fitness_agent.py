@@ -7,6 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import HealthLog, UserFitnessProfile, get_db
+from event_bus import event_bus
+import nutrition_agent
 
 router = APIRouter(prefix="/api/fitness", tags=["Fitness Agent"])
 
@@ -52,6 +54,14 @@ async def log_workout(data: WorkoutLogRequest, db: AsyncSession = Depends(get_db
         db.add(health_log)
         await db.commit()
         await db.refresh(health_log)
+        if data.status.lower() in {"completed", "complete", "done"}:
+            await event_bus.publish(
+                "fitness.workout_completed",
+                user_id=data.user_id,
+                child_id=data.user_id,
+                source_agent="fitness",
+                payload={"health_log_id": health_log.id, "workout_type": data.workout_type},
+            )
         return {"status": "success", "message": "Workout logged and synced with cross-agent state."}
     except Exception as e:
         await db.rollback()

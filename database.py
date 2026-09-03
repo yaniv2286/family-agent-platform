@@ -99,6 +99,100 @@ class ScheduledReport(Base):
     sent_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MemoryFact(Base):
+    __tablename__ = "memory_facts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    child_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    domain = Column(String, nullable=False, index=True)
+    category = Column(String, nullable=False, default="preference")
+    key = Column(String, nullable=False)
+    value = Column(Text, nullable=False)
+    confidence = Column(Float, nullable=False, default=1.0)
+    evidence_json = Column(Text, nullable=False, default="[]")
+    source_agent = Column(String, nullable=True)
+    active = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MemoryEvidence(Base):
+    __tablename__ = "memory_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fact_id = Column(Integer, ForeignKey("memory_facts.id"), nullable=False, index=True)
+    source_type = Column(String, nullable=False, default="observation")
+    source_ref = Column(String, nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ParentDirective(Base):
+    __tablename__ = "parent_directives"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    child_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    child_name = Column(String, nullable=True, index=True)
+    subject = Column(String, nullable=True, index=True)
+    message = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="active", index=True)
+    priority = Column(Integer, nullable=False, default=50)
+    scope = Column(String, nullable=False, default="child")
+    source = Column(String, nullable=False, default="parent")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+
+class AgentEvent(Base):
+    __tablename__ = "agent_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    child_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    source_agent = Column(String, nullable=False)
+    payload_json = Column(Text, nullable=False, default="{}")
+    correlation_id = Column(String, nullable=False, index=True)
+    causation_id = Column(Integer, ForeignKey("agent_events.id"), nullable=True)
+    depth = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="pending")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+
+
+class AgentAction(Base):
+    __tablename__ = "agent_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("agent_events.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    child_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    agent_name = Column(String, nullable=False)
+    action_type = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    detail_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class ProfileRevision(Base):
+    __tablename__ = "profile_revisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    child_name = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=False, index=True)
+    previous_summary = Column(Text, nullable=True)
+    new_summary = Column(Text, nullable=False)
+    source = Column(String, nullable=False, default="tutor")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -359,6 +453,7 @@ async def update_student_profile_summary(child_name: str, subject: str, summary:
             )
         )
         p = result.scalar_one_or_none()
+        previous_summary = p.profile_summary if p else None
         if p:
             p.profile_summary = summary
             p.updated_at = datetime.utcnow()
@@ -372,6 +467,19 @@ async def update_student_profile_summary(child_name: str, subject: str, summary:
                 )
             )
         await db.commit()
+    async with SessionLocal() as main_db:
+        user_result = await main_db.execute(select(User).where(User.name == child_name))
+        user = user_result.scalar_one_or_none()
+        main_db.add(
+            ProfileRevision(
+                user_id=user.id if user else None,
+                child_name=child_name,
+                subject=subject,
+                previous_summary=previous_summary,
+                new_summary=summary,
+            )
+        )
+        await main_db.commit()
     duration = time.perf_counter() - start
     logger.debug(
         "update_student_profile_summary completed",
@@ -382,9 +490,25 @@ async def update_student_profile_summary(child_name: str, subject: str, summary:
 
 
 async def add_parent_feedback(child_name: Optional[str], subject: Optional[str], message: str):
-    """Store a raw parent feedback/instruction message."""
+    """Store legacy feedback and its durable directive representation."""
     async with TutorHistorySessionLocal() as db:
         db.add(ParentFeedback(child_name=child_name, subject=subject, message=message))
+        await db.commit()
+    async with SessionLocal() as db:
+        user = None
+        if child_name:
+            result = await db.execute(select(User).where(User.name == child_name))
+            user = result.scalar_one_or_none()
+        db.add(
+            ParentDirective(
+                user_id=user.id if user else None,
+                child_id=user.id if user else None,
+                child_name=child_name,
+                subject=subject,
+                message=message,
+                scope="child" if child_name else "family",
+            )
+        )
         await db.commit()
 
 

@@ -16,8 +16,8 @@ from database import (
     get_student_profile_summary,
     append_chat_messages,
     update_student_profile_summary,
-    get_latest_parent_feedback,
 )
+from memory_manager import memory_manager
 
 # Ensure environment variables from .env are loaded even if this module is
 # imported before database.py (which also calls load_dotenv()).
@@ -584,7 +584,7 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         child_name = user_profile.get("name", "תלמיד")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
-        parent_directives = await get_latest_parent_feedback(child_name, self.SUBJECT, limit=3)
+        parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         correct_answer = self._extract_correct_arithmetic_answer(conversation_history)
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, correct_answer)
         raw = await self._call_llm(
@@ -799,7 +799,7 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         child_name = user_profile.get("name", "תלמיד")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
-        parent_directives = await get_latest_parent_feedback(child_name, self.SUBJECT, limit=3)
+        parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives)
         raw = await self._call_llm(system_prompt, conversation_history, json_response=True)
         return _parse_json_reply(raw)
