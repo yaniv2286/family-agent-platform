@@ -980,7 +980,7 @@
         <div class="header">
             <button class="back-btn" id="back-btn">⬅ חזור</button>
             <button class="switch-child-btn" id="switch-child-btn">🔄 החלף תלמיד</button>
-            <div class="koko-avatar" aria-label="Koko">
+            <div class="koko-avatar" id="header-avatar" aria-label="Koko">
                 <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Koko">
                     <circle cx="60" cy="60" r="56" fill="#ffffff" stroke="#667eea" stroke-width="4"/>
                     <circle cx="35" cy="35" r="16" fill="#8fa4d3"/>
@@ -996,8 +996,8 @@
                     <path d="M54,84 Q60,90 66,84" stroke="#2d2d2d" stroke-width="2" fill="none" stroke-linecap="round"/>
                 </svg>
             </div>
-            <h1>Koko</h1>
-            <p>בואו נלמד ביחד בכיף!</p>
+            <h1 id="header-title">Family Agent Platform</h1>
+            <p id="header-subtitle">הסוכנים של המשפחה במקום אחד</p>
         </div>
 
         <!-- Profile Selection Screen -->
@@ -1160,6 +1160,9 @@
         const pinInput = document.getElementById('pin-input');
         const pinSubmit = document.getElementById('pin-submit');
         const pinError = document.getElementById('pin-error');
+        const headerTitle = document.getElementById('header-title');
+        const headerSubtitle = document.getElementById('header-subtitle');
+        const headerAvatar = document.getElementById('header-avatar');
 
         // Returns the correct backend endpoint for the currently active tutor.
         function getChatEndpoint(subject) {
@@ -1470,6 +1473,11 @@
             fitnessScreen.classList.remove('show');
             backBtn.classList.remove('show');
             switchChildBtn.classList.remove('show');
+            const isTutor = screenName === 'tutoring';
+            const isFitness = screenName === 'fitness';
+            headerTitle.textContent = isTutor ? 'Koko' : isFitness ? 'סוכן הכושר' : 'Family Agent Platform';
+            headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : 'הסוכנים של המשפחה במקום אחד';
+            headerAvatar.style.display = isFitness ? 'none' : 'inline-block';
             
             if (screenName === 'profile') {
                 profileScreen.classList.remove('hidden');
@@ -1938,6 +1946,7 @@
         // ── Fitness Agent Logic ──
         let fitnessActivePlanId = null;
         let fitnessActivePlanExercises = [];
+        let fitnessCurrentPlan = null;
         const fitnessOptions = {
             equipment: { none:'ללא ציוד', balance_board:'לוח שיווי משקל', balance_pad:'כרית שיווי משקל', fitball:'כדור פיזיו', pull_up_bar:'מתח', resistance_bands:'גומיות התנגדות', pilates_mat:'מזרן', trx:'רצועות TRX' },
             goals: { hypertrophy_body_recomposition_fat_loss:'חיזוק, עיצוב והרכב גוף', hypertrophy:'בניית כוח ושריר', fat_loss:'שיפור כושר והרכב גוף', strength:'כוח', balance:'שיווי משקל', mobility:'תנועתיות' },
@@ -1970,8 +1979,8 @@
         document.getElementById('fp-save-btn').addEventListener('click',async()=>{ const duration=Number(selectedChipValues('fp-duration')[0]||30); const body={equipment:selectedChipValues('fp-equipment'),health_constraints:selectedChipValues('fp-constraints'),goals:selectedChipValues('fp-goals'),supplements:selectedChipValues('fp-supplements'),preferred_duration_minutes:duration,training_days:selectedChipValues('fp-days-chips')}; const st=document.getElementById('fp-status'); try { const r=await safeFetch(`/api/fitness/profile/${selectedUserId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); st.textContent=r.ok?'ההגדרות נשמרו בהצלחה!':'לא הצלחנו לשמור. נסו שוב.'; st.style.color=r.ok?'#176b57':'#b33'; } catch(e){st.textContent='שגיאת רשת';} });
 
         async function loadNutritionRecommendation() { const targets=[document.getElementById('fitness-home-nutrition'),document.getElementById('fitness-progress-nutrition')]; try { const r=await safeFetch(`/api/collaboration/context/${selectedUserId}?domain=nutrition`); if(!r.ok)return; const items=await r.json(); const recommendation=Array.isArray(items)?items.find(x=>x.category==='recommendation'||x.kind==='directive'):null; targets.forEach(el=>el.textContent=recommendation?.content||'אין המלצה חדשה כרגע.'); } catch(e){ targets.forEach(el=>el.textContent='אין המלצה חדשה כרגע.'); } }
-        async function loadFitnessHome() { const workout=document.getElementById('fitness-home-workout'); workout.textContent='בודקים מה מחכה לך היום...'; try { const [plansResponse,analyticsResponse]=await Promise.all([safeFetch(`/api/fitness/plans/${selectedUserId}`),safeFetch(`/api/fitness/analytics/${selectedUserId}`)]); if(plansResponse.ok){const plans=await plansResponse.json();const today=plans.find(p=>p.status!=='completed');workout.textContent=today?`${Number(today.duration_minutes)||30} דקות · ${(today.exercises||[]).length} תרגילים בקצב נעים`:'אין עדיין אימון מתוכנן — אפשר ליצור אחד בלחיצה.';} if(analyticsResponse.ok){const d=await analyticsResponse.json();const stats=document.getElementById('fitness-home-stats');stats.children[0].firstChild.textContent=String(d.adherence?.completed||0);stats.children[1].firstChild.textContent=`${Math.round((d.adherence?.rate||0)*100)}%`;stats.children[2].firstChild.textContent=String(Math.max(0,...(d.streaks||[]).map(s=>Number(s.current)||0)));} } catch(e){workout.textContent='לא הצלחנו לטעון כרגע. אפשר לנסות שוב.';} loadNutritionRecommendation(); }
-        document.getElementById('fitness-home-start').addEventListener('click',()=>{activateFitnessPanel('fitness-plan-panel');document.getElementById('fp-generate-btn').click();});
+        async function loadFitnessHome() { const workout=document.getElementById('fitness-home-workout'); workout.textContent='בודקים מה מחכה לך היום...'; try { const [plansResponse,analyticsResponse]=await Promise.all([safeFetch(`/api/fitness/plans/${selectedUserId}`),safeFetch(`/api/fitness/analytics/${selectedUserId}`)]); if(plansResponse.ok){const plans=await plansResponse.json();fitnessCurrentPlan=plans.find(p=>p.status!=='completed')||null;workout.textContent=fitnessCurrentPlan?`${Number(fitnessCurrentPlan.duration_minutes)||30} דקות · ${(fitnessCurrentPlan.exercises||[]).length} תרגילים בקצב נעים`:'אין עדיין אימון מתוכנן — אפשר ליצור אחד בלחיצה.';document.getElementById('fitness-home-start').textContent=fitnessCurrentPlan?'פתח את האימון':'צור אימון והתחל';} if(analyticsResponse.ok){const d=await analyticsResponse.json();const stats=document.getElementById('fitness-home-stats');stats.children[0].firstChild.textContent=String(d.adherence?.completed||0);stats.children[1].firstChild.textContent=`${Math.round((d.adherence?.rate||0)*100)}%`;stats.children[2].firstChild.textContent=String(Math.max(0,...(d.streaks||[]).map(s=>Number(s.current)||0)));} } catch(e){workout.textContent='לא הצלחנו לטעון כרגע. אפשר לנסות שוב.';} loadNutritionRecommendation(); }
+        document.getElementById('fitness-home-start').addEventListener('click',()=>{activateFitnessPanel('fitness-plan-panel');fitnessCurrentPlan?loadFitnessPlans():document.getElementById('fp-generate-btn').click();});
         document.getElementById('fitness-five-minute').addEventListener('click',async()=>{const btn=document.getElementById('fitness-five-minute');btn.disabled=true;try{const r=await safeFetch('/api/fitness/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:selectedUserId,workout_type:'five_minute_minimum',exercises:['controlled_mobility','supported_balance'],status:'completed',notes:'Five-minute minimum routine completed safely.'})});btn.textContent=r.ok?'נרשם! כל הכבוד 🎉':'לא הצלחנו לרשום';if(r.ok)loadFitnessHome();}catch(e){btn.textContent='שגיאת רשת';}finally{setTimeout(()=>{btn.disabled=false;btn.textContent='יש לי רק 5 דקות';},1800);}});
 
         // Generate plan

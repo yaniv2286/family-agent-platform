@@ -398,10 +398,13 @@ class TestProfileCRUD:
 # ── 3. Safety-Aware Plan Generation ─────────────────────────────────
 class TestPlanGeneration:
     @pytest.mark.asyncio
-    async def test_generate_plan_without_profile_raises(self):
+    async def test_generate_plan_uses_safe_defaults_without_profile(self, client):
         child = await _child()
-        with pytest.raises(ValueError, match="No profile"):
-            await _generate_plan_raw(child.id)
+        response = await client.post(
+            f"/api/fitness/plans/generate/{child.id}", headers=H
+        )
+        assert response.status_code == 200
+        assert response.json()["exercises"]
 
     @pytest.mark.asyncio
     async def test_generate_plan_success(self):

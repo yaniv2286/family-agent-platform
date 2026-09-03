@@ -153,7 +153,18 @@ async def _fetch_directives(db: AsyncSession, user_id: int):
 @router.post("/plans/generate/{user_id}")
 async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     await _user(db, user_id); p = await db.get(UserFitnessProfile, user_id)
-    if not p: raise HTTPException(400, "Create a fitness profile first")
+    if not p:
+        p = UserFitnessProfile(
+            user_id=user_id,
+            equipment=json.dumps(DEFAULT_EQUIPMENT),
+            health_constraints=json.dumps(DEFAULT_HEALTH_CONSTRAINTS),
+            goal_type=json.dumps([DEFAULT_GOAL_TYPE]),
+            supplement_stack=json.dumps(DEFAULT_SUPPLEMENT_STACK),
+            preferred_duration_minutes=30,
+            training_days="[]",
+        )
+        db.add(p)
+        await db.flush()
     equipment, constraints, goals = set(_loads(p.equipment)) | {"none"}, _loads(p.health_constraints), _loads(p.goal_type)
     sensitive = any("tilt" in x or "orthostatic" in x for x in constraints)
     # Incorporate parent directives for safety-aware plan generation
@@ -176,6 +187,7 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     for i, exercise in enumerate(chosen):
         db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=2, reps=8, rest_seconds=60, minimum_version="1 controlled set of 5 reps"))
     await db.commit()
+    await db.refresh(plan)
     return await _plan_response(db, plan)
 
 async def _plan_response(db, plan):
