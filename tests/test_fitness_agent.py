@@ -312,6 +312,14 @@ class TestMigrationSchema:
         assert "fitball-plank" in slugs
         assert "trx-chest-press" in slugs
         assert "bird-dog" in slugs
+        assert all(r.video_url.startswith("https://www.youtube.com/") for r in rows)
+
+    @pytest.mark.asyncio
+    async def test_exercises_table_has_video_url_column(self):
+        async with SessionLocal() as db:
+            result = await db.execute(text("PRAGMA table_info(exercises)"))
+            columns = {row[1] for row in result.fetchall()}
+        assert "video_url" in columns
 
     @pytest.mark.asyncio
     async def test_workout_plans_table_exists(self):
@@ -398,13 +406,23 @@ class TestProfileCRUD:
 # ── 3. Safety-Aware Plan Generation ─────────────────────────────────
 class TestPlanGeneration:
     @pytest.mark.asyncio
+    async def test_exercise_library_includes_video_urls(self, client):
+        response = await client.get("/api/fitness/exercises", headers=H)
+        assert response.status_code == 200
+        exercises = response.json()
+        assert exercises
+        assert all(e["video_url"].startswith("https://www.youtube.com/") for e in exercises)
+
+    @pytest.mark.asyncio
     async def test_generate_plan_uses_safe_defaults_without_profile(self, client):
         child = await _child()
         response = await client.post(
             f"/api/fitness/plans/generate/{child.id}", headers=H
         )
         assert response.status_code == 200
-        assert response.json()["exercises"]
+        exercises = response.json()["exercises"]
+        assert exercises
+        assert all(e["video_url"].startswith("https://www.youtube.com/") for e in exercises)
 
     @pytest.mark.asyncio
     async def test_generate_plan_success(self):

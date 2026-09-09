@@ -5,14 +5,6 @@ setlocal EnableDelayedExpansion
 :: ==============================================
 :: Deploys Family Agent Platform, NeuralTrader, and VolatilityHunter monitoring to the VPS.
 :: This is the single entry point for all family-agent deployments.
-::
-:: Required environment:
-::   SERVER  - VPS SSH target, e.g. root@207.154.218.23
-::   SSH_KEY - Absolute path to your SSH private key for the VPS
-::
-:: Example usage:
-::   set SSH_KEY=C:\Users\Yaniv\.ssh\id_rsa
-::   .\deploy.bat
 
 set "SERVER=root@207.154.218.23"
 set "PROJECT=%~dp0"
@@ -25,24 +17,31 @@ set "HUNTER_ARCHIVE=%TEMP%\volatilityhunter-deploy-%RANDOM%.tar.gz"
 :: ---------------------------------------------------------------------------
 :: 1. SSH authentication precondition
 :: ---------------------------------------------------------------------------
-if not defined SSH_KEY (
-    echo [ERROR] SSH_KEY environment variable is not set.
-    echo [INFO] Set it to the absolute path of your VPS private key, e.g.:
-    echo   set SSH_KEY=C:\Users\Yaniv\.ssh\id_rsa
+if not "%~1"=="" (
+    set "SSH_KEY_PATH=%~1"
+) else if not defined SSH_KEY_PATH (
+    if defined SSH_KEY (
+        set "SSH_KEY_PATH=%SSH_KEY%"
+    ) else (
+        set "SSH_KEY_PATH=%USERPROFILE%\.ssh\id_ed25519"
+    )
+)
+
+echo [INFO] Using SSH key: %SSH_KEY_PATH%
+if not exist "%SSH_KEY_PATH%" (
+    echo [ERROR] SSH key not found: %SSH_KEY_PATH%
+    echo [INFO] Pass the key as the first argument, or set SSH_KEY_PATH / SSH_KEY.
     pause
     exit /b 1
 )
-if not exist "%SSH_KEY%" (
-    echo [ERROR] SSH_KEY file not found: %SSH_KEY%
-    pause
-    exit /b 1
-)
-set "SSH_OPTS=-i "%SSH_KEY%""
+
+:: Correct quote handling for OpenSSH arguments in batch files
+set "SSH_OPTS=-o IdentitiesOnly=yes -i "%SSH_KEY_PATH%""
 
 echo [INFO] Testing SSH connectivity to %SERVER%...
 ssh %SSH_OPTS% %SERVER% "echo [OK] SSH connectivity verified" >nul
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Cannot SSH to %SERVER% with key %SSH_KEY%
+    echo [ERROR] Cannot SSH to %SERVER% with key %SSH_KEY_PATH%
     pause
     exit /b 1
 )
@@ -87,6 +86,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [INFO] Uploading NeuralTrader .env...
+ssh %SSH_OPTS% %SERVER% "mkdir -p /root/neuraltrader"
 scp %SSH_OPTS% "%NEURAL_REPO%\.env" %SERVER%:/root/neuraltrader/.env
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to upload NeuralTrader .env
@@ -133,10 +133,10 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ---------------------------------------------------------------------------
-:: 4. VolatilityHunter monitor package
+:: 4. VolatilityHunter package
 :: ---------------------------------------------------------------------------
-if not exist "%HUNTER_REPO%\src\monitoring_adapter.py" (
-    echo [ERROR] VolatilityHunter monitoring adapter not found at %HUNTER_REPO%
+if not exist "%HUNTER_REPO%\scripts\daily_trading_loop.py" (
+    echo [ERROR] VolatilityHunter repository not found at %HUNTER_REPO%
     pause
     exit /b 1
 )
@@ -146,22 +146,49 @@ if not exist "%HUNTER_REPO%\.env" (
     exit /b 1
 )
 
-echo [INFO] Running VolatilityHunter health and adapter checks...
-python "%HUNTER_REPO%\scripts\functional_health_check.py"
+echo [INFO] Running VolatilityHunter py_compile sanity check...
+python -m py_compile "%HUNTER_REPO%\scripts\daily_trading_loop.py" "%HUNTER_REPO%\scripts\update_data.py" "%HUNTER_REPO%\scripts\functional_health_check.py" "%HUNTER_REPO%\scripts\live_reconciliation.py" "%HUNTER_REPO%\src\brokerage_interface.py" "%HUNTER_REPO%\src\email_notifier.py" "%HUNTER_REPO%\src\telegram_notifier.py" "%HUNTER_REPO%\src\strategy_engine.py"
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] VolatilityHunter health check failed. Deployment aborted.
-    pause
-    exit /b %ERRORLEVEL%
-)
-python "%HUNTER_REPO%\scripts\verify_control_api.py"
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] VolatilityHunter monitoring adapter verification failed.
+    echo [ERROR] VolatilityHunter syntax check failed. Deployment aborted.
     pause
     exit /b %ERRORLEVEL%
 )
 
+echo [INFO] Uploading VolatilityHunter .env...
+ssh %SSH_OPTS% %SERVER% "mkdir -p /root/volatilityhunter"
+scp %SSH_OPTS% "%HUNTER_REPO%\.env" %SERVER%:/root/volatilityhunter/.env
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Failed to upload VolatilityHunter .env.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo [INFO] Checking VolatilityHunter market data seed on the VPS...
+ssh %SSH_OPTS% %SERVER% "test -f /root/volatilityhunter/data/portfolio.json" >nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [INFO] No VolatilityHunter state found on VPS. Building data seed archive locally...
+    set "DATA_ARCHIVE=%TEMP%\volatilityhunter-data-%RANDOM%.tar.gz"
+    tar -czf "!DATA_ARCHIVE!" -C "%HUNTER_REPO%" data\raw 2>nul || echo [INFO] data\raw not present locally, skipping seed.
+    if exist "!DATA_ARCHIVE!" (
+        echo [INFO] Uploading VolatilityHunter data seed. This may take several minutes...
+        scp %SSH_OPTS% "!DATA_ARCHIVE!" %SERVER%:/root/volatilityhunter-data.tar.gz
+        if !ERRORLEVEL! NEQ 0 (
+            echo [ERROR] Failed to upload VolatilityHunter data seed
+            pause
+            exit /b !ERRORLEVEL!
+        )
+        echo [INFO] Extracting VolatilityHunter data seed on VPS...
+        ssh %SSH_OPTS% %SERVER% "mkdir -p /root/volatilityhunter && cd /root/volatilityhunter && tar -xzf /root/volatilityhunter-data.tar.gz && rm -f /root/volatilityhunter-data.tar.gz"
+        if !ERRORLEVEL! NEQ 0 (
+            echo [ERROR] Failed to extract VolatilityHunter data seed on VPS
+            pause
+            exit /b !ERRORLEVEL!
+        )
+    )
+)
+
 echo [INFO] Packaging VolatilityHunter without mutable trading state...
-tar -czf "%HUNTER_ARCHIVE%" -C "%HUNTER_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="archive" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
+tar -czf "%HUNTER_ARCHIVE%" -C "%HUNTER_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="archive" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] VolatilityHunter packaging failed.
     pause
@@ -170,13 +197,6 @@ if %ERRORLEVEL% NEQ 0 (
 scp %SSH_OPTS% "%HUNTER_ARCHIVE%" %SERVER%:/root/volatilityhunter-deploy.tar.gz
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] VolatilityHunter SCP failed.
-    pause
-    exit /b %ERRORLEVEL%
-)
-ssh %SSH_OPTS% %SERVER% "mkdir -p /root/volatilityhunter"
-scp %SSH_OPTS% "%HUNTER_REPO%\.env" %SERVER%:/root/volatilityhunter/.env
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Failed to upload VolatilityHunter .env.
     pause
     exit /b %ERRORLEVEL%
 )

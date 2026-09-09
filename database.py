@@ -105,6 +105,7 @@ class Exercise(Base):
     equipment = Column(String, nullable=False, index=True)
     goals_json = Column(Text, nullable=False, default="[]")
     instructions = Column(Text, nullable=False)
+    video_url = Column(String, nullable=False)
     low_impact = Column(Integer, nullable=False, default=1)
     transition = Column(String, nullable=False, default="standing")
     high_impact = Column(Integer, nullable=False, default=0)
@@ -452,6 +453,9 @@ async def _migrate_main_schema(conn):
         await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN preferred_duration_minutes INTEGER NOT NULL DEFAULT 30"))
     if profile and "training_days" not in profile:
         await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN training_days TEXT NOT NULL DEFAULT '[]'"))
+    exercises = await _table_columns(conn, "exercises")
+    if exercises and "video_url" not in exercises:
+        await conn.execute(text("ALTER TABLE exercises ADD COLUMN video_url VARCHAR NOT NULL DEFAULT ''"))
     health = await _table_columns(conn, "health_logs")
     legacy_columns = {
         "date": "DATE",
@@ -468,29 +472,29 @@ async def _migrate_main_schema(conn):
 
 async def _seed_exercises(conn):
     rows = [
-        ("band-row", "Resistance band row", "strength", "resistance_bands", '["strength","hypertrophy"]', "Stand tall and pull with controlled tempo.", 1, "standing", 0),
-        ("chair-squat", "Chair squat", "strength", "none", '["strength","fat_loss"]', "Sit back to a stable chair and rise slowly.", 1, "standing", 0),
-        ("wall-pushup", "Wall push-up", "strength", "none", '["strength","hypertrophy"]', "Use a wall and keep a straight controlled line.", 1, "standing", 0),
-        ("band-curl", "Resistance band curl", "strength", "resistance_bands", '["strength","hypertrophy"]', "Curl without swinging.", 1, "standing", 0),
-        ("seated-march", "Seated march", "cardio", "none", '["fat_loss","mobility"]', "March gently while seated.", 1, "seated", 0),
-        ("dead-bug", "Dead bug", "core", "pilates_mat", '["strength","mobility"]', "Move opposite limbs slowly while supine.", 1, "floor", 0),
-        ("jumping-jacks", "Jumping jacks", "cardio", "none", '["fat_loss"]', "Jump feet and arms apart and together.", 0, "standing", 1),
-        ("trx-row", "TRX row", "strength", "trx", '["strength","hypertrophy"]', "Maintain body alignment and row slowly.", 1, "standing", 0),
-        ("balance-board-stand", "Balance board stand", "balance", "balance_board", '["mobility","strength"]', "Stand on the balance board with soft knees and hold steady.", 1, "standing", 0),
-        ("balance-pad-squat", "Balance pad squat", "strength", "balance_pad", '["strength","mobility"]', "Squat on the balance pad with controlled descent.", 1, "standing", 0),
-        ("fitball-plank", "Fitball plank", "core", "fitball", '["strength","hypertrophy"]', "Hold a plank with forearms on the fitball.", 1, "floor", 0),
-        ("pullup-negative", "Pull-up negative", "strength", "pull_up_bar", '["strength","hypertrophy"]', "Use a stable step to reach the top position without jumping, then lower slowly.", 1, "standing", 0),
-        ("band-pull-apart", "Resistance band pull-apart", "strength", "resistance_bands", '["strength","hypertrophy","mobility"]', "Pull the band apart at chest height with straight arms.", 1, "standing", 0),
-        ("pilates-bridge", "Pilates bridge", "core", "pilates_mat", '["strength","mobility"]', "Lie supine and lift hips with slow control.", 1, "floor", 0),
-        ("trx-squat", "TRX squat", "strength", "trx", '["strength","fat_loss"]', "Hold TRX handles and squat with upright torso.", 1, "standing", 0),
-        ("standing-calf-raise", "Standing calf raise", "strength", "none", '["strength","hypertrophy"]', "Rise onto toes slowly, hold briefly, and lower.", 1, "standing", 0),
-        ("band-lateral-walk", "Resistance band lateral walk", "strength", "resistance_bands", '["strength","fat_loss"]', "Walk sideways against band tension with soft knees.", 1, "standing", 0),
-        ("fitball-wall-squat", "Fitball wall squat", "strength", "fitball", '["strength","fat_loss"]', "Lean back against fitball on wall and squat to 90 degrees.", 1, "standing", 0),
-        ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", 1, "floor", 0),
-        ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", 1, "standing", 0),
+        ("band-row", "Resistance band row", "strength", "resistance_bands", '["strength","hypertrophy"]', "Stand tall and pull with controlled tempo.", "https://www.youtube.com/results?search_query=resistance+band+row+proper+form", 1, "standing", 0),
+        ("chair-squat", "Chair squat", "strength", "none", '["strength","fat_loss"]', "Sit back to a stable chair and rise slowly.", "https://www.youtube.com/results?search_query=chair+squat+proper+form", 1, "standing", 0),
+        ("wall-pushup", "Wall push-up", "strength", "none", '["strength","hypertrophy"]', "Use a wall and keep a straight controlled line.", "https://www.youtube.com/results?search_query=wall+push+up+proper+form", 1, "standing", 0),
+        ("band-curl", "Resistance band curl", "strength", "resistance_bands", '["strength","hypertrophy"]', "Curl without swinging.", "https://www.youtube.com/results?search_query=resistance+band+biceps+curl+proper+form", 1, "standing", 0),
+        ("seated-march", "Seated march", "cardio", "none", '["fat_loss","mobility"]', "March gently while seated.", "https://www.youtube.com/results?search_query=seated+march+exercise+proper+form", 1, "seated", 0),
+        ("dead-bug", "Dead bug", "core", "pilates_mat", '["strength","mobility"]', "Move opposite limbs slowly while supine.", "https://www.youtube.com/results?search_query=dead+bug+exercise+proper+form", 1, "floor", 0),
+        ("jumping-jacks", "Jumping jacks", "cardio", "none", '["fat_loss"]', "Jump feet and arms apart and together.", "https://www.youtube.com/results?search_query=jumping+jacks+proper+form", 0, "standing", 1),
+        ("trx-row", "TRX row", "strength", "trx", '["strength","hypertrophy"]', "Maintain body alignment and row slowly.", "https://www.youtube.com/results?search_query=TRX+row+proper+form", 1, "standing", 0),
+        ("balance-board-stand", "Balance board stand", "balance", "balance_board", '["mobility","strength"]', "Stand on the balance board with soft knees and hold steady.", "https://www.youtube.com/results?search_query=balance+board+standing+exercise+beginner", 1, "standing", 0),
+        ("balance-pad-squat", "Balance pad squat", "strength", "balance_pad", '["strength","mobility"]', "Squat on the balance pad with controlled descent.", "https://www.youtube.com/results?search_query=balance+pad+squat+proper+form", 1, "standing", 0),
+        ("fitball-plank", "Fitball plank", "core", "fitball", '["strength","hypertrophy"]', "Hold a plank with forearms on the fitball.", "https://www.youtube.com/results?search_query=stability+ball+plank+proper+form", 1, "floor", 0),
+        ("pullup-negative", "Pull-up negative", "strength", "pull_up_bar", '["strength","hypertrophy"]', "Use a stable step to reach the top position without jumping, then lower slowly.", "https://www.youtube.com/results?search_query=negative+pull+up+proper+form", 1, "standing", 0),
+        ("band-pull-apart", "Resistance band pull-apart", "strength", "resistance_bands", '["strength","hypertrophy","mobility"]', "Pull the band apart at chest height with straight arms.", "https://www.youtube.com/results?search_query=resistance+band+pull+apart+proper+form", 1, "standing", 0),
+        ("pilates-bridge", "Pilates bridge", "core", "pilates_mat", '["strength","mobility"]', "Lie supine and lift hips with slow control.", "https://www.youtube.com/results?search_query=pilates+bridge+proper+form", 1, "floor", 0),
+        ("trx-squat", "TRX squat", "strength", "trx", '["strength","fat_loss"]', "Hold TRX handles and squat with upright torso.", "https://www.youtube.com/results?search_query=TRX+squat+proper+form", 1, "standing", 0),
+        ("standing-calf-raise", "Standing calf raise", "strength", "none", '["strength","hypertrophy"]', "Rise onto toes slowly, hold briefly, and lower.", "https://www.youtube.com/results?search_query=standing+calf+raise+proper+form", 1, "standing", 0),
+        ("band-lateral-walk", "Resistance band lateral walk", "strength", "resistance_bands", '["strength","fat_loss"]', "Walk sideways against band tension with soft knees.", "https://www.youtube.com/results?search_query=resistance+band+lateral+walk+proper+form", 1, "standing", 0),
+        ("fitball-wall-squat", "Fitball wall squat", "strength", "fitball", '["strength","fat_loss"]', "Lean back against fitball on wall and squat to 90 degrees.", "https://www.youtube.com/results?search_query=stability+ball+wall+squat+proper+form", 1, "standing", 0),
+        ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", "https://www.youtube.com/results?search_query=bird+dog+exercise+proper+form", 1, "floor", 0),
+        ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", "https://www.youtube.com/results?search_query=TRX+chest+press+proper+form", 1, "standing", 0),
     ]
     for row in rows:
-        await conn.execute(text("INSERT INTO exercises (slug,name,category,equipment,goals_json,instructions,low_impact,transition,high_impact) VALUES (:s,:n,:c,:e,:g,:i,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), dict(zip(("s","n","c","e","g","i","l","t","h"), row)))
+        await conn.execute(text("INSERT INTO exercises (slug,name,category,equipment,goals_json,instructions,video_url,low_impact,transition,high_impact) VALUES (:s,:n,:c,:e,:g,:i,:v,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, video_url=excluded.video_url, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), dict(zip(("s","n","c","e","g","i","v","l","t","h"), row)))
 
 
 async def init_db():

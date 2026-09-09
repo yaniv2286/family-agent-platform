@@ -137,7 +137,8 @@ async def exercises(category: Optional[str] = None, equipment: Optional[str] = N
     if low_impact is not None: q = q.where(Exercise.low_impact == int(low_impact))
     rows = (await db.execute(q.order_by(Exercise.name))).scalars().all()
     return [{"id": x.id, "slug": x.slug, "name": x.name, "category": x.category, "equipment": x.equipment,
-             "goals": _loads(x.goals_json), "instructions": x.instructions, "low_impact": bool(x.low_impact), "high_impact": bool(x.high_impact)} for x in rows]
+             "goals": _loads(x.goals_json), "instructions": x.instructions, "video_url": x.video_url,
+             "low_impact": bool(x.low_impact), "high_impact": bool(x.high_impact)} for x in rows]
 
 async def _fetch_directives(db: AsyncSession, user_id: int):
     """Query active parent directives for fitness within the given session."""
@@ -193,7 +194,7 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
 async def _plan_response(db, plan):
     rows = (await db.execute(select(PlannedWorkoutExercise, Exercise).join(Exercise).where(PlannedWorkoutExercise.plan_id == plan.id).order_by(PlannedWorkoutExercise.position))).all()
     return {"id": plan.id, "user_id": plan.user_id, "date": plan.planned_date, "status": plan.status, "duration_minutes": plan.duration_minutes,
-            "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
+            "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "video_url": e.video_url, "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
 
 @router.get("/plans/{user_id}")
 async def list_plans(user_id: int, db: AsyncSession = Depends(get_db)):
