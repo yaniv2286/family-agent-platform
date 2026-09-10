@@ -8,9 +8,9 @@ import pytest_asyncio
 
 # Set test environment *before* any local import so database.py and main.py
 # build their engines/clients from these values rather than the real .env DBs.
-os.environ.setdefault("APP_PIN", "test-pin-1234")
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
-os.environ.setdefault("TELEGRAM_CHAT_ID", "123456")
+os.environ["APP_PIN"] = "test-pin-1234"
+os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+os.environ["TELEGRAM_CHAT_ID"] = "123456"
 
 _test_db_dir = tempfile.mkdtemp(prefix="koko-tests-")
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_db_dir}/family_platform_test.db"
