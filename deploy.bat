@@ -1,6 +1,10 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+:: VolatilityHunter is disabled for remote deployment by default (run locally).
+:: Set DEPLOY_VOLATILITYHUNTER=1 to also deploy it to the VPS.
+if not defined DEPLOY_VOLATILITYHUNTER set "DEPLOY_VOLATILITYHUNTER=0"
+
 :: Family Agent Platform — Unified Deploy Script
 :: ==============================================
 :: Deploys Family Agent Platform, NeuralTrader, and VolatilityHunter monitoring to the VPS.
@@ -167,6 +171,7 @@ if %ERRORLEVEL% NEQ 0 (
 :: ---------------------------------------------------------------------------
 :: 4. VolatilityHunter package
 :: ---------------------------------------------------------------------------
+if "%DEPLOY_VOLATILITYHUNTER%"=="0" goto :deploy_stacks
 if not exist "%HUNTER_REPO%\scripts\daily_trading_loop.py" (
     echo [ERROR] VolatilityHunter repository not found at %HUNTER_REPO%
     pause
@@ -249,16 +254,28 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+:deploy_stacks
 :: ---------------------------------------------------------------------------
-:: 5. Deploy all three stacks on the VPS
+:: 5. Deploy Koko and NeuralTrader stacks on the VPS
 :: ---------------------------------------------------------------------------
-echo [INFO] Deploying all stacks on %SERVER%...
-ssh %SSH_OPTS% %SERVER% "docker network inspect family-agents-net >/dev/null 2>&1 || docker network create family-agents-net; cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.zip dataclasses.py numbers.py *.py *.db *.sqlite3 && tar -xzf koko-deploy.tar.gz && rm -f koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && mkdir -p /root/neuraltrader && cd /root/neuraltrader && rm -rf core scripts models docs temp *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/neuraltrader-deploy.tar.gz && rm -f /root/neuraltrader-deploy.tar.gz && docker compose -f docker-compose.yml -p neuraltrader down && docker compose -f docker-compose.yml -p neuraltrader up -d --build && docker compose -p neuraltrader ps && mkdir -p /root/volatilityhunter && cd /root/volatilityhunter && rm -rf src scripts config *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/volatilityhunter-deploy.tar.gz && rm -f /root/volatilityhunter-deploy.tar.gz && docker compose -f docker-compose.yml -p volatilityhunter down && docker compose -f docker-compose.yml -p volatilityhunter up -d --build && docker compose -p volatilityhunter ps"
+echo [INFO] Deploying Koko and NeuralTrader stacks on %SERVER%...
+ssh %SSH_OPTS% %SERVER% "docker network inspect family-agents-net >/dev/null 2>&1 || docker network create family-agents-net; cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.zip dataclasses.py numbers.py *.py *.db *.sqlite3 && tar -xzf koko-deploy.tar.gz && rm -f koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && mkdir -p /root/neuraltrader && cd /root/neuraltrader && rm -rf core scripts models docs temp *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/neuraltrader-deploy.tar.gz && rm -f /root/neuraltrader-deploy.tar.gz && docker compose -f docker-compose.yml -p neuraltrader down && docker compose -f docker-compose.yml -p neuraltrader up -d --build && docker compose -p neuraltrader ps"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Remote deployment failed
     pause
     exit /b %ERRORLEVEL%
+)
+
+if "%DEPLOY_VOLATILITYHUNTER%"=="1" (
+    echo [INFO] Deploying VolatilityHunter stack on %SERVER%...
+    ssh %SSH_OPTS% %SERVER% "mkdir -p /root/volatilityhunter && cd /root/volatilityhunter && rm -rf src scripts config *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/volatilityhunter-deploy.tar.gz && rm -f /root/volatilityhunter-deploy.tar.gz && docker compose -f docker-compose.yml -p volatilityhunter down && docker compose -f docker-compose.yml -p volatilityhunter up -d --build && docker compose -p volatilityhunter ps"
+
+    if %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] VolatilityHunter remote deployment failed
+        pause
+        exit /b %ERRORLEVEL%
+    )
 )
 
 :: ---------------------------------------------------------------------------
@@ -271,7 +288,7 @@ echo [INFO] Running remote health smoke tests...
 ssh %SSH_OPTS% %SERVER% "curl -fsS --max-time 10 https://lugassy-agents.duckdns.org/api/health || echo '[SMOKE] Koko public health check failed'"
 ssh %SSH_OPTS% %SERVER% "docker compose -p koko ps" || echo "[SMOKE] koko stack status check failed"
 ssh %SSH_OPTS% %SERVER% "docker compose -p neuraltrader ps" || echo "[SMOKE] neuraltrader stack status check failed"
-ssh %SSH_OPTS% %SERVER% "docker compose -p volatilityhunter ps" || echo "[SMOKE] volatilityhunter stack status check failed"
+if "%DEPLOY_VOLATILITYHUNTER%"=="1" ssh %SSH_OPTS% %SERVER% "docker compose -p volatilityhunter ps" || echo "[SMOKE] volatilityhunter stack status check failed"
 
 echo [OK] Deployment complete.
 pause
