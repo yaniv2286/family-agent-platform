@@ -15,8 +15,11 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+
+load_dotenv()
 
 
 @dataclass
