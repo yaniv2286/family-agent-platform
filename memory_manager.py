@@ -9,9 +9,13 @@ from database import MemoryEvidence, MemoryFact, ParentDirective, SessionLocal, 
 PRECEDENCE = {
     "safety_constraint": 500,
     "parent_directive": 400,
+    "relationship": 380,
     "goal": 300,
+    "behavior": 260,
     "recommendation": 200,
+    "skill": 220,
     "preference": 100,
+    "episode": 40,
 }
 
 

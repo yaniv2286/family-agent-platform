@@ -174,6 +174,11 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
     "volatilityhunter": _HUNTER_PROFILE,
 }
 
+# Built-in agents that run inside the same process as the Koko backend.
+# When no AGENT_<ID>_URL is configured, the connector dispatches to a local
+# snapshot instead of making an outbound HTTP request.
+BUILTIN_AGENT_IDS: frozenset = frozenset({"koko_math", "koko_english", "fitness", "nutrition"})
+
 
 def _profile_for(agent_id: str) -> AgentProfile:
     return AGENT_PROFILES.get(agent_id.lower(), _DEFAULT_PROFILE)
@@ -263,6 +268,18 @@ class AgentConnector:
             raise ValueError("SSRF: constructed URL escapes agent base")
         return full
 
+    async def _send_local(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+        """Return a local snapshot for a built-in agent instead of an HTTP call."""
+        return {
+            "agent_id": self.agent_id,
+            "mode": "local",
+            "message": (
+                f"Built-in agent '{self.agent_id}' runs in-process. "
+                "Use the direct API endpoints for chat, fitness, etc."
+            ),
+            "received": {"method": method, "path": path, "payload": payload},
+        }
+
     async def _send_single(
         self,
         method: str,
@@ -271,6 +288,10 @@ class AgentConnector:
         timeout: float = DEFAULT_TIMEOUT,
     ) -> dict:
         """Send a single signed request to the agent and return parsed JSON."""
+        # Local built-in agents: skip HTTP when no remote URL is configured.
+        if self.agent_id in BUILTIN_AGENT_IDS and not _agent_url(self.agent_id):
+            return await self._send_local(method, path, payload)
+
         remote_url, secret = await self._resolve_config()
         profile = self._profile
         path = _normalize_path(profile.prefix, path)

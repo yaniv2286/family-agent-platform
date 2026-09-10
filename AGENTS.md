@@ -19,3 +19,55 @@ After completing and verifying any code change, deployment is part of the defini
 ```
 
 Do not report the development task as fully complete until deployment succeeds and the production services are healthy. If deployment fails, report the exact blocker and keep the task open. Never deploy when tests fail.
+
+## Built-In Agents and Remote Agent Configuration
+
+The following agents are built into the Koko backend and run in-process:
+
+- `koko_math` and `koko_english` — accessed via `/api/tutor/chat` and `/api/tutor/english`.
+- `fitness` — accessed via `/api/fitness/*` endpoints.
+- `nutrition` — currently an event-only collaborator triggered by fitness workouts.
+
+By default the `AgentConnector` returns a local snapshot for these agents instead of making an outbound HTTP call. To override this and route control-plane commands to a remote instance, set:
+
+```powershell
+$env:AGENT_KOKO_MATH_URL = "http://localhost:8000"
+$env:AGENT_KOKO_ENGLISH_URL = "http://localhost:8000"
+$env:AGENT_FITNESS_URL = "http://localhost:8000"
+$env:AGENT_NUTRITION_URL = "http://localhost:8000"
+$env:AGENT_DEFAULT_SECRET = "your-shared-secret"
+```
+
+Remote trading agents **require** their own URL and secret:
+
+```powershell
+$env:AGENT_NEURALTRADER_URL = "http://neuraltrader-control:8000"
+$env:AGENT_NEURALTRADER_SECRET = "..."
+$env:AGENT_VOLATILITYHUNTER_URL = "http://volatilityhunter_monitoring:8080"
+$env:AGENT_VOLATILITYHUNTER_SECRET = "..."
+```
+
+Without these, control-plane telemetry/commands for NeuralTrader and VolatilityHunter will fail.
+
+## Agent Mesh and Platform Agents
+
+The platform now uses an **Agent Mesh** (`agent_mesh.py`) for in-process agent collaboration:
+
+- **Publish/subscribe events** (fire-and-forget): e.g. `fitness.workout_completed` triggers the nutrition agent.
+- **Request/response asks** (blocking with audit trail): any agent can `await agent_mesh.ask(to_agent, intent, ...)` and get a result.
+
+Built-in platform agents are registered in `registered_agents` on startup and loaded dynamically from `agent_loader.py`:
+
+- `orchestrator` — meta-agent that runs scheduled intents (`daily_summary`) and coordinates other agents.
+- `messenger` — cross-channel messaging (Telegram today, email/WhatsApp stubs for the future).
+- `data` — read-only data/memory query agent for other agents to ask questions about family data.
+- `nutrition` — full agent with its own endpoints and mesh handlers.
+- `fitness` — existing Coach agent.
+- `koko_math` / `koko_english` — existing tutors.
+
+To add a new built-in agent:
+
+1. Create its module under `agents/` (or at the root) and expose a FastAPI `router`.
+2. Add it to `database.BUILTIN_AGENTS` with `is_builtin=1`, `module_path`, and `router_attr="router"`.
+3. Register any mesh handlers with `agent_mesh.on_event(...)` or `agent_mesh.on_ask(...)`.
+4. Run the mock test suite to ensure no regressions.

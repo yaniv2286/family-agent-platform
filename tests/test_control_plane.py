@@ -130,7 +130,7 @@ async def test_list_agents_includes_built_ins(client, parent_headers):
     resp = await client.get("/api/control/agents", headers=parent_headers)
     assert resp.status_code == 200
     ids = {a["agent_id"] for a in resp.json()["agents"]}
-    assert ids == {"koko_math", "koko_english", "fitness", "nutrition", "neuraltrader", "volatilityhunter"}
+    assert ids == {"koko_math", "koko_english", "fitness", "nutrition", "neuraltrader", "volatilityhunter", "orchestrator", "messenger", "data"}
 
 
 async def test_child_only_sees_permitted_agents(client, child_headers):

@@ -24,6 +24,11 @@ async def _scheduled_job():
     await run_daily_orchestration()
 
 
+async def _heartbeat_job():
+    """Write a periodic heartbeat log line for external watchdogs."""
+    logger.info("[HEARTBEAT] Koko scheduler is alive")
+
+
 def start_scheduler():
     """Register and start the daily orchestration job. Safe to call once at
     FastAPI startup.
@@ -32,6 +37,12 @@ def start_scheduler():
         _scheduled_job,
         trigger=CronTrigger(hour=ORCHESTRATOR_HOUR, minute=ORCHESTRATOR_MINUTE, timezone=LOCAL_TIMEZONE),
         id="daily_orchestration",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _heartbeat_job,
+        trigger=CronTrigger(minute="0", timezone=LOCAL_TIMEZONE),
+        id="hourly_heartbeat",
         replace_existing=True,
     )
     scheduler.start()

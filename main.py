@@ -6,8 +6,14 @@ import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
+
+APP_VERSION = "1.1.0"
+_PROCESS_START = time.time()
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+import exceptions
+from exceptions import AppError
+from alert_router import alert
 from database import (
     init_db,
     get_db,
@@ -29,10 +35,13 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
 from scheduler import start_scheduler, stop_scheduler
-from orchestrator import run_daily_orchestration, check_telegram_feedback
-from fitness_agent import router as fitness_router
+from orchestrator import run_daily_orchestration, router as orchestrator_router
 from collaboration_api import router as collaboration_router
 from control_plane import router as control_plane_router
+from fitness_agent import router as fitness_router
+from agents.messenger_agent import router as messenger_router
+from agents.data_agent import router as data_router
+from agents.nutrition_agent import router as nutrition_router
 from rbac import resolve_role
 
 
@@ -81,7 +90,17 @@ class EndSessionRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize the databases
+    # Startup: Validate configuration and dependencies before opening the API.
+    from scripts.startup_validator import validate
+    result = await validate()
+    if not result.ok:
+        for error in result.errors:
+            logger.error(f"Startup validation failed: {error}")
+        raise RuntimeError(f"Startup validation failed: {'; '.join(result.errors)}")
+    for warning in result.warnings:
+        logger.warning(f"Startup validation warning: {warning}")
+
+    # Startup: Initialize the databases.
     await init_db()
     await init_tutor_history_db()
     start_scheduler()
@@ -98,24 +117,52 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure loguru plain-text file logging
+# Load all API routers once at import time. Router registration must not happen
+# inside lifespan() because that would mutate the global app on every startup
+# and create merged-lifespan recursion.
+for _router in (
+    fitness_router,
+    collaboration_router,
+    control_plane_router,
+    orchestrator_router,
+    messenger_router,
+    data_router,
+    nutrition_router,
+):
+    app.include_router(_router)
+
+# Configure loguru structured logging.
 os.makedirs("logs", exist_ok=True)
 logger.remove()
+
+_SERVICE = "koko"
+_LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()
+
+if _LOG_FORMAT == "json":
+    _FILE_FORMAT = "{\"time\":\"{time:YYYY-MM-DDTHH:mm:ssZ}\",\"service\":\"" + _SERVICE + "\",\"correlation_id\":\"{extra[request_id]}\",\"level\":\"{level}\",\"name\":\"{name}\",\"function\":\"{function}\",\"line\":{line},\"message\":\"{message}\"}{exception}" 
+    _STDERR_FORMAT = _FILE_FORMAT
+else:
+    _FILE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | service={extra[service]} | correlation_id={extra[request_id]} | {level: <8} | {name}:{function}:{line} | {message}{exception}"
+    _STDERR_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}{exception}"
+
+logger.configure(extra={"service": _SERVICE, "request_id": "none"})
 logger.add(
     "logs/tutor_app_{time:YYYY-MM-DD}.log",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}{exception}",
+    format=_FILE_FORMAT,
     rotation="00:00",
     retention="14 days",
     enqueue=True,
     encoding="utf-8",
+    level="INFO",
 )
-logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True)
+logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True, format=_STDERR_FORMAT)
 
 @app.middleware("http")
 async def pin_middleware(request: Request, call_next):
+    exempt = {"/api/messenger/webhook/telegram", "/api/health"}
     if (
         request.url.path.startswith("/api/")
-        and request.url.path != "/api/telegram/webhook"
+        and request.url.path not in exempt
     ):
         pin = request.headers.get("x-app-pin")
         role = resolve_role(pin)
@@ -148,17 +195,78 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-# Mount static files and include routers
+# Static files are mounted here; all API routers are loaded inside lifespan()
+# so startup validation and database initialization run first.
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.include_router(fitness_router)
-app.include_router(collaboration_router)
-app.include_router(control_plane_router)
+
+
+@app.get("/api/health")
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Public health endpoint for load balancers and Docker healthchecks.
+
+    Verifies the main database and the tutor history database are reachable.
+    """
+    checks = {"main_db": False, "tutor_history_db": False}
+    try:
+        await db.execute(text("SELECT 1"))
+        checks["main_db"] = True
+    except Exception as exc:
+        logger.exception("Health check failed for main database")
+        checks["main_db_error"] = str(exc)
+
+    try:
+        from database import TutorHistorySessionLocal
+        async with TutorHistorySessionLocal() as tutor_db:
+            await tutor_db.execute(text("SELECT 1"))
+        checks["tutor_history_db"] = True
+    except Exception as exc:
+        logger.exception("Health check failed for tutor history database")
+        checks["tutor_history_db_error"] = str(exc)
+
+    healthy = all(checks.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "ok" if healthy else "degraded",
+            "version": APP_VERSION,
+            "uptime_seconds": round(time.time() - _PROCESS_START, 3),
+            "checks": checks,
+        },
+    )
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    request_id = getattr(request.state, "request_id", "unknown")
+    level = "error" if not isinstance(exc, (exceptions.ConfigError, exceptions.SecurityError)) else "critical"
+    await alert(
+        level=level,
+        component=exc.component,
+        message=exc.message,
+        error=exc,
+        request_id=request_id,
+        exc=exc,
+    )
+    status_code = 503 if isinstance(exc, (exceptions.ConfigError, exceptions.DataError, exceptions.AgentError)) else 500
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "error", "message": exc.message},
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")
     logger.bind(request_id=request_id).exception("Unhandled exception")
+    # Route critical unexpected errors to configured alert channels.
+    await alert(
+        level="error",
+        component="unknown",
+        message=f"Unhandled {type(exc).__name__}: {str(exc)[:200]}",
+        request_id=request_id,
+        exc=exc,
+    )
     return JSONResponse(
         status_code=500,
         content={"status": "error", "message": "Internal error occurred"},
@@ -524,20 +632,6 @@ async def end_session(request: EndSessionRequest, db: AsyncSession = Depends(get
         await db.rollback()
         logger.bind(error=str(e)).exception("End session failed")
         return {"error": str(e)}
-
-
-@app.post("/api/telegram/webhook")
-async def telegram_webhook(request: Request):
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    expected = os.getenv("TELEGRAM_SECRET_TOKEN")
-    if not expected or secret != expected:
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    try:
-        data = await request.json()
-    except Exception:
-        return JSONResponse({"detail": "Invalid JSON"}, status_code=400)
-    await check_telegram_feedback(data)
-    return {"status": "ok"}
 
 
 if __name__ == "__main__":

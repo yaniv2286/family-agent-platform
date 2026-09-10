@@ -1,20 +1,20 @@
 """Meta-Agent (Orchestrator) for the Family Agent Platform.
 
-Runs as a scheduled background job (see scheduler.py) that reviews all
-children's math/English activity for the day and sends Yaniv a single daily
-summary on Telegram, so he can forward the highlights to the family group
-manually.
+Runs as a scheduled background job (see scheduler.py) and coordinates other
+agents to produce family reports and escalations. Intents are small,
+testable plugins so the orchestrator stays easy to extend.
 """
 import os
 import re
-from typing import Optional
+from typing import Awaitable, Callable, Dict
 from datetime import datetime, time as dt_time, timezone
 from zoneinfo import ZoneInfo
 
-import httpx
+from fastapi import APIRouter
 from loguru import logger
 from sqlalchemy import select
 
+from agent_mesh import agent_mesh
 from database import (
     SessionLocal,
     User,
@@ -23,26 +23,13 @@ from database import (
     ChatHistory,
     WorkoutPerformance,
     MemoryFact,
-    add_parent_feedback,
 )
+
+router = APIRouter(prefix="/api/orchestrator", tags=["Orchestrator"])
 
 SUBJECTS = ("math", "english")
 SUBJECT_LABELS = {"math": "חשבון", "english": "אנגלית"}
 APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Jerusalem"))
-
-# In-memory offset for Telegram long-polling. Starting at 0 means the first
-# poll only probes the latest update id to avoid reprocessing old messages.
-_LAST_TELEGRAM_UPDATE_ID = 0
-
-
-def _detect_feedback_subject(text: str) -> Optional[str]:
-    """Guess the subject a parent feedback refers to (math, english, or None)."""
-    lowered = text.lower()
-    if any(k in lowered for k in ("math", "חשבון", "מתמטיקה", "כפל", "חילוק", "חיבור", "חיסור", "לוח הכפל", "אריתמטיקה")):
-        return "math"
-    if any(k in lowered for k in ("english", "אנגלית", "anglit", "אנגלי", "אנגליה", "grammar", "vocabulary")):
-        return "english"
-    return None
 
 
 def _local_now() -> datetime:
@@ -364,32 +351,26 @@ def _build_fallback_summary(report_data: list) -> str:
     return "\n".join(parts)
 
 
-async def send_telegram_message(text: str) -> bool:
-    """Send a message to Yaniv via the Telegram Bot API.
+async def _send_via_messenger(text: str, channel: str = "telegram") -> bool:
+    """Ask the messenger agent to deliver text to a channel.
 
-    Requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to be set in the
-    environment. Returns True on success, False otherwise (never raises, so
-    a Telegram outage doesn't crash the scheduled job).
+    Returns True when the messenger reports success, False otherwise. This
+    keeps orchestrator channel-agnostic: it does not know about Telegram
+    tokens.
     """
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not bot_token or bot_token == "your_telegram_bot_token_here" or not chat_id:
-        logger.warning(
-            "TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not configured; "
-            "skipping daily summary Telegram send."
-        )
-        return False
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json={"chat_id": chat_id, "text": text})
-            response.raise_for_status()
-        logger.info("Daily summary sent to Telegram successfully")
-        return True
+        response = await agent_mesh.ask(
+            to_agent="messenger",
+            intent="send_message",
+            user_id=0,
+            child_id=0,
+            source_agent="orchestrator",
+            payload={"channel": channel, "text": text},
+            timeout=20.0,
+        )
+        return response.get("ok") and response.get("result", {}).get("sent") is True
     except Exception:
-        logger.exception("Failed to send daily summary to Telegram")
+        logger.exception("Failed to ask messenger to send message")
         return False
 
 
@@ -399,7 +380,7 @@ async def run_daily_orchestration():
     try:
         report_data = await gather_daily_report_data()
         summary_text = await _generate_summary_text(report_data)
-        sent = await send_telegram_message(summary_text)
+        sent = await _send_via_messenger(summary_text, channel="telegram")
         logger.info("Daily orchestration run finished", telegram_sent=sent)
         return {"report_data": report_data, "summary_text": summary_text, "telegram_sent": sent}
     except Exception:
@@ -407,71 +388,45 @@ async def run_daily_orchestration():
         raise
 
 
-async def check_telegram_feedback(updates):
-    """Process Telegram parent feedback updates delivered by webhook."""
-    global _LAST_TELEGRAM_UPDATE_ID
+# ---------------------------------------------------------------------------
+# Generic intent registry
+# ---------------------------------------------------------------------------
+IntentHandler = Callable[[dict], Awaitable[dict]]
+INTENTS: Dict[str, IntentHandler] = {
+    "daily_summary": run_daily_orchestration,
+}
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not chat_id or not updates:
-        return
 
-    if isinstance(updates, dict):
-        updates = [updates]
-
+async def handle_run_intent(event, payload):
+    """Mesh handler: execute a registered orchestrator intent."""
+    intent = payload.get("intent")
+    if not intent or intent not in INTENTS:
+        return {"ok": False, "error": f"unknown intent: {intent}"}
     try:
-        children = await _get_children()
-        child_names = [c.name for c in children]
+        result = await INTENTS[intent](**payload.get("kwargs", {}))
+        return {"ok": True, "result": result}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
-        new_offset = _LAST_TELEGRAM_UPDATE_ID
-        for update in updates:
-            msg = update.get("message") or update.get("edited_message")
-            if not msg:
-                continue
-            if str(msg.get("chat", {}).get("id")) != str(chat_id):
-                continue
-            if msg.get("from", {}).get("is_bot"):
-                continue
-            text = (msg.get("text") or "").strip()
-            if not text:
-                continue
 
-            stored_targets = []
-            instruction_lines = [line.strip(" -•\t") for line in text.splitlines() if line.strip(" -•\t")]
-            for instruction in instruction_lines:
-                subject = _detect_feedback_subject(instruction)
-                matched_children = [name for name in child_names if name and name in instruction]
-                if matched_children:
-                    for child_name in matched_children:
-                        await add_parent_feedback(
-                            child_name=child_name,
-                            subject=subject,
-                            message=instruction,
-                        )
-                        stored_targets.append(
-                            f"{child_name} / {SUBJECT_LABELS.get(subject, 'כל המקצועות')}"
-                        )
-                else:
-                    await add_parent_feedback(
-                        child_name=None,
-                        subject=subject,
-                        message=instruction,
-                    )
-                    stored_targets.append(
-                        f"כל הילדים / {SUBJECT_LABELS.get(subject, 'כל המקצועות')}"
-                    )
+agent_mesh.on_ask("orchestrator", "run_intent", handle_run_intent)
 
-            logger.info(
-                "Stored parent directives from Telegram",
-                targets=stored_targets,
-                text=text[:120],
-            )
-            targets_text = "\n".join(f"• {target}" for target in stored_targets)
-            await send_telegram_message(
-                f"✅ ההנחיות התקבלו ונשמרו בזיכרון המתמשך:\n{targets_text}"
-            )
 
-            new_offset = max(new_offset, update.get("update_id", new_offset))
+@router.post("/run-now")
+async def orchestrator_run_now():
+    """Manually trigger the daily orchestration intent."""
+    result = await run_daily_orchestration()
+    return {
+        "status": "ok",
+        "telegram_sent": result["telegram_sent"],
+        "summary_text": result["summary_text"],
+    }
 
-        _LAST_TELEGRAM_UPDATE_ID = new_offset
-    except Exception:
-        logger.exception("Telegram feedback processing failed")
+
+@router.post("/intents/{intent}")
+async def run_intent_endpoint(intent: str):
+    """Run any registered orchestrator intent by name."""
+    if intent not in INTENTS:
+        return {"status": "error", "message": f"unknown intent: {intent}"}
+    result = await INTENTS[intent]()
+    return {"status": "ok", "intent": intent, "result": result}

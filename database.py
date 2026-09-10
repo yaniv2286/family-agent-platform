@@ -312,6 +312,11 @@ class RegisteredAgent(Base):
     registered_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     remote_url = Column(String, nullable=True)
     secret_env = Column(String, nullable=True)
+    # Built-in agents only: Python module path (e.g. "fitness_agent" or "agents.messenger_agent")
+    # and the attribute that exposes the FastAPI APIRouter (default "router").
+    module_path = Column(String, nullable=True)
+    router_attr = Column(String, nullable=True, default="router")
+    is_builtin = Column(Integer, nullable=False, default=0)
     config_json = Column(Text, nullable=False, default="{}")
 
 
@@ -384,6 +389,12 @@ BUILTIN_AGENTS = [
         "description": "Interactive math mentor for children.",
         "kind": "tutor",
         "capabilities": ["chat", "session_end", "speech"],
+        "is_builtin": 1,
+        # Tutors are wired directly through legacy /api/tutor/* endpoints.
+        "module_path": None,
+        "router_attr": None,
+        "remote_url": None,
+        "secret_env": None,
     },
     {
         "agent_id": "koko_english",
@@ -391,13 +402,23 @@ BUILTIN_AGENTS = [
         "description": "Interactive English mentor for children.",
         "kind": "tutor",
         "capabilities": ["chat", "session_end", "speech"],
+        "is_builtin": 1,
+        "module_path": None,
+        "router_attr": None,
+        "remote_url": None,
+        "secret_env": None,
     },
     {
         "agent_id": "fitness",
-        "name": "Fitness Agent",
-        "description": "Family fitness planning and tracking.",
+        "name": "Coach",
+        "description": "Personal fitness coach that learns your history, avoids exercises that caused pain, and plans workouts just for you.",
         "kind": "wellness",
         "capabilities": ["plan", "log", "analytics", "habits"],
+        "is_builtin": 1,
+        "module_path": "fitness_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
     },
     {
         "agent_id": "nutrition",
@@ -405,6 +426,47 @@ BUILTIN_AGENTS = [
         "description": "Post-activity nutrition recommendations.",
         "kind": "wellness",
         "capabilities": ["recommend", "advise"],
+        "is_builtin": 1,
+        "module_path": "agents.nutrition_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
+    },
+    {
+        "agent_id": "orchestrator",
+        "name": "Orchestrator",
+        "description": "Meta-agent that coordinates other agents, schedules reports, and escalates to parents.",
+        "kind": "platform",
+        "capabilities": ["schedule", "summarize", "escalate"],
+        "is_builtin": 1,
+        "module_path": "orchestrator",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
+    },
+    {
+        "agent_id": "messenger",
+        "name": "Messenger",
+        "description": "Cross-channel messaging agent for Telegram, email, and future channels.",
+        "kind": "platform",
+        "capabilities": ["send_message"],
+        "is_builtin": 1,
+        "module_path": "agents.messenger_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
+    },
+    {
+        "agent_id": "data",
+        "name": "Data Steward",
+        "description": "Read-only data and memory query agent for the platform.",
+        "kind": "platform",
+        "capabilities": ["query", "summarize_data"],
+        "is_builtin": 1,
+        "module_path": "agents.data_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
     },
     {
         "agent_id": "neuraltrader",
@@ -412,6 +474,11 @@ BUILTIN_AGENTS = [
         "description": "Paper trading execution agent.",
         "kind": "trading",
         "capabilities": ["paper_trade", "analytics"],
+        "is_builtin": 0,
+        "module_path": None,
+        "router_attr": None,
+        "remote_url": None,
+        "secret_env": None,
     },
     {
         "agent_id": "volatilityhunter",
@@ -419,6 +486,11 @@ BUILTIN_AGENTS = [
         "description": "Market volatility monitoring agent.",
         "kind": "trading",
         "capabilities": ["monitor", "analytics"],
+        "is_builtin": 0,
+        "module_path": None,
+        "router_attr": None,
+        "remote_url": None,
+        "secret_env": None,
     },
 ]
 
@@ -426,14 +498,31 @@ BUILTIN_AGENTS = [
 async def _seed_registered_agents(conn):
     for agent in BUILTIN_AGENTS:
         caps = agent.get("capabilities", [])
+        params = {
+            "agent_id": agent["agent_id"],
+            "name": agent["name"],
+            "description": agent.get("description"),
+            "kind": agent["kind"],
+            "remote_url": agent.get("remote_url"),
+            "secret_env": agent.get("secret_env"),
+            "module_path": agent.get("module_path"),
+            "router_attr": agent.get("router_attr"),
+            "is_builtin": agent.get("is_builtin", 0),
+        }
         await conn.execute(
             text(
-                "INSERT INTO registered_agents (agent_id, name, description, kind, status, registered_at, config_json) "
-                "VALUES (:agent_id, :name, :description, :kind, 'active', CURRENT_TIMESTAMP, '{}') "
-                "ON CONFLICT(agent_id) DO UPDATE SET name=excluded.name, "
-                "description=excluded.description, kind=excluded.kind, status=excluded.status"
+                "INSERT INTO registered_agents ("
+                "agent_id, name, description, kind, status, registered_at, "
+                "remote_url, secret_env, module_path, router_attr, is_builtin, config_json"
+                ") VALUES ("
+                ":agent_id, :name, :description, :kind, 'active', CURRENT_TIMESTAMP, "
+                ":remote_url, :secret_env, :module_path, :router_attr, :is_builtin, '{}'"
+                ") ON CONFLICT(agent_id) DO UPDATE SET "
+                "name=excluded.name, description=excluded.description, kind=excluded.kind, "
+                "status=excluded.status, module_path=excluded.module_path, "
+                "router_attr=excluded.router_attr, is_builtin=excluded.is_builtin"
             ),
-            agent,
+            params,
         )
         for cap in caps:
             await conn.execute(
@@ -448,6 +537,14 @@ async def _seed_registered_agents(conn):
 
 async def _migrate_main_schema(conn):
     """Additive SQLite migrations: never drop production health/fitness data."""
+    agents = await _table_columns(conn, "registered_agents")
+    if agents:
+        if "module_path" not in agents:
+            await conn.execute(text("ALTER TABLE registered_agents ADD COLUMN module_path VARCHAR"))
+        if "router_attr" not in agents:
+            await conn.execute(text("ALTER TABLE registered_agents ADD COLUMN router_attr VARCHAR DEFAULT 'router'"))
+        if "is_builtin" not in agents:
+            await conn.execute(text("ALTER TABLE registered_agents ADD COLUMN is_builtin INTEGER NOT NULL DEFAULT 0"))
     profile = await _table_columns(conn, "user_fitness_profile")
     if profile and "preferred_duration_minutes" not in profile:
         await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN preferred_duration_minutes INTEGER NOT NULL DEFAULT 30"))
@@ -471,27 +568,29 @@ async def _migrate_main_schema(conn):
 
 
 async def _seed_exercises(conn):
+    # Curated short-form YouTube links to proper-form demonstrations.
+    # Format: https://youtu.be/<video_id>
     rows = [
-        ("band-row", "Resistance band row", "strength", "resistance_bands", '["strength","hypertrophy"]', "Stand tall and pull with controlled tempo.", "https://www.youtube.com/results?search_query=resistance+band+row+proper+form", 1, "standing", 0),
-        ("chair-squat", "Chair squat", "strength", "none", '["strength","fat_loss"]', "Sit back to a stable chair and rise slowly.", "https://www.youtube.com/results?search_query=chair+squat+proper+form", 1, "standing", 0),
-        ("wall-pushup", "Wall push-up", "strength", "none", '["strength","hypertrophy"]', "Use a wall and keep a straight controlled line.", "https://www.youtube.com/results?search_query=wall+push+up+proper+form", 1, "standing", 0),
-        ("band-curl", "Resistance band curl", "strength", "resistance_bands", '["strength","hypertrophy"]', "Curl without swinging.", "https://www.youtube.com/results?search_query=resistance+band+biceps+curl+proper+form", 1, "standing", 0),
-        ("seated-march", "Seated march", "cardio", "none", '["fat_loss","mobility"]', "March gently while seated.", "https://www.youtube.com/results?search_query=seated+march+exercise+proper+form", 1, "seated", 0),
-        ("dead-bug", "Dead bug", "core", "pilates_mat", '["strength","mobility"]', "Move opposite limbs slowly while supine.", "https://www.youtube.com/results?search_query=dead+bug+exercise+proper+form", 1, "floor", 0),
-        ("jumping-jacks", "Jumping jacks", "cardio", "none", '["fat_loss"]', "Jump feet and arms apart and together.", "https://www.youtube.com/results?search_query=jumping+jacks+proper+form", 0, "standing", 1),
-        ("trx-row", "TRX row", "strength", "trx", '["strength","hypertrophy"]', "Maintain body alignment and row slowly.", "https://www.youtube.com/results?search_query=TRX+row+proper+form", 1, "standing", 0),
-        ("balance-board-stand", "Balance board stand", "balance", "balance_board", '["mobility","strength"]', "Stand on the balance board with soft knees and hold steady.", "https://www.youtube.com/results?search_query=balance+board+standing+exercise+beginner", 1, "standing", 0),
-        ("balance-pad-squat", "Balance pad squat", "strength", "balance_pad", '["strength","mobility"]', "Squat on the balance pad with controlled descent.", "https://www.youtube.com/results?search_query=balance+pad+squat+proper+form", 1, "standing", 0),
-        ("fitball-plank", "Fitball plank", "core", "fitball", '["strength","hypertrophy"]', "Hold a plank with forearms on the fitball.", "https://www.youtube.com/results?search_query=stability+ball+plank+proper+form", 1, "floor", 0),
-        ("pullup-negative", "Pull-up negative", "strength", "pull_up_bar", '["strength","hypertrophy"]', "Use a stable step to reach the top position without jumping, then lower slowly.", "https://www.youtube.com/results?search_query=negative+pull+up+proper+form", 1, "standing", 0),
-        ("band-pull-apart", "Resistance band pull-apart", "strength", "resistance_bands", '["strength","hypertrophy","mobility"]', "Pull the band apart at chest height with straight arms.", "https://www.youtube.com/results?search_query=resistance+band+pull+apart+proper+form", 1, "standing", 0),
-        ("pilates-bridge", "Pilates bridge", "core", "pilates_mat", '["strength","mobility"]', "Lie supine and lift hips with slow control.", "https://www.youtube.com/results?search_query=pilates+bridge+proper+form", 1, "floor", 0),
-        ("trx-squat", "TRX squat", "strength", "trx", '["strength","fat_loss"]', "Hold TRX handles and squat with upright torso.", "https://www.youtube.com/results?search_query=TRX+squat+proper+form", 1, "standing", 0),
-        ("standing-calf-raise", "Standing calf raise", "strength", "none", '["strength","hypertrophy"]', "Rise onto toes slowly, hold briefly, and lower.", "https://www.youtube.com/results?search_query=standing+calf+raise+proper+form", 1, "standing", 0),
-        ("band-lateral-walk", "Resistance band lateral walk", "strength", "resistance_bands", '["strength","fat_loss"]', "Walk sideways against band tension with soft knees.", "https://www.youtube.com/results?search_query=resistance+band+lateral+walk+proper+form", 1, "standing", 0),
-        ("fitball-wall-squat", "Fitball wall squat", "strength", "fitball", '["strength","fat_loss"]', "Lean back against fitball on wall and squat to 90 degrees.", "https://www.youtube.com/results?search_query=stability+ball+wall+squat+proper+form", 1, "standing", 0),
-        ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", "https://www.youtube.com/results?search_query=bird+dog+exercise+proper+form", 1, "floor", 0),
-        ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", "https://www.youtube.com/results?search_query=TRX+chest+press+proper+form", 1, "standing", 0),
+        ("band-row", "Resistance band row", "strength", "resistance_bands", '["strength","hypertrophy"]', "Stand tall and pull with controlled tempo.", "https://youtu.be/lHuGxZZ09nY", 1, "standing", 0),
+        ("chair-squat", "Chair squat", "strength", "none", '["strength","fat_loss"]', "Sit back to a stable chair and rise slowly.", "https://youtu.be/fNpFifF4PLU", 1, "standing", 0),
+        ("wall-pushup", "Wall push-up", "strength", "none", '["strength","hypertrophy"]', "Use a wall and keep a straight controlled line.", "https://youtu.be/QpMTk21EmaM", 1, "standing", 0),
+        ("band-curl", "Resistance band curl", "strength", "resistance_bands", '["strength","hypertrophy"]', "Curl without swinging.", "https://youtu.be/pXS-fSPWpk8", 1, "standing", 0),
+        ("seated-march", "Seated march", "cardio", "none", '["fat_loss","mobility"]', "March gently while seated.", "https://youtu.be/OfH6a_pZ4dE", 1, "seated", 0),
+        ("dead-bug", "Dead bug", "core", "pilates_mat", '["strength","mobility"]', "Move opposite limbs slowly while supine.", "https://youtu.be/GbSC02oU3To", 1, "floor", 0),
+        ("jumping-jacks", "Jumping jacks", "cardio", "none", '["fat_loss"]', "Jump feet and arms apart and together.", "https://youtu.be/iSSAk4XCsRA", 0, "standing", 1),
+        ("trx-row", "TRX row", "strength", "trx", '["strength","hypertrophy"]', "Maintain body alignment and row slowly.", "https://youtu.be/N_14s8zFOms", 1, "standing", 0),
+        ("balance-board-stand", "Balance board stand", "balance", "balance_board", '["mobility","strength"]', "Stand on the balance board with soft knees and hold steady.", "https://youtu.be/KTYF2ULADzg", 1, "standing", 0),
+        ("balance-pad-squat", "Balance pad squat", "strength", "balance_pad", '["strength","mobility"]', "Squat on the balance pad with controlled descent.", "https://youtu.be/uX1VushX7PM", 1, "standing", 0),
+        ("fitball-plank", "Fitball plank", "core", "fitball", '["strength","hypertrophy"]', "Hold a plank with forearms on the fitball.", "https://youtu.be/AqnN2_gt9Ko", 1, "floor", 0),
+        ("pullup-negative", "Pull-up negative", "strength", "pull_up_bar", '["strength","hypertrophy"]', "Use a stable step to reach the top position without jumping, then lower slowly.", "https://youtu.be/gbPURTSxQLY", 1, "standing", 0),
+        ("band-pull-apart", "Resistance band pull-apart", "strength", "resistance_bands", '["strength","hypertrophy","mobility"]', "Pull the band apart at chest height with straight arms.", "https://youtu.be/vXcji-UoreQ", 1, "standing", 0),
+        ("pilates-bridge", "Pilates bridge", "core", "pilates_mat", '["strength","mobility"]', "Lie supine and lift hips with slow control.", "https://youtu.be/j6A3YhGjsr8", 1, "floor", 0),
+        ("trx-squat", "TRX squat", "strength", "trx", '["strength","fat_loss"]', "Hold TRX handles and squat with upright torso.", "https://youtu.be/gvtkh63UeRg", 1, "standing", 0),
+        ("standing-calf-raise", "Standing calf raise", "strength", "none", '["strength","hypertrophy"]', "Rise onto toes slowly, hold briefly, and lower.", "https://youtu.be/gwLzBJYoWlI", 1, "standing", 0),
+        ("band-lateral-walk", "Resistance band lateral walk", "strength", "resistance_bands", '["strength","fat_loss"]', "Walk sideways against band tension with soft knees.", "https://youtu.be/M5uxEQH5BUM", 1, "standing", 0),
+        ("fitball-wall-squat", "Fitball wall squat", "strength", "fitball", '["strength","fat_loss"]', "Lean back against fitball on wall and squat to 90 degrees.", "https://youtu.be/rdpFZtaIwKc", 1, "standing", 0),
+        ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", "https://youtu.be/xEDnlOxeJH4", 1, "floor", 0),
+        ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", "https://youtu.be/uutnRHSbFgM", 1, "standing", 0),
     ]
     for row in rows:
         await conn.execute(text("INSERT INTO exercises (slug,name,category,equipment,goals_json,instructions,video_url,low_impact,transition,high_impact) VALUES (:s,:n,:c,:e,:g,:i,:v,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, video_url=excluded.video_url, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), dict(zip(("s","n","c","e","g","i","v","l","t","h"), row)))

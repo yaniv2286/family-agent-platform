@@ -303,20 +303,20 @@ class TestOrchestrator:
     async def test_telegram_feedback_is_stored_per_child_and_acknowledged(
         self, monkeypatch
     ):
-        import orchestrator
+        from agents import messenger_agent
 
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
         monkeypatch.setattr(
-            orchestrator,
+            messenger_agent,
             "_get_children",
             AsyncMock(
                 return_value=[SimpleNamespace(name="נויה"), SimpleNamespace(name="ינאי")]
             ),
         )
         send_mock = AsyncMock(return_value=True)
-        monkeypatch.setattr(orchestrator, "send_telegram_message", send_mock)
+        monkeypatch.setattr(messenger_agent, "send_telegram_message", send_mock)
 
-        await orchestrator.check_telegram_feedback(
+        await messenger_agent.check_telegram_feedback(
             {
                 "update_id": 987654,
                 "message": {

@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from num2words import num2words
 from loguru import logger
 from dotenv import load_dotenv
@@ -18,18 +18,19 @@ from database import (
     update_student_profile_summary,
 )
 from memory_manager import memory_manager
+from memory_layer import MemoryCategory, user_memory
 
 # Ensure environment variables from .env are loaded even if this module is
 # imported before database.py (which also calls load_dotenv()).
 load_dotenv()
 
-# Model selection (strict, cost-optimized): gpt-5.6-luna is the primary model.
-# gpt-4o-mini is used only as an automatic fallback if the primary model
-# becomes unavailable for this account/SDK (e.g. deprecated, quota, etc.).
-PRIMARY_MODEL = "gpt-5.6-luna"
+# Model selection: gpt-4o is the primary model. gpt-4o-mini is used only as an
+# automatic fallback if the primary model becomes unavailable for this
+# account/SDK (e.g. deprecated, quota, etc.).
+PRIMARY_MODEL = "gpt-4o"
 FALLBACK_MODEL = "gpt-4o-mini"
 
-# Newer reasoning-style models (like gpt-5.6-luna) require max_completion_tokens
+# Newer reasoning-style models (like o1/o3) require max_completion_tokens
 # instead of max_tokens, and only support the default temperature (1) - they
 # reject any explicit temperature override. Classic chat models (gpt-4o-mini)
 # use the older max_tokens/temperature parameters.
@@ -99,6 +100,62 @@ def _parse_json_reply(raw: str) -> Tuple[str, int]:
         return (reply_text, max(1, min(points, 5)))
 
     return (_unescape(raw), 1)
+
+
+def _parse_insights(raw: str) -> List[Dict[str, Any]]:
+    """Parse the insight-extraction LLM reply into a list of insight dicts.
+
+    Tolerates malformed or mismatched JSON silently so extraction is always
+    best-effort.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        try:
+            data, _ = json.JSONDecoder().raw_decode(raw)
+        except Exception:
+            return []
+
+    if not isinstance(data, dict):
+        return []
+
+    insights = data.get("insights") if isinstance(data.get("insights"), list) else []
+    valid = []
+    for item in insights:
+        if not isinstance(item, dict):
+            continue
+        category = item.get("category", MemoryCategory.PREFERENCE)
+        if category not in {
+            MemoryCategory.FACT,
+            MemoryCategory.PREFERENCE,
+            MemoryCategory.SKILL,
+            MemoryCategory.BEHAVIOR,
+            MemoryCategory.RELATIONSHIP,
+        }:
+            category = MemoryCategory.PREFERENCE
+        key = str(item.get("key", "unknown"))[:80]
+        value = item.get("value", "")
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        else:
+            value = str(value)[:1000]
+        try:
+            confidence = float(item.get("confidence", 0.8))
+        except (TypeError, ValueError):
+            confidence = 0.8
+        valid.append(
+            {
+                "category": category,
+                "key": key,
+                "value": value,
+                "confidence": max(0.0, min(1.0, confidence)),
+            }
+        )
+    return valid
 
 
 _async_client: Optional[AsyncOpenAI] = None
@@ -248,6 +305,65 @@ class BaseAgent:
                     "interests": user.interests,
                 }
             return None
+
+    async def _memory_context(self, user_id: int, agent_id: str) -> str:
+        """Load a compact cross-agent memory summary for this user."""
+        try:
+            context = await user_memory.get_context(user_id, agent_id)
+            summary = context.get("summary")
+            if not summary or summary == "No user profile found.":
+                return ""
+            return summary
+        except Exception as exc:
+            logger.warning("Failed to load memory context", user_id=user_id, error=str(exc))
+            return ""
+
+    async def _extract_and_store_insights(
+        self,
+        user_id: int,
+        agent_id: str,
+        subject: str,
+        conversation_history: List[Dict],
+        assistant_reply: str,
+    ) -> None:
+        """Ask a small LLM to extract insights from a tutor turn and store them.
+
+        Errors are swallowed so a failed memory extraction never breaks the chat.
+        """
+        try:
+            extraction_prompt = (
+                f"You are a memory extraction assistant for a {subject} tutor. "
+                "Review the recent conversation and extract 0-3 concise facts "
+                "about the student. Only extract things the student actually "
+                "demonstrated or stated. Do not invent or assume.\n\n"
+                "Categories:\n"
+                "- preference: likes/dislikes (e.g., 'prefers short explanations').\n"
+                "- skill: demonstrated ability (e.g., 'mastered subtraction up to 20').\n"
+                "- behavior: engagement pattern (e.g., 'practices at 4pm').\n"
+                "- relationship: rapport detail (e.g., 'likes being called champion').\n\n"
+                "Return JSON only: "
+                '{"insights": [{"category": "...", "key": "...", "value": "...", "confidence": 0.9}]}'
+            )
+            messages = list(conversation_history)
+            messages.append({"role": "assistant", "content": assistant_reply})
+            raw = await self._call_llm(
+                extraction_prompt,
+                messages,
+                max_tokens=250,
+                primary_model="gpt-4o-mini",
+                fallback_model="gpt-4o-mini",
+                json_response=True,
+            )
+            insights = _parse_insights(raw)
+            if insights:
+                await user_memory.store_insights(user_id, agent_id, insights)
+        except Exception as exc:
+            logger.warning(
+                "Insight extraction failed; continuing without storing memory",
+                user_id=user_id,
+                agent_id=agent_id,
+                error=str(exc),
+            )
 
 
 async def call_llm(
@@ -578,15 +694,23 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
     
     async def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> Tuple[str, int]:
         """Get a response from gpt-4o (falling back to gpt-4o-mini) using the
-        gender-, interest-, and long-term-memory-aware system prompt. Returns
-        (reply_text, points_earned). This call is fully asynchronous.
+        gender-, interest-, long-term-memory-aware system prompt, and the unified
+        user memory layer. Returns (reply_text, points_earned).
         """
         child_name = user_profile.get("name", "תלמיד")
+        user_id = user_profile.get("id")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         correct_answer = self._extract_correct_arithmetic_answer(conversation_history)
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, correct_answer)
+
+        # Inject cross-agent memory context so the tutor feels like a companion.
+        if user_id:
+            memory_context = await self._memory_context(user_id, f"koko_{self.SUBJECT}")
+            if memory_context:
+                system_prompt += f"\n\nWhat you already know about this student across all agents:\n{memory_context}"
+
         raw = await self._call_llm(
             system_prompt,
             conversation_history,
@@ -594,8 +718,20 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
             fallback_model="gpt-4o-mini",
             json_response=True,
         )
-        return _parse_json_reply(raw)
-    
+        reply_text, points_earned = _parse_json_reply(raw)
+
+        # Extract and store insights in the background so the tutor keeps learning.
+        if user_id:
+            await self._extract_and_store_insights(
+                user_id,
+                f"koko_{self.SUBJECT}",
+                self.SUBJECT,
+                conversation_history,
+                reply_text,
+            )
+
+        return reply_text, points_earned
+
     def extract_profile_info(self, messages: List[Dict]) -> Dict:
         """Extract grade level and interests from conversation transcript"""
         grade_level = None
@@ -793,17 +929,38 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
     
     async def get_llm_response(self, conversation_history: List[Dict], user_profile: Dict) -> Tuple[str, int]:
         """Get a response from the real OpenAI model (falling back to
-        gpt-4o-mini), using the gender-, interest-, and long-term-memory-aware
-        bilingual system prompt. Returns (reply_text, points_earned).
+        gpt-4o-mini), using the gender-, interest-, long-term-memory-aware
+        bilingual system prompt and the unified user memory layer. Returns
+        (reply_text, points_earned).
         """
         child_name = user_profile.get("name", "תלמיד")
+        user_id = user_profile.get("id")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives)
+
+        # Inject cross-agent memory context so the tutor feels like a companion.
+        if user_id:
+            memory_context = await self._memory_context(user_id, f"koko_{self.SUBJECT}")
+            if memory_context:
+                system_prompt += f"\n\nWhat you already know about this student across all agents:\n{memory_context}"
+
         raw = await self._call_llm(system_prompt, conversation_history, json_response=True)
-        return _parse_json_reply(raw)
-    
+        reply_text, points_earned = _parse_json_reply(raw)
+
+        # Extract and store insights so the tutor keeps learning about the child.
+        if user_id:
+            await self._extract_and_store_insights(
+                user_id,
+                f"koko_{self.SUBJECT}",
+                self.SUBJECT,
+                conversation_history,
+                reply_text,
+            )
+
+        return reply_text, points_earned
+
     def extract_profile_info(self, messages: List[Dict]) -> Dict:
         """Extract grade level and interests from conversation transcript"""
         grade_level = None

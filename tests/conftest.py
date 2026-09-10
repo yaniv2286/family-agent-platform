@@ -55,6 +55,12 @@ def app(monkeypatch):
 @pytest_asyncio.fixture
 async def client(app):
     import httpx
+    from agent_loader import load_builtin_routers
+
+    routers = await load_builtin_routers()
+    for router in routers:
+        app.include_router(router)
+
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:

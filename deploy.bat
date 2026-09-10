@@ -57,6 +57,22 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo [INFO] Running Koko startup validator...
+python "%PROJECT%\scripts\startup_validator.py"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Koko startup validator failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo [INFO] Checking Koko docker compose configuration...
+docker compose -f "%PROJECT%\docker-compose.yml" config >nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Koko docker-compose.yml is invalid. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 echo [INFO] Packaging family-agent-platform...
 tar -czf "%ARCHIVE%" -C "%PROJECT:~0,-1%" --exclude=".git" --exclude="data" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="logs" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude="cert.pem" --exclude="key.pem" .
 
@@ -81,6 +97,22 @@ echo [INFO] Running NeuralTrader py_compile sanity check...
 python -m py_compile "%NEURAL_REPO%\main_orchestrator_ist.py" "%NEURAL_REPO%\scripts\run_full_backtest.py" "%NEURAL_REPO%\scripts\run_simulation.py" "%NEURAL_REPO%\core\utils\notifier.py" "%NEURAL_REPO%\core\utils\telegram_notifier.py"
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] NeuralTrader syntax check failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo [INFO] Running NeuralTrader startup validator...
+python "%NEURAL_REPO%\scripts\startup_validator.py"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] NeuralTrader startup validator failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo [INFO] Checking NeuralTrader docker compose configuration...
+docker compose -f "%NEURAL_REPO%\docker-compose.yml" config >nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] NeuralTrader docker-compose.yml is invalid. Deployment aborted.
     pause
     exit /b %ERRORLEVEL%
 )
@@ -154,6 +186,22 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo [INFO] Running VolatilityHunter startup validator...
+python "%HUNTER_REPO%\scripts\startup_validator.py"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] VolatilityHunter startup validator failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo [INFO] Checking VolatilityHunter docker compose configuration...
+docker compose -f "%HUNTER_REPO%\docker-compose.yml" config >nul
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] VolatilityHunter docker-compose.yml is invalid. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 echo [INFO] Uploading VolatilityHunter .env...
 ssh %SSH_OPTS% %SERVER% "mkdir -p /root/volatilityhunter"
 scp %SSH_OPTS% "%HUNTER_REPO%\.env" %SERVER%:/root/volatilityhunter/.env
@@ -212,6 +260,18 @@ if %ERRORLEVEL% NEQ 0 (
     pause
     exit /b %ERRORLEVEL%
 )
+
+:: ---------------------------------------------------------------------------
+:: 6. Remote smoke tests
+:: ---------------------------------------------------------------------------
+echo [INFO] Waiting for services to start...
+timeout /t 20 /nobreak >nul
+
+echo [INFO] Running remote health smoke tests...
+ssh %SSH_OPTS% %SERVER% "curl -fsS --max-time 10 https://lugassy-agents.duckdns.org/api/health || echo '[SMOKE] Koko public health check failed'"
+ssh %SSH_OPTS% %SERVER% "docker compose -p koko ps" || echo "[SMOKE] koko stack status check failed"
+ssh %SSH_OPTS% %SERVER% "docker compose -p neuraltrader ps" || echo "[SMOKE] neuraltrader stack status check failed"
+ssh %SSH_OPTS% %SERVER% "docker compose -p volatilityhunter ps" || echo "[SMOKE] volatilityhunter stack status check failed"
 
 echo [OK] Deployment complete.
 pause

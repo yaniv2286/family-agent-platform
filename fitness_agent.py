@@ -1,6 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -12,9 +12,10 @@ from database import (Exercise, HealthLog, PlannedWorkoutExercise, ProgressionHi
                       WorkoutPerformance, WorkoutPlan, WorkoutSet, get_db)
 from event_bus import event_bus
 from memory_manager import memory_manager
+from memory_layer import MemoryCategory, user_memory
 import nutrition_agent  # register collaboration handler
 
-router = APIRouter(prefix="/api/fitness", tags=["Fitness Agent"])
+router = APIRouter(prefix="/api/fitness", tags=["Coach"])
 DEFAULT_EQUIPMENT = ["none", "balance_board", "balance_pad", "fitball", "pull_up_bar", "resistance_bands", "pilates_mat", "trx"]
 DEFAULT_HEALTH_CONSTRAINTS = ["tilt_test_sensitivity", "avoid_sudden_orthostatic_drops", "low_impact_strength"]
 DEFAULT_GOAL_TYPE = "hypertrophy_body_recomposition_fat_loss"
@@ -25,6 +26,141 @@ DAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sun
 def _loads(value, fallback=None):
     try: return json.loads(value or "[]")
     except (TypeError, ValueError): return fallback or []
+
+
+def _normalize_video_url(url: str) -> str:
+    """Return a short youtu.be link for a YouTube URL.
+
+    Supports:
+      - https://www.youtube.com/watch?v=<id>
+      - https://youtube.com/watch?v=<id>
+      - https://www.youtube.com/shorts/<id>
+      - https://youtube.com/shorts/<id>
+      - https://youtu.be/<id> (returned as-is)
+    """
+    if not url:
+        return url
+    import re
+    url = url.strip()
+    if url.startswith("https://youtu.be/"):
+        return url
+    watch_match = re.search(r"[?&]v=([a-zA-Z0-9_-]{11})", url)
+    if watch_match:
+        return f"https://youtu.be/{watch_match.group(1)}"
+    shorts_match = re.search(r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})", url)
+    if shorts_match:
+        return f"https://youtu.be/{shorts_match.group(1)}"
+    return url
+
+
+async def _exercises_to_avoid(db: AsyncSession, user_id: int, lookback_days: int = 30) -> set[int]:
+    """Return exercise IDs that caused pain or very high RPE recently."""
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    rows = (await db.execute(
+        select(WorkoutPerformance, WorkoutSet.exercise_id)
+        .join(WorkoutSet, WorkoutSet.performance_id == WorkoutPerformance.id)
+        .where(
+            WorkoutPerformance.user_id == user_id,
+            WorkoutPerformance.completed_at >= cutoff,
+            ((WorkoutPerformance.pain > 0) | (WorkoutPerformance.perceived_exertion >= 9)),
+        )
+    )).all()
+    return {int(exercise_id) for _, exercise_id in rows if exercise_id}
+
+
+async def _recent_comfortable_exercises(db: AsyncSession, user_id: int, lookback_days: int = 30, top_n: int = 5) -> List[int]:
+    """Return exercise IDs that were completed comfortably (low RPE/fatigue/no pain)."""
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    rows = (await db.execute(
+        select(WorkoutSet.exercise_id, func.count().label("cnt"))
+        .join(WorkoutPerformance, WorkoutPerformance.id == WorkoutSet.performance_id)
+        .where(
+            WorkoutPerformance.user_id == user_id,
+            WorkoutPerformance.completed_at >= cutoff,
+            WorkoutPerformance.pain == 0,
+            WorkoutPerformance.perceived_exertion <= 5,
+            WorkoutPerformance.fatigue <= 3,
+        )
+        .group_by(WorkoutSet.exercise_id)
+        .order_by(func.count().desc())
+        .limit(top_n)
+    )).all()
+    return [int(exercise_id) for exercise_id, _ in rows]
+
+
+async def _memory_notes_for_plan(user_id: int) -> List[str]:
+    """Return short safety/preference notes from the unified memory layer."""
+    try:
+        context = await user_memory.get_context(user_id, "coach")
+    except Exception:
+        return []
+    notes = []
+    for item in context.get("preferences", []):
+        value = str(item.get("value", "")).lower()
+        if "pain" in value or "fatigue" in value or "dizzy" in value or "avoid" in value:
+            notes.append(f"Memory note: {item['value']}")
+    for item in context.get("behaviors", []):
+        value = str(item.get("value", "")).lower()
+        if any(k in value for k in ("fatigue", "exertion", "rpe")):
+            notes.append(f"Memory note: {item['value']}")
+    for item in context.get("relationship", []):
+        notes.append(f"Memory note: {item['value']}")
+    return notes[:3]
+
+
+def _coach_greeting(user_id: int, exercises: List[dict]) -> str:
+    """Return a personalized Coach greeting for the workout plan."""
+    names = [e["name"] for e in exercises[:3]]
+    if names:
+        exercise_list = ", ".join(names)
+        return f"Coach here! I picked these exercises just for you: {exercise_list}. Move with control, breathe, and stop if anything feels off. You've got this!"
+    return "Coach here! Let's move with intention and keep everything pain-free."
+
+
+def _workout_insights(data, details, blocked):
+    """Build heuristic memory insights from a completed workout."""
+    insights = []
+    if data.pain > 0:
+        insights.append({
+            "category": MemoryCategory.PREFERENCE,
+            "key": "workout_pain_reported",
+            "value": "Reported pain during a workout; future plans should emphasize recovery and avoid aggravating movements until cleared by a clinician.",
+            "confidence": 1.0,
+            "evidence": [{"rpe": data.perceived_exertion, "pain": data.pain, "notes": data.notes}],
+        })
+    if data.perceived_exertion >= 9:
+        insights.append({
+            "category": MemoryCategory.BEHAVIOR,
+            "key": "very_high_exertion",
+            "value": "Worked at maximum perceived exertion (RPE 9+). Consider shorter or easier sessions next time.",
+            "confidence": 1.0,
+            "evidence": [{"rpe": data.perceived_exertion, "duration": data.duration_minutes}],
+        })
+    if data.fatigue >= 8:
+        insights.append({
+            "category": MemoryCategory.BEHAVIOR,
+            "key": "high_fatigue",
+            "value": "Reported high fatigue. Monitor sleep/load and default to low-impact options until energy recovers.",
+            "confidence": 1.0,
+            "evidence": [{"fatigue": data.fatigue, "notes": data.notes}],
+        })
+    if not blocked and data.perceived_exertion <= 5 and data.fatigue <= 3:
+        insights.append({
+            "category": MemoryCategory.SKILL,
+            "key": "comfortable_with_current_load",
+            "value": "Handled the current workout load comfortably. Ready for a small progression when the next session feels similar.",
+            "confidence": 0.85,
+            "evidence": [{"rpe": data.perceived_exertion, "fatigue": data.fatigue, "duration": data.duration_minutes}],
+        })
+    if data.notes and len(data.notes.strip()) > 5:
+        insights.append({
+            "category": MemoryCategory.EPISODE,
+            "key": "workout_note",
+            "value": data.notes.strip()[:500],
+            "confidence": 0.95,
+            "evidence": [{"plan_id": details[0].get("plan_id") if details else None}],
+        })
+    return insights
 
 
 class ProfileUpdate(BaseModel):
@@ -126,6 +262,18 @@ async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = D
     for category, key, value in (("goal", "goals", data.goals), ("safety_constraint", "constraints", data.health_constraints)):
         await memory_manager.add_fact(user_id, user_id, "fitness", category, key, value,
                                       evidence=[{"source": "profile_edit"}], source_agent="fitness", db=db)
+    # Store structured preferences in the unified memory layer for cross-agent context.
+    await user_memory.store_insights(user_id, "coach", [
+        {"category": MemoryCategory.PREFERENCE, "key": "preferred_duration_minutes",
+         "value": data.preferred_duration_minutes, "confidence": 1.0,
+         "evidence": [{"source": "profile_edit"}]},
+        {"category": MemoryCategory.PREFERENCE, "key": "training_days",
+         "value": data.training_days, "confidence": 1.0,
+         "evidence": [{"source": "profile_edit"}]},
+        {"category": MemoryCategory.PREFERENCE, "key": "equipment",
+         "value": data.equipment, "confidence": 1.0,
+         "evidence": [{"source": "profile_edit"}]},
+    ], db=db)
     await db.commit(); await db.refresh(p)
     return _profile_dict(p)
 
@@ -137,7 +285,7 @@ async def exercises(category: Optional[str] = None, equipment: Optional[str] = N
     if low_impact is not None: q = q.where(Exercise.low_impact == int(low_impact))
     rows = (await db.execute(q.order_by(Exercise.name))).scalars().all()
     return [{"id": x.id, "slug": x.slug, "name": x.name, "category": x.category, "equipment": x.equipment,
-             "goals": _loads(x.goals_json), "instructions": x.instructions, "video_url": x.video_url,
+             "goals": _loads(x.goals_json), "instructions": x.instructions, "video_url": _normalize_video_url(x.video_url),
              "low_impact": bool(x.low_impact), "high_impact": bool(x.high_impact)} for x in rows]
 
 async def _fetch_directives(db: AsyncSession, user_id: int):
@@ -177,24 +325,42 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     q = select(Exercise).where(Exercise.equipment.in_(equipment))
     if sensitive: q = q.where(Exercise.low_impact == 1, Exercise.high_impact == 0, Exercise.transition != "floor")
     candidates = (await db.execute(q.order_by(Exercise.slug))).scalars().all()
-    candidates.sort(key=lambda x: (-len(set(_loads(x.goals_json)) & set(goals)), x.slug))
+
+    # Personalize: avoid exercises that recently caused pain or very high exertion.
+    avoid_ids = await _exercises_to_avoid(db, user_id)
+    candidates = [x for x in candidates if x.id not in avoid_ids]
+
+    # Personalize: boost exercises that were recently completed comfortably.
+    comfortable_ids = await _recent_comfortable_exercises(db, user_id)
+
+    def sort_key(x):
+        goal_overlap = len(set(_loads(x.goals_json)) & set(goals))
+        comfort_bonus = 1 if x.id in comfortable_ids else 0
+        return (-goal_overlap, -comfort_bonus, x.slug)
+
+    candidates.sort(key=sort_key)
     chosen = candidates[:max(1, min(5, p.preferred_duration_minutes // 6))]
     if not chosen: raise HTTPException(422, "No safe exercises match this profile")
     notes = (["Low-impact exercises only.", "Use slow, controlled transitions and avoid sudden floor-to-standing changes.", "Stop if dizzy, faint, or in pain and seek qualified clinical advice when appropriate."] if sensitive else ["Use controlled form and stop if pain or concerning symptoms occur."])
     # Append directive notes to safety notes
     for d in directives:
         notes.append(f"Parent directive: {d.message}")
+    # Append cross-agent memory notes (e.g., recent pain, fatigue, preferences).
+    memory_notes = await _memory_notes_for_plan(user_id)
+    notes.extend(memory_notes)
     plan = WorkoutPlan(user_id=user_id, planned_date=date.today(), duration_minutes=p.preferred_duration_minutes, safety_notes_json=json.dumps(notes)); db.add(plan); await db.flush()
     for i, exercise in enumerate(chosen):
         db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=2, reps=8, rest_seconds=60, minimum_version="1 controlled set of 5 reps"))
     await db.commit()
     await db.refresh(plan)
-    return await _plan_response(db, plan)
+    response = await _plan_response(db, plan)
+    response["coach_greeting"] = _coach_greeting(user_id, response["exercises"])
+    return response
 
 async def _plan_response(db, plan):
     rows = (await db.execute(select(PlannedWorkoutExercise, Exercise).join(Exercise).where(PlannedWorkoutExercise.plan_id == plan.id).order_by(PlannedWorkoutExercise.position))).all()
     return {"id": plan.id, "user_id": plan.user_id, "date": plan.planned_date, "status": plan.status, "duration_minutes": plan.duration_minutes,
-            "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "video_url": e.video_url, "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
+            "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "video_url": _normalize_video_url(e.video_url), "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
 
 @router.get("/plans/{user_id}")
 async def list_plans(user_id: int, db: AsyncSession = Depends(get_db)):
@@ -217,6 +383,20 @@ async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = 
         details.append({"exercise_id":item.exercise_id,"sets":[s.model_dump() for s in item.sets]})
         if not blocked: db.add(ProgressionHistory(user_id=data.user_id,exercise_id=item.exercise_id,performance_id=perf.id,recommendation="Maintain, then increase only one variable slightly after another comfortable session.",evidence_json=json.dumps({"rpe":data.perceived_exertion,"fatigue":data.fatigue,"pain":data.pain})))
     plan.status="completed"; plan.completed_at=datetime.utcnow(); await memory_manager.add_fact(data.user_id,data.user_id,"fitness","recommendation","latest_progress",guidance,evidence=[{"plan_id":plan_id,"performance_id":perf.id}],source_agent="fitness",db=db)
+
+    # Store cross-agent memory insights from this workout.
+    insights = _workout_insights(data, details, blocked)
+    await user_memory.add_episode(data.user_id, "coach", "workout_completed", {
+        "plan_id": plan_id,
+        "duration_minutes": data.duration_minutes,
+        "rpe": data.perceived_exertion,
+        "fatigue": data.fatigue,
+        "pain": data.pain,
+        "blocked": blocked,
+    }, db=db)
+    if insights:
+        await user_memory.store_insights(data.user_id, "coach", insights, db=db)
+
     await db.commit()
     payload={"plan_id":plan_id,"performance_id":perf.id,"workout_type":"planned","duration_minutes":data.duration_minutes,"perceived_exertion":data.perceived_exertion,"fatigue":data.fatigue,"pain":data.pain,"progression_allowed":not blocked,"exercises":details}
     await event_bus.publish("fitness.workout_completed",user_id=data.user_id,child_id=data.user_id,source_agent="fitness",payload=payload)
@@ -226,7 +406,14 @@ async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = 
 async def log_workout(data: WorkoutLogRequest, db: AsyncSession = Depends(get_db)):
     await _user(db,data.user_id)
     exercises_json = json.dumps(data.exercises, ensure_ascii=False)
-    row=HealthLog(user_id=data.user_id,workout_type=data.workout_type,exercises_json=exercises_json,status=data.status,notes=data.notes,log_type="workout",details_json=exercises_json); db.add(row); await db.commit(); await db.refresh(row)
+    row=HealthLog(user_id=data.user_id,workout_type=data.workout_type,exercises_json=exercises_json,status=data.status,notes=data.notes,log_type="workout",details_json=exercises_json); db.add(row); await db.flush()
+    await user_memory.add_episode(
+        data.user_id, "coach", "logged_workout",
+        {"workout_type": data.workout_type, "status": data.status, "exercises_count": len(data.exercises)},
+        metadata={"health_log_id": row.id, "notes": data.notes[:200]},
+        db=db,
+    )
+    await db.commit(); await db.refresh(row)
     if data.status.lower() in {"completed","complete","done"}: await event_bus.publish("fitness.workout_completed",data.user_id,data.user_id,"fitness",{"health_log_id":row.id,"workout_type":data.workout_type,"exercises":data.exercises})
     return {"status":"success","health_log_id":row.id,"message":"Workout logged and synced with cross-agent state."}
 
@@ -252,6 +439,12 @@ async def habit_complete(habit_id:int,data:HabitComplete,db:AsyncSession=Depends
         h.current_streak = h.current_streak+1 if h.last_completion==data.completed_date-timedelta(days=1) else 1
         h.best_streak=max(h.best_streak,h.current_streak); h.last_completion=data.completed_date
         db.add(TinyHabitCompletion(habit_id=habit_id, user_id=data.user_id, completed_date=data.completed_date))
+        await user_memory.store_insights(data.user_id, "coach", [{
+            "category": MemoryCategory.BEHAVIOR,
+            "key": f"habit_{h.id}_streak",
+            "value": f"'{h.name}' habit current streak is {h.current_streak} and best streak is {h.best_streak}.",
+            "confidence": 1.0,
+        }], db=db)
         await db.commit()
     return _habit(h)
 @router.get("/habits/{habit_id}/history")

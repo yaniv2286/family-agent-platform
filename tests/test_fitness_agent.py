@@ -312,7 +312,7 @@ class TestMigrationSchema:
         assert "fitball-plank" in slugs
         assert "trx-chest-press" in slugs
         assert "bird-dog" in slugs
-        assert all(r.video_url.startswith("https://www.youtube.com/") for r in rows)
+        assert all(r.video_url.startswith(("https://www.youtube.com/", "https://youtu.be/")) for r in rows)
 
     @pytest.mark.asyncio
     async def test_exercises_table_has_video_url_column(self):
@@ -411,7 +411,7 @@ class TestPlanGeneration:
         assert response.status_code == 200
         exercises = response.json()
         assert exercises
-        assert all(e["video_url"].startswith("https://www.youtube.com/") for e in exercises)
+        assert all(e["video_url"].startswith(("https://www.youtube.com/", "https://youtu.be/")) for e in exercises)
 
     @pytest.mark.asyncio
     async def test_generate_plan_uses_safe_defaults_without_profile(self, client):
@@ -422,7 +422,7 @@ class TestPlanGeneration:
         assert response.status_code == 200
         exercises = response.json()["exercises"]
         assert exercises
-        assert all(e["video_url"].startswith("https://www.youtube.com/") for e in exercises)
+        assert all(e["video_url"].startswith(("https://www.youtube.com/", "https://youtu.be/")) for e in exercises)
 
     @pytest.mark.asyncio
     async def test_generate_plan_success(self):
