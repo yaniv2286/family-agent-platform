@@ -1023,29 +1023,13 @@
             </div>
         </div>
 
-        <!-- Subject Selection Screen -->
+        <!-- Agent Selection Screen -->
         <div class="screen hidden" id="subject-screen">
             <div class="welcome-text">
-                📚 איזה שיעור {childName} רוצה ללמוד היום?
+                סוכני המשפחה
             </div>
             <div class="subject-grid" id="subject-grid">
-                <div class="subject-card" data-subject="math">
-                    <div class="icon">📐</div>
-                    <h3>שיעור חשבון</h3>
-                    <p>נפתור בעיות מעניינות ונשחק עם מספרים!</p>
-                </div>
-                <div class="subject-card" data-subject="english">
-                    <div class="icon">🔤</div>
-                    <h3>שיעור אנגלית</h3>
-                    <p>נלמד מילים ומשפטים חדשים באנגלית!</p>
-                </div>
-            </div>
-            <div class="subject-grid" style="margin-top: 20px;">
-                <div class="subject-card" id="fitness-card-btn">
-                    <div class="icon">💪</div>
-                    <h3>סוכן כושר</h3>
-                    <p>תוכניות אימון, הרגלים ומעקב התקדמות</p>
-                </div>
+                <div class="loading">טוען סוכנים...</div>
             </div>
         </div>
 
@@ -1347,6 +1331,58 @@
             }
         }
 
+        // Open the fitness screen for the selected child
+        function openFitness() {
+            if (!selectedUserId) {
+                alert('בחר תלמיד קודם');
+                return;
+            }
+            selectedSubject = null;
+            showScreen('fitness');
+            activateFitnessPanel('fitness-home-panel');
+            document.getElementById('fitness-greeting').textContent = `היי ${selectedUserProfile?.name || ''}! מוכנים לזוז? 💪`;
+            loadFitnessHome();
+            loadFitnessProfile();
+        }
+
+        // Agent metadata and icon mapping for the UI
+        const agentUi = {
+            'koko_math': { icon: '📐', title: 'שיעור חשבון', desc: 'נפתור בעיות מעניינות ונשחק עם מספרים!' },
+            'koko_english': { icon: '🔤', title: 'שיעור אנגלית', desc: 'נלמד מילים ומשפטים חדשים באנגלית!' },
+            'fitness': { icon: '💪', title: 'סוכן כושר', desc: 'תוכניות אימון, הרגלים ומעקב התקדמות' },
+            'neuraltrader': { icon: '📈', title: 'NeuralTrader', desc: 'סוחר אלגוריתמי — בקרה, תובנות ופקודות' },
+            'volatilityhunter': { icon: '🌊', title: 'VolatilityHunter', desc: 'מעקב תנודתיות וסיכונים בשוק' }
+        };
+
+        // Load and render available agents from the control plane
+        async function loadAgents() {
+            const grid = document.getElementById('subject-grid');
+            if (!grid) return;
+            grid.innerHTML = '<div class="loading">טוען סוכנים...</div>';
+            try {
+                const response = await safeFetch('/api/control/agents');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                const agents = data.agents || [];
+                grid.innerHTML = '';
+                if (agents.length === 0) {
+                    grid.innerHTML = '<div class="loading">אין סוכנים זמינים</div>';
+                    return;
+                }
+                for (const agent of agents) {
+                    const ui = agentUi[agent.agent_id] || { icon: '🤖', title: agent.name, desc: agent.description || 'סוכן פלטפורמה' };
+                    const card = document.createElement('div');
+                    card.className = 'subject-card';
+                    card.dataset.agent = agent.agent_id;
+                    card.innerHTML = `<div class="icon">${ui.icon}</div><h3>${escapeFitnessHtml(ui.title)}</h3><p>${escapeFitnessHtml(ui.desc)}</p>`;
+                    grid.appendChild(card);
+                }
+            } catch (error) {
+                console.error('Error loading agents:', error);
+                grid.innerHTML = '<div class="loading">שגיאה בטעינת סוכנים</div>';
+            }
+        }
+
         // Create profile card element with direct <img> tags and onerror fallback chain
         function createProfileCard(user, index) {
             const card = document.createElement('div');
@@ -1411,7 +1447,7 @@
             
             // Update subject screen with child's name
             subjectScreen.querySelector('.welcome-text').innerHTML = 
-                `📚 איזה שיעור <strong>${user.name}</strong> רוצה ללמוד היום?`;
+                `🤖 איזה סוכן <strong>${user.name}</strong> רוצה להפעיל היום?`;
             
             setTimeout(() => {
                 showScreen('subject');
@@ -1499,6 +1535,7 @@
             } else if (screenName === 'subject') {
                 subjectScreen.classList.remove('hidden');
                 backBtn.classList.add('show');
+                loadAgents();
             } else if (screenName === 'tutoring') {
                 tutoringScreen.classList.add('show');
                 backBtn.classList.add('show');
@@ -1990,7 +2027,7 @@
         buildFitnessChips('fp-equipment',fitnessOptions.equipment); buildFitnessChips('fp-goals',fitnessOptions.goals); buildFitnessChips('fp-days-chips',fitnessOptions.days); buildFitnessChips('fp-constraints',fitnessOptions.constraints); buildFitnessChips('fp-supplements',fitnessOptions.supplements); buildFitnessChips('fp-duration',fitnessOptions.duration);
         function activateFitnessPanel(panelId) { document.querySelectorAll('.fitness-tab').forEach(t=>t.classList.toggle('active',t.dataset.panel===panelId)); document.querySelectorAll('.fitness-panel').forEach(p=>p.classList.toggle('active',p.id===panelId)); }
         document.querySelectorAll('.fitness-tab').forEach(tab => tab.addEventListener('click',()=>{ activateFitnessPanel(tab.dataset.panel); if(tab.dataset.panel==='fitness-analytics-panel') loadFitnessAnalytics(); if(tab.dataset.panel==='fitness-habits-panel') loadFitnessHabits(); if(tab.dataset.panel==='fitness-plan-panel') loadFitnessPlans(); if(tab.dataset.panel==='fitness-settings-panel') loadFitnessProfile(); }));
-        document.getElementById('fitness-card-btn').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if(!selectedUserId){alert('בחר תלמיד קודם');return;} selectedSubject=null; showScreen('fitness'); activateFitnessPanel('fitness-home-panel'); document.getElementById('fitness-greeting').textContent=`היי ${selectedUserProfile?.name || ''}! מוכנים לזוז? 💪`; loadFitnessHome(); loadFitnessProfile(); });
+        // Fitness is opened via the dynamic subject-grid handler
         async function loadFitnessProfile() { if(!selectedUserId)return; try { const r=await safeFetch(`/api/fitness/profile/${selectedUserId}`); if(!r.ok)return; const d=await r.json(); const groups={ 'fp-equipment':d.equipment||[], 'fp-goals':d.goals||[], 'fp-days-chips':d.training_days||[], 'fp-constraints':d.health_constraints||[], 'fp-supplements':d.supplements||[], 'fp-duration':[String(d.preferred_duration_minutes||30)] }; Object.entries(groups).forEach(([id,values])=>document.querySelectorAll(`#${id} .chip`).forEach(c=>c.classList.toggle('active-chip',values.map(String).includes(c.dataset.value)))); } catch(e){ console.log('No fitness profile yet'); } }
         document.getElementById('fp-save-btn').addEventListener('click',async()=>{ const duration=Number(selectedChipValues('fp-duration')[0]||30); const body={equipment:selectedChipValues('fp-equipment'),health_constraints:selectedChipValues('fp-constraints'),goals:selectedChipValues('fp-goals'),supplements:selectedChipValues('fp-supplements'),preferred_duration_minutes:duration,training_days:selectedChipValues('fp-days-chips')}; const st=document.getElementById('fp-status'); try { const r=await safeFetch(`/api/fitness/profile/${selectedUserId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); st.textContent=r.ok?'ההגדרות נשמרו בהצלחה!':'לא הצלחנו לשמור. נסו שוב.'; st.style.color=r.ok?'#176b57':'#b33'; } catch(e){st.textContent='שגיאת רשת';} });
 
@@ -2210,14 +2247,21 @@
 
         subjectGrid.addEventListener('click', async (e) => {
             const card = e.target.closest('.subject-card');
-            if (card && card.dataset.subject) {
-                const subject = card.dataset.subject;
-                const subjectName = card.querySelector('h3').textContent;
-                try {
-                    await selectSubject(subject, subjectName);
-                } catch (error) {
-                    console.error('Error starting subject:', error);
+            if (!card || !card.dataset.agent) return;
+            const agentId = card.dataset.agent;
+            const agentName = card.querySelector('h3').textContent;
+            try {
+                if (agentId === 'koko_math' || agentId === 'koko_english') {
+                    const subject = agentId.split('_').pop();
+                    await selectSubject(subject, agentName);
+                } else if (agentId === 'fitness') {
+                    openFitness();
+                } else {
+                    const desc = card.querySelector('p')?.textContent || '';
+                    alert(`${agentName}\n${desc}\n\nפאנל ניהול עבור ${agentName} — בקרוב`);
                 }
+            } catch (error) {
+                console.error('Error starting agent:', error);
             }
         });
 
