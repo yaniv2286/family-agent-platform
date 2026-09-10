@@ -2021,8 +2021,13 @@
                 if (!r.ok) return;
                 const plans = await r.json();
                 if (plans.length === 0) { display.innerHTML = '<div style="text-align:center; color:#6c757d; padding:20px;">אין תוכניות עדיין. צור תוכנית חדשה!</div>'; return; }
+                const activePlan = plans.find(p => p.status !== 'completed');
                 display.innerHTML = '';
-                plans.forEach(plan => renderPlan(plan, display));
+                if (activePlan) {
+                    renderPlan(activePlan, display);
+                } else {
+                    display.innerHTML = '<div style="text-align:center; color:#6c757d; padding:20px;">אין אימון פעיל — צור תוכנית חדשה!</div>';
+                }
             } catch (e) { console.error('Error loading plans:', e); }
         }
 

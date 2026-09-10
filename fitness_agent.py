@@ -1,4 +1,5 @@
 import json
+import random
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
@@ -86,6 +87,21 @@ async def _recent_comfortable_exercises(db: AsyncSession, user_id: int, lookback
         .limit(top_n)
     )).all()
     return [int(exercise_id) for exercise_id, _ in rows]
+
+
+async def _recently_used_exercises(db: AsyncSession, user_id: int, lookback_days: int = 7) -> set[int]:
+    """Return exercise IDs already assigned in recent completed plans."""
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    rows = (await db.execute(
+        select(PlannedWorkoutExercise.exercise_id)
+        .join(WorkoutPlan, WorkoutPlan.id == PlannedWorkoutExercise.plan_id)
+        .where(
+            WorkoutPlan.user_id == user_id,
+            WorkoutPlan.status == "completed",
+            WorkoutPlan.completed_at >= cutoff,
+        )
+    )).scalars().all()
+    return {int(exercise_id) for exercise_id in rows if exercise_id}
 
 
 async def _memory_notes_for_plan(user_id: int) -> List[str]:
@@ -330,13 +346,16 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     avoid_ids = await _exercises_to_avoid(db, user_id)
     candidates = [x for x in candidates if x.id not in avoid_ids]
 
-    # Personalize: boost exercises that were recently completed comfortably.
+    # Personalize: boost exercises that were recently completed comfortably
+    # and deprioritize the same exercises assigned in the last week.
     comfortable_ids = await _recent_comfortable_exercises(db, user_id)
+    recently_used_ids = await _recently_used_exercises(db, user_id)
 
     def sort_key(x):
         goal_overlap = len(set(_loads(x.goals_json)) & set(goals))
         comfort_bonus = 1 if x.id in comfortable_ids else 0
-        return (-goal_overlap, -comfort_bonus, x.slug)
+        recent_penalty = 1 if x.id in recently_used_ids else 0
+        return (-goal_overlap, -comfort_bonus, recent_penalty, random.random())
 
     candidates.sort(key=sort_key)
     chosen = candidates[:max(1, min(5, p.preferred_duration_minutes // 6))]
