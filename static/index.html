@@ -726,6 +726,40 @@
         }
 
         /* ── Fitness Agent UI ── */
+        .trader-screen { display:none; width:100%; min-height:640px; padding:28px; background:#f4f7fb; direction:rtl; }
+        .trader-screen.show { display:block; }
+        .trader-hero { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:24px; border-radius:20px; color:white; background:linear-gradient(135deg,#111827,#1d4ed8); }
+        .trader-hero h2 { margin:0 0 6px; font-size:1.8rem; }
+        .trader-hero p { margin:0; color:#dbeafe; }
+        .trader-actions { display:flex; gap:10px; flex-wrap:wrap; }
+        .trader-btn { border:0; border-radius:12px; padding:11px 16px; font-weight:700; cursor:pointer; }
+        .trader-btn-primary { background:#fff; color:#1d4ed8; }
+        .trader-btn-secondary { background:#dbeafe; color:#1e3a8a; }
+        .trader-btn:disabled { opacity:.55; cursor:not-allowed; }
+        .trader-status-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+        .trader-badge { padding:7px 11px; border-radius:999px; font-size:.86rem; font-weight:700; background:#e5e7eb; color:#374151; }
+        .trader-badge.ok { background:#dcfce7; color:#166534; }
+        .trader-badge.warn { background:#fef3c7; color:#92400e; }
+        .trader-badge.bad { background:#fee2e2; color:#991b1b; }
+        .trader-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-top:18px; }
+        .trader-card { padding:18px; border:1px solid #e5e7eb; border-radius:18px; background:#fff; box-shadow:0 4px 16px rgba(15,23,42,.05); }
+        .trader-card h3 { margin:0 0 14px; color:#111827; }
+        .trader-metric strong { display:block; margin-top:6px; font-size:1.55rem; color:#111827; direction:ltr; text-align:right; }
+        .trader-metric span { color:#64748b; font-size:.9rem; }
+        .trader-wide { grid-column:span 2; }
+        .trader-full { grid-column:1/-1; }
+        .trader-table-wrap { overflow-x:auto; }
+        .trader-table { width:100%; border-collapse:collapse; min-width:650px; direction:ltr; text-align:left; }
+        .trader-table th,.trader-table td { padding:11px; border-bottom:1px solid #e5e7eb; white-space:nowrap; }
+        .trader-table th { color:#64748b; font-size:.82rem; text-transform:uppercase; }
+        .trader-positive { color:#15803d; font-weight:700; }
+        .trader-negative { color:#b91c1c; font-weight:700; }
+        .trader-empty { padding:22px; text-align:center; color:#64748b; }
+        .trader-alert { margin-top:8px; padding:11px; border-radius:10px; background:#fff7ed; color:#9a3412; overflow-wrap:anywhere; }
+        .trader-chart { display:flex; align-items:flex-end; gap:3px; height:130px; direction:ltr; }
+        .trader-chart span { flex:1; min-width:3px; border-radius:3px 3px 0 0; background:#3b82f6; }
+        .trader-command-row { display:flex; gap:10px; flex-wrap:wrap; }
+
         .fitness-screen { display:none; width:100%; background:#f5f7f3; min-height:640px; direction:rtl; }
         .fitness-screen.show { display:block; }
         .fitness-hero { padding:28px 28px 22px; color:white; background:linear-gradient(135deg,#176b57,#2f9273); }
@@ -799,6 +833,11 @@
             .screen {
                 padding: 20px;
             }
+
+            .trader-screen { padding:16px; }
+            .trader-hero { align-items:flex-start; flex-direction:column; }
+            .trader-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+            .trader-wide { grid-column:1/-1; }
 
             .header {
                 padding: 60px 15px 20px;
@@ -1033,6 +1072,27 @@
             </div>
         </div>
 
+        <div class="trader-screen" id="trader-screen">
+            <div class="trader-hero">
+                <div><h2>NeuralTrader</h2><p>לוח ניטור למסחר אלגוריתמי וניהול סיכונים</p><div class="trader-status-row" id="trader-status-row"></div></div>
+                <div class="trader-actions"><button class="trader-btn trader-btn-primary" id="trader-refresh">רענון נתונים</button><button class="trader-btn trader-btn-secondary" id="trader-report">הפקת דוח</button></div>
+            </div>
+            <div id="trader-message" class="trader-empty">טוען נתוני מסחר...</div>
+            <div class="trader-grid" id="trader-content" style="display:none">
+                <div class="trader-card trader-metric"><span>שווי תיק</span><strong id="trader-value">—</strong></div>
+                <div class="trader-card trader-metric"><span>מזומן זמין</span><strong id="trader-cash">—</strong></div>
+                <div class="trader-card trader-metric"><span>ירידה מהשיא</span><strong id="trader-drawdown">—</strong></div>
+                <div class="trader-card trader-metric"><span>פוזיציות פתוחות</span><strong id="trader-position-count">—</strong></div>
+                <section class="trader-card trader-wide"><h3>ביצועי התיק</h3><div class="trader-chart" id="trader-chart"></div></section>
+                <section class="trader-card trader-wide"><h3>מצב שוק וסיכון</h3><div id="trader-risk"></div></section>
+                <section class="trader-card trader-full"><h3>פוזיציות פתוחות</h3><div class="trader-table-wrap" id="trader-positions"></div></section>
+                <section class="trader-card trader-wide"><h3>אותות AI אחרונים</h3><div class="trader-table-wrap" id="trader-signals"></div></section>
+                <section class="trader-card trader-wide"><h3>עסקאות אחרונות</h3><div class="trader-table-wrap" id="trader-trades"></div></section>
+                <section class="trader-card trader-full"><h3>התראות מערכת</h3><div id="trader-alerts"></div></section>
+                <section class="trader-card trader-full" id="trader-admin-controls" style="display:none"><h3>פקודות מנהל — מסחר נייר בלבד</h3><div class="trader-command-row"><button class="trader-btn trader-btn-secondary" data-trader-command="fetch">עדכון נתוני שוק</button><button class="trader-btn trader-btn-secondary" data-trader-command="paper">הרצת ניתוח נייר</button><button class="trader-btn trader-btn-secondary" data-trader-command="report">הפקת דוח</button></div></section>
+            </div>
+        </div>
+
         <!-- Fitness Agent Screen -->
         <div class="fitness-screen" id="fitness-screen">
             <div class="fitness-hero"><h2 id="fitness-greeting">היי! מוכנים לזוז? 💪</h2><p>צעד קטן היום בונה כוח למחר</p></div>
@@ -1114,6 +1174,7 @@
         let selectedUserId = null;
         let selectedUserProfile = null;
         let selectedSubject = null;
+        let currentRole = null;
         let sessionStartTime = null;
         let sessionDurationSeconds = 20 * 60; // 20 minutes
         let timerInterval = null;
@@ -1353,9 +1414,9 @@
             'koko_math': { icon: '📐', title: 'שיעור חשבון', desc: 'נפתור בעיות מעניינות ונשחק עם מספרים!' },
             'koko_english': { icon: '🔤', title: 'שיעור אנגלית', desc: 'נלמד מילים ומשפטים חדשים באנגלית!' },
             'fitness': { icon: '💪', title: 'סוכן כושר', desc: 'תוכניות אימון, הרגלים ומעקב התקדמות' },
-            'neuraltrader': { icon: '📈', title: 'NeuralTrader', desc: 'סוחר אלגוריתמי — בקרה, תובנות ופקודות' },
-            'volatilityhunter': { icon: '🌊', title: 'VolatilityHunter', desc: 'מעקב תנודתיות וסיכונים בשוק' }
+            'neuraltrader': { icon: '📈', title: 'NeuralTrader', desc: 'ביצועי תיק, החלטות AI וניהול סיכונים' }
         };
+        const userFacingAgents = new Set(['koko_math', 'koko_english', 'fitness', 'neuraltrader']);
 
         // Load and render available agents from the control plane
         async function loadAgents() {
@@ -1363,10 +1424,11 @@
             if (!grid) return;
             grid.innerHTML = '<div class="loading">טוען סוכנים...</div>';
             try {
-                const response = await safeFetch('/api/control/agents');
+                const [response, roleResponse] = await Promise.all([safeFetch('/api/control/agents'), safeFetch('/api/control/me')]);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
-                const agents = data.agents || [];
+                if (roleResponse.ok) currentRole = (await roleResponse.json()).role;
+                const agents = (data.agents || []).filter(agent => userFacingAgents.has(agent.agent_id));
                 grid.innerHTML = '';
                 if (agents.length === 0) {
                     grid.innerHTML = '<div class="loading">אין סוכנים זמינים</div>';
@@ -1519,18 +1581,21 @@
 
         // Show specific screen
         const fitnessScreen = document.getElementById('fitness-screen');
+        const traderScreen = document.getElementById('trader-screen');
         function showScreen(screenName) {
             profileScreen.classList.add('hidden');
             subjectScreen.classList.add('hidden');
             tutoringScreen.classList.remove('show');
             fitnessScreen.classList.remove('show');
+            traderScreen.classList.remove('show');
             backBtn.classList.remove('show');
             switchChildBtn.classList.remove('show');
             const isTutor = screenName === 'tutoring';
             const isFitness = screenName === 'fitness';
-            headerTitle.textContent = isTutor ? 'Koko' : isFitness ? 'סוכן הכושר' : 'Family Agent Platform';
-            headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : 'הסוכנים של המשפחה במקום אחד';
-            platformAvatar.style.display = isTutor || isFitness ? 'none' : 'inline-block';
+            const isTrader = screenName === 'trader';
+            headerTitle.textContent = isTutor ? 'Koko' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : 'Family Agent Platform';
+            headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : isTrader ? 'מסחר אלגוריתמי, ביצועים וניהול סיכונים' : 'הסוכנים של המשפחה במקום אחד';
+            platformAvatar.style.display = isTutor || isFitness || isTrader ? 'none' : 'inline-block';
             kokoHeaderAvatar.style.display = isTutor ? 'inline-block' : 'none';
             
             if (screenName === 'profile') {
@@ -1547,12 +1612,16 @@
                 fitnessScreen.classList.add('show');
                 backBtn.classList.add('show');
                 switchChildBtn.classList.add('show');
+            } else if (screenName === 'trader') {
+                traderScreen.classList.add('show');
+                backBtn.classList.add('show');
+                loadNeuralTrader();
             }
         }
 
         // Go back to previous screen
         function goBack() {
-            if (fitnessScreen.classList.contains('show')) {
+            if (fitnessScreen.classList.contains('show') || traderScreen.classList.contains('show')) {
                 showScreen('subject');
             } else if (tutoringScreen.classList.contains('show')) {
                 if (historyBtn) historyBtn.style.display = 'none';
@@ -2292,6 +2361,142 @@
             } catch (e) { content.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
         }
 
+        function traderEndpoint(group, path) {
+            const item = group?.[path];
+            return item?.data ?? item ?? {};
+        }
+
+        function traderMoney(value) {
+            return Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', maximumFractionDigits:0 }).format(Number(value)) : '—';
+        }
+
+        function traderNumber(value, suffix='') {
+            return Number.isFinite(Number(value)) ? `${Number(value).toLocaleString('en-US')}${suffix}` : '—';
+        }
+
+        function traderTable(rows, columns) {
+            if (!Array.isArray(rows) || rows.length === 0) return '<div class="trader-empty">אין נתונים זמינים</div>';
+            const head = columns.map(column => `<th>${escapeFitnessHtml(column.label)}</th>`).join('');
+            const body = rows.map(row => `<tr>${columns.map(column => {
+                const value = column.format ? column.format(row[column.key], row) : row[column.key];
+                return `<td>${escapeFitnessHtml(value ?? '—')}</td>`;
+            }).join('')}</tr>`).join('');
+            return `<table class="trader-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+        }
+
+        function renderTraderChart(history) {
+            const chart = document.getElementById('trader-chart');
+            chart.innerHTML = '';
+            const values = (Array.isArray(history) ? history : []).map(row => Number(row.value)).filter(Number.isFinite);
+            if (!values.length) {
+                chart.innerHTML = '<div class="trader-empty">אין עדיין היסטוריית ביצועים</div>';
+                return;
+            }
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            values.forEach(value => {
+                const bar = document.createElement('span');
+                bar.style.height = `${20 + ((value - min) / Math.max(1, max - min)) * 80}%`;
+                bar.title = traderMoney(value);
+                chart.appendChild(bar);
+            });
+        }
+
+        function renderNeuralTrader(telemetryPayload, analyticsPayload) {
+            const telemetry = telemetryPayload?.snapshot?.telemetry || telemetryPayload?.telemetry || {};
+            const analytics = analyticsPayload?.analytics?.analytics || analyticsPayload?.analytics || {};
+            const status = traderEndpoint(analytics, '/status');
+            const portfolio = traderEndpoint(analytics, '/portfolio');
+            const positions = traderEndpoint(analytics, '/positions');
+            const history = traderEndpoint(analytics, '/performance/history');
+            const signals = traderEndpoint(analytics, '/signals');
+            const trades = traderEndpoint(analytics, '/orders/trades');
+            const health = traderEndpoint(telemetry, '/health');
+            const alerts = traderEndpoint(telemetry, '/alerts');
+            const regime = traderEndpoint(telemetry, '/regime/summary');
+            const models = traderEndpoint(telemetry, '/model/summary');
+            document.getElementById('trader-value').textContent = traderMoney(portfolio.total_value ?? status.portfolio_value);
+            document.getElementById('trader-cash').textContent = traderMoney(portfolio.cash ?? status.cash);
+            document.getElementById('trader-drawdown').textContent = traderNumber(portfolio.drawdown_pct ?? status.drawdown_pct, '%');
+            document.getElementById('trader-position-count').textContent = traderNumber(portfolio.positions_count ?? status.positions_count);
+            const mode = String(portfolio.mode ?? status.mode ?? 'unknown').toUpperCase();
+            const healthStatus = String(health.status ?? 'unknown').toLowerCase();
+            const observedRegime = regime.last_observed_regime || 'לא זמין';
+            const statusRow = document.getElementById('trader-status-row');
+            statusRow.innerHTML = `<span class="trader-badge ${healthStatus === 'ok' ? 'ok' : 'warn'}">מערכת: ${escapeFitnessHtml(healthStatus)}</span><span class="trader-badge ${mode === 'PAPER' ? 'warn' : 'bad'}">מצב: ${escapeFitnessHtml(mode)}</span><span class="trader-badge">משטר שוק: ${escapeFitnessHtml(observedRegime)}</span><span class="trader-badge">עודכן: ${escapeFitnessHtml(portfolio.last_saved || status.last_saved || 'לא זמין')}</span>`;
+            document.getElementById('trader-risk').innerHTML = `<p><strong>משטר שוק:</strong> ${escapeFitnessHtml(observedRegime)}</p><p><strong>שיא תיק:</strong> ${escapeFitnessHtml(traderMoney(portfolio.peak_value))}</p><p><strong>עצירת מסחר עד:</strong> ${escapeFitnessHtml(portfolio.circuit_breaker_cooldown_until || 'לא פעילה')}</p><p><strong>מודלים זמינים:</strong> ${escapeFitnessHtml(Object.values(models.files || {}).filter(file => file.present).length)} / ${escapeFitnessHtml(Object.keys(models.files || {}).length)}</p>`;
+            document.getElementById('trader-positions').innerHTML = traderTable(positions, [
+                {key:'ticker',label:'Ticker'}, {key:'shares',label:'Shares'}, {key:'cost_basis',label:'Entry',format:traderMoney}, {key:'current_price',label:'Current',format:traderMoney}, {key:'market_value',label:'Value',format:traderMoney}, {key:'pnl_usd',label:'P/L',format:traderMoney}, {key:'pnl_pct',label:'P/L %',format:value => traderNumber(value,'%')}, {key:'weight_pct',label:'Weight',format:value => traderNumber(value,'%')}
+            ]);
+            document.getElementById('trader-signals').innerHTML = traderTable(signals, [
+                {key:'ticker',label:'Ticker'}, {key:'symbol',label:'Symbol'}, {key:'action',label:'Action'}, {key:'signal',label:'Signal'}, {key:'confidence',label:'Confidence'}, {key:'score',label:'Score'}
+            ]);
+            document.getElementById('trader-trades').innerHTML = traderTable(trades, [
+                {key:'date',label:'Date'}, {key:'ticker',label:'Ticker'}, {key:'action',label:'Action'}, {key:'quantity',label:'Qty'}, {key:'price',label:'Price',format:traderMoney}, {key:'status',label:'Status'}, {key:'exit_reason',label:'Reason'}
+            ]);
+            const alertRows = Array.isArray(alerts) ? alerts : [];
+            document.getElementById('trader-alerts').innerHTML = alertRows.length ? alertRows.map(alert => `<div class="trader-alert">${escapeFitnessHtml(alert.message || alert)}</div>`).join('') : '<div class="trader-empty">אין התראות פעילות</div>';
+            renderTraderChart(history);
+            document.getElementById('trader-admin-controls').style.display = currentRole === 'admin' ? 'block' : 'none';
+            document.getElementById('trader-report').style.display = currentRole === 'admin' ? 'inline-block' : 'none';
+            document.getElementById('trader-message').style.display = 'none';
+            document.getElementById('trader-content').style.display = 'grid';
+        }
+
+        async function loadNeuralTrader(forceRefresh=false) {
+            const message = document.getElementById('trader-message');
+            const refresh = document.getElementById('trader-refresh');
+            message.style.display = 'block';
+            message.textContent = forceRefresh ? 'מרענן נתונים מהסוכן...' : 'טוען נתוני מסחר...';
+            refresh.disabled = true;
+            try {
+                if (!currentRole) {
+                    const roleResponse = await safeFetch('/api/control/me');
+                    if (roleResponse.ok) currentRole = (await roleResponse.json()).role;
+                }
+                if (forceRefresh) {
+                    const refreshed = await safeFetch('/api/control/agents/neuraltrader/snapshot/refresh', { method:'POST' });
+                    if (!refreshed.ok) throw new Error(`Refresh failed: ${refreshed.status}`);
+                }
+                const [snapshotResponse, analyticsResponse] = await Promise.all([
+                    safeFetch('/api/control/agents/neuraltrader/snapshot'),
+                    safeFetch('/api/control/agents/neuraltrader/analytics')
+                ]);
+                if (!snapshotResponse.ok || !analyticsResponse.ok) throw new Error('NeuralTrader data unavailable');
+                renderNeuralTrader(await snapshotResponse.json(), await analyticsResponse.json());
+            } catch (error) {
+                console.error('NeuralTrader dashboard error:', error);
+                message.style.display = 'block';
+                message.textContent = 'לא ניתן לטעון את נתוני NeuralTrader כרגע.';
+            } finally {
+                refresh.disabled = false;
+            }
+        }
+
+        async function issueTraderCommand(commandType) {
+            if (currentRole !== 'admin' || !confirm(`להפעיל פקודת ${commandType} במצב מסחר נייר?`)) return;
+            const buttons = document.querySelectorAll('[data-trader-command], #trader-report');
+            buttons.forEach(button => button.disabled = true);
+            try {
+                const response = await safeFetch('/api/control/agents/neuraltrader/commands', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command_type:commandType,payload:{}}) });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+                alert(`הפקודה הופעלה: ${data.status || 'started'}`);
+            } catch (error) {
+                console.error('NeuralTrader command failed:', error);
+                alert('הפעלת הפקודה נכשלה');
+            } finally {
+                buttons.forEach(button => button.disabled = false);
+            }
+        }
+
+        document.getElementById('trader-refresh').addEventListener('click', () => loadNeuralTrader(true));
+        document.getElementById('trader-report').addEventListener('click', () => issueTraderCommand('report'));
+        document.getElementById('trader-admin-controls').addEventListener('click', event => {
+            const button = event.target.closest('[data-trader-command]');
+            if (button) issueTraderCommand(button.dataset.traderCommand);
+        });
+
         // Event listeners
         backBtn.addEventListener('click', goBack);
         switchChildBtn.addEventListener('click', switchChild);
@@ -2307,9 +2512,8 @@
                     await selectSubject(subject, agentName);
                 } else if (agentId === 'fitness') {
                     openFitness();
-                } else {
-                    const desc = card.querySelector('p')?.textContent || '';
-                    alert(`${agentName}\n${desc}\n\nפאנל ניהול עבור ${agentName} — בקרוב`);
+                } else if (agentId === 'neuraltrader') {
+                    showScreen('trader');
                 }
             } catch (error) {
                 console.error('Error starting agent:', error);
