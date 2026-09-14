@@ -35,6 +35,7 @@ from rbac import Role, get_current_role, require_permission
 router = APIRouter(prefix="/api/control", tags=["Control Plane"])
 
 AGENT_ID_PATH = "{agent_id}"
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "testserver"}
 _AGENT_LOGS = deque(maxlen=2000)
 _LOG_AGENT_NAMES = {
     "fitness_agent": {"fitness"},
@@ -272,7 +273,8 @@ async def get_agent_logs(agent_id: str, request: Request, limit: int = 100, db: 
     if agent.is_builtin:
         live_logs = [item for item in _AGENT_LOGS if agent_id in item["agents"]]
         persisted_logs = _persisted_agent_logs(agent_id, limit)
-        return {"agent_id": agent_id, "source": "local", "logs": (persisted_logs + live_logs)[-limit:]}
+        source = "local" if request.url.hostname in _LOCAL_HOSTNAMES else "server"
+        return {"agent_id": agent_id, "source": source, "logs": (persisted_logs + live_logs)[-limit:]}
     try:
         response = await AgentConnector(agent_id).send("GET", "/logs/recent")
         data = response.get("data", response) if isinstance(response, dict) else {}
