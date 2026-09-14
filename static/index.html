@@ -1060,6 +1060,7 @@
             <div class="profile-grid" id="profile-grid">
                 <div class="loading">טוען פרופילים...</div>
             </div>
+            <button class="trader-btn trader-btn-secondary" id="agent-logs-open" style="display:none;margin:24px auto 0">יומן פעילות חי של כל הסוכנים</button>
         </div>
 
         <!-- Agent Selection Screen -->
@@ -1070,7 +1071,6 @@
             <div class="subject-grid" id="subject-grid">
                 <div class="loading">טוען סוכנים...</div>
             </div>
-            <button class="trader-btn trader-btn-secondary" id="agent-logs-open" style="display:none;margin:24px auto 0">יומן פעילות חי של כל הסוכנים</button>
         </div>
 
         <div class="trader-screen" id="agent-logs-screen">
@@ -1398,10 +1398,21 @@
                         childIndex++;
                     }
                 }
+                await loadOperationalAccess();
             } catch (error) {
                 console.error('Error loading users:', error);
                 profileGrid.innerHTML = '<div class="loading">שגיאה בטעינת פרופילים</div>';
             }
+        }
+
+        async function loadOperationalAccess() {
+            try {
+                const response = await safeFetch('/api/control/me');
+                if (response.ok) currentRole = (await response.json()).role;
+            } catch (error) {
+                console.error('Role lookup failed:', error);
+            }
+            document.getElementById('agent-logs-open').style.display = ['parent','admin'].includes(currentRole) ? 'block' : 'none';
         }
 
         // Open the fitness screen for the selected child
@@ -1638,7 +1649,9 @@
 
         // Go back to previous screen
         function goBack() {
-            if (fitnessScreen.classList.contains('show') || traderScreen.classList.contains('show') || agentLogsScreen.classList.contains('show')) {
+            if (agentLogsScreen.classList.contains('show')) {
+                showScreen('profile');
+            } else if (fitnessScreen.classList.contains('show') || traderScreen.classList.contains('show')) {
                 showScreen('subject');
             } else if (tutoringScreen.classList.contains('show')) {
                 if (historyBtn) historyBtn.style.display = 'none';
