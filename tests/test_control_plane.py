@@ -210,7 +210,7 @@ async def test_parent_can_read_sanitized_builtin_agent_logs(client, parent_heade
     resp = await client.get("/api/control/agents/fitness/logs", headers=parent_headers)
     assert resp.status_code == 200
     assert resp.json()["source"] == "local"
-    assert resp.json()["logs"][0]["message"] == "token=[REDACTED] [EMAIL]"
+    assert resp.json()["logs"][-1]["message"] == "token=[REDACTED] [EMAIL]"
 
 
 async def test_child_cannot_read_agent_logs(client, child_headers):

@@ -11,6 +11,7 @@ import json
 import re
 from collections import deque
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,6 +50,15 @@ _LOG_AGENT_NAMES = {
 }
 _LOG_SECRET_RE = re.compile(r"(?i)(secret|token|password|api[_-]?key|authorization)(\s*[=:]\s*)(\S+)")
 _LOG_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_LOG_AGENT_TERMS = {
+    "koko_math": ("/api/tutor/", "tutors:"),
+    "koko_english": ("/api/tutor/", "tutors:"),
+    "fitness": ("/api/fitness/", "fitness_agent:"),
+    "nutrition": ("nutrition_agent", "nutrition:"),
+    "orchestrator": ("orchestrator:", "scheduler:", "/api/orchestrator/"),
+    "messenger": ("messenger_agent", "/api/messenger/"),
+    "data": ("data_agent", "memory_layer:", "memory_manager:"),
+}
 
 
 def _sanitize_log_message(value: str) -> str:
@@ -79,6 +89,33 @@ def capture_agent_log(message):
         "message": _sanitize_log_message(record.get("message", "")),
         "agents": sorted(agents),
     })
+
+
+def _persisted_agent_logs(agent_id: str, limit: int) -> list[dict]:
+    terms = _LOG_AGENT_TERMS.get(agent_id, ())
+    if not terms:
+        return []
+    paths = sorted(Path("logs").glob("tutor_app_*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
+    matched = []
+    for path in paths[:3]:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            if any(term.lower() in line.lower() for term in terms):
+                parts = line.split(" | ")
+                matched.append({
+                    "timestamp": parts[0] if parts else None,
+                    "level": parts[3].strip() if len(parts) > 3 else "INFO",
+                    "module": agent_id,
+                    "function": None,
+                    "message": _sanitize_log_message(line),
+                    "agents": [agent_id],
+                })
+                if len(matched) >= limit:
+                    return list(reversed(matched))
+    return list(reversed(matched))
 
 
 def _json_loads(value: Optional[str]) -> dict:
@@ -233,8 +270,9 @@ async def get_agent_logs(agent_id: str, request: Request, limit: int = 100, db: 
     agent = await _get_agent(db, agent_id)
     limit = max(1, min(limit, 500))
     if agent.is_builtin:
-        logs = [item for item in _AGENT_LOGS if agent_id in item["agents"]]
-        return {"agent_id": agent_id, "source": "local", "logs": logs[-limit:]}
+        live_logs = [item for item in _AGENT_LOGS if agent_id in item["agents"]]
+        persisted_logs = _persisted_agent_logs(agent_id, limit)
+        return {"agent_id": agent_id, "source": "local", "logs": (persisted_logs + live_logs)[-limit:]}
     try:
         response = await AgentConnector(agent_id).send("GET", "/logs/recent")
         data = response.get("data", response) if isinstance(response, dict) else {}
