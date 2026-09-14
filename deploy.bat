@@ -88,6 +88,19 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+if not exist "%PROJECT%\.env" (
+    echo [ERROR] Koko .env is missing. Deployment aborted.
+    pause
+    exit /b 1
+)
+echo [INFO] Uploading Koko .env...
+scp %SSH_OPTS% "%PROJECT%\.env" %SERVER%:/root/.env
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Failed to upload Koko .env
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 :: ---------------------------------------------------------------------------
 :: 3. NeuralTrader package
 :: ---------------------------------------------------------------------------
