@@ -8,6 +8,8 @@ Provides:
   - signed inbound webhook handler with replay protection
 """
 import json
+import re
+from collections import deque
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -32,6 +34,51 @@ from rbac import Role, get_current_role, require_permission
 router = APIRouter(prefix="/api/control", tags=["Control Plane"])
 
 AGENT_ID_PATH = "{agent_id}"
+_AGENT_LOGS = deque(maxlen=2000)
+_LOG_AGENT_NAMES = {
+    "fitness_agent": {"fitness"},
+    "tutors": {"koko_math", "koko_english"},
+    "orchestrator": {"orchestrator"},
+    "scheduler": {"orchestrator"},
+    "agents.messenger_agent": {"messenger"},
+    "agents.data_agent": {"data"},
+    "agents.nutrition_agent": {"nutrition"},
+    "nutrition_agent": {"nutrition"},
+    "memory_manager": {"data"},
+    "memory_layer": {"data"},
+}
+_LOG_SECRET_RE = re.compile(r"(?i)(secret|token|password|api[_-]?key|authorization)(\s*[=:]\s*)(\S+)")
+_LOG_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _sanitize_log_message(value: str) -> str:
+    value = _LOG_SECRET_RE.sub(r"\1\2[REDACTED]", str(value))
+    value = _LOG_EMAIL_RE.sub("[EMAIL]", value)
+    return value.replace("\r", " ").replace("\n", " ")[:2000]
+
+
+def capture_agent_log(message):
+    record = message.record
+    name = str(record.get("name") or "")
+    agents = set()
+    for module, mapped_agents in _LOG_AGENT_NAMES.items():
+        if name == module or name.startswith(module + "."):
+            agents.update(mapped_agents)
+    path = str(record.get("extra", {}).get("request_path", ""))
+    if path.startswith("/api/tutor"):
+        agents.update({"koko_math", "koko_english"})
+    elif path.startswith("/api/fitness"):
+        agents.add("fitness")
+    elif path.startswith("/api/orchestrator"):
+        agents.add("orchestrator")
+    _AGENT_LOGS.append({
+        "timestamp": record["time"].isoformat(),
+        "level": record["level"].name,
+        "module": name,
+        "function": record.get("function"),
+        "message": _sanitize_log_message(record.get("message", "")),
+        "agents": sorted(agents),
+    })
 
 
 def _json_loads(value: Optional[str]) -> dict:
@@ -178,6 +225,26 @@ async def get_capabilities(agent_id: str, request: Request, db: AsyncSession = D
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
+@router.get("/agents/{agent_id}/logs")
+async def get_agent_logs(agent_id: str, request: Request, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    role = get_current_role(request)
+    if role not in {Role.ADMIN, Role.PARENT}:
+        raise HTTPException(403, detail="agent logs require parent or admin access")
+    agent = await _get_agent(db, agent_id)
+    limit = max(1, min(limit, 500))
+    if agent.is_builtin:
+        logs = [item for item in _AGENT_LOGS if agent_id in item["agents"]]
+        return {"agent_id": agent_id, "source": "local", "logs": logs[-limit:]}
+    try:
+        response = await AgentConnector(agent_id).send("GET", "/logs/recent")
+        data = response.get("data", response) if isinstance(response, dict) else {}
+        lines = data.get("lines", []) if isinstance(data, dict) else []
+        logs = [{"timestamp": None, "level": "INFO", "module": agent_id, "function": None, "message": _sanitize_log_message(line)} for line in lines[-limit:]]
+        return {"agent_id": agent_id, "source": "remote", "logs": logs}
+    except Exception as exc:
+        return {"agent_id": agent_id, "source": "unavailable", "logs": [], "error": _sanitize_log_message(str(exc))}
+
+
 @router.get("/agents/{agent_id}/health")
 async def get_health(agent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     require_permission(request, agent_id, "read")

@@ -113,6 +113,7 @@ _NEURAL_PROFILE = AgentProfile(
         "/status",
         "/portfolio",
         "/alerts",
+        "/workflows",
         "/model/summary",
         "/regime/summary",
     ],

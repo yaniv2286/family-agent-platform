@@ -1070,6 +1070,13 @@
             <div class="subject-grid" id="subject-grid">
                 <div class="loading">טוען סוכנים...</div>
             </div>
+            <button class="trader-btn trader-btn-secondary" id="agent-logs-open" style="display:none;margin:24px auto 0">יומן פעילות חי של כל הסוכנים</button>
+        </div>
+
+        <div class="trader-screen" id="agent-logs-screen">
+            <div class="trader-hero"><div><h2>יומן פעילות הסוכנים</h2><p>אירועים חיים מהסביבה המקומית או משרת הייצור</p></div><div class="trader-actions"><button class="trader-btn trader-btn-primary" id="agent-logs-refresh">רענון</button></div></div>
+            <div class="trader-status-row" id="agent-log-tabs"></div>
+            <section class="trader-card" style="margin-top:16px"><div id="agent-log-meta" style="margin-bottom:12px;color:#64748b"></div><div id="agent-log-output" style="direction:ltr;text-align:left;background:#0f172a;color:#d1fae5;border-radius:12px;padding:14px;min-height:340px;max-height:560px;overflow:auto;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere">בחר סוכן כדי להציג פעילות.</div></section>
         </div>
 
         <div class="trader-screen" id="trader-screen">
@@ -1175,6 +1182,8 @@
         let selectedUserProfile = null;
         let selectedSubject = null;
         let currentRole = null;
+        let currentLogAgent = null;
+        let agentLogTimer = null;
         let sessionStartTime = null;
         let sessionDurationSeconds = 20 * 60; // 20 minutes
         let timerInterval = null;
@@ -1428,6 +1437,7 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 if (roleResponse.ok) currentRole = (await roleResponse.json()).role;
+                document.getElementById('agent-logs-open').style.display = ['parent','admin'].includes(currentRole) ? 'block' : 'none';
                 const agents = (data.agents || []).filter(agent => userFacingAgents.has(agent.agent_id));
                 grid.innerHTML = '';
                 if (agents.length === 0) {
@@ -1582,20 +1592,23 @@
         // Show specific screen
         const fitnessScreen = document.getElementById('fitness-screen');
         const traderScreen = document.getElementById('trader-screen');
+        const agentLogsScreen = document.getElementById('agent-logs-screen');
         function showScreen(screenName) {
             profileScreen.classList.add('hidden');
             subjectScreen.classList.add('hidden');
             tutoringScreen.classList.remove('show');
             fitnessScreen.classList.remove('show');
             traderScreen.classList.remove('show');
+            agentLogsScreen.classList.remove('show');
             backBtn.classList.remove('show');
             switchChildBtn.classList.remove('show');
             const isTutor = screenName === 'tutoring';
             const isFitness = screenName === 'fitness';
             const isTrader = screenName === 'trader';
-            headerTitle.textContent = isTutor ? 'Koko' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : 'Family Agent Platform';
-            headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : isTrader ? 'מסחר אלגוריתמי, ביצועים וניהול סיכונים' : 'הסוכנים של המשפחה במקום אחד';
-            platformAvatar.style.display = isTutor || isFitness || isTrader ? 'none' : 'inline-block';
+            const isAgentLogs = screenName === 'agent-logs';
+            headerTitle.textContent = isTutor ? 'Koko' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : isAgentLogs ? 'Live Agent Logs' : 'Family Agent Platform';
+            headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : isTrader ? 'מסחר אלגוריתמי, ביצועים וניהול סיכונים' : isAgentLogs ? 'ניטור פעילות בזמן אמת' : 'הסוכנים של המשפחה במקום אחד';
+            platformAvatar.style.display = isTutor || isFitness || isTrader || isAgentLogs ? 'none' : 'inline-block';
             kokoHeaderAvatar.style.display = isTutor ? 'inline-block' : 'none';
             
             if (screenName === 'profile') {
@@ -1616,12 +1629,16 @@
                 traderScreen.classList.add('show');
                 backBtn.classList.add('show');
                 loadNeuralTrader();
+            } else if (screenName === 'agent-logs') {
+                agentLogsScreen.classList.add('show');
+                backBtn.classList.add('show');
+                loadAgentLogCatalog();
             }
         }
 
         // Go back to previous screen
         function goBack() {
-            if (fitnessScreen.classList.contains('show') || traderScreen.classList.contains('show')) {
+            if (fitnessScreen.classList.contains('show') || traderScreen.classList.contains('show') || agentLogsScreen.classList.contains('show')) {
                 showScreen('subject');
             } else if (tutoringScreen.classList.contains('show')) {
                 if (historyBtn) historyBtn.style.display = 'none';
@@ -2361,6 +2378,62 @@
             } catch (e) { content.innerHTML = '<div style="color:#dc3545;">שגיאת רשת</div>'; }
         }
 
+        async function loadAgentLogCatalog() {
+            const tabs = document.getElementById('agent-log-tabs');
+            tabs.innerHTML = '<span class="trader-badge">טוען סוכנים...</span>';
+            try {
+                const response = await safeFetch('/api/control/agents');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const agents = (await response.json()).agents || [];
+                tabs.innerHTML = '';
+                agents.forEach(agent => {
+                    const button = document.createElement('button');
+                    button.className = `trader-btn ${currentLogAgent === agent.agent_id ? 'trader-btn-primary' : 'trader-btn-secondary'}`;
+                    button.dataset.logAgent = agent.agent_id;
+                    button.textContent = agent.name;
+                    tabs.appendChild(button);
+                });
+                if (!currentLogAgent && agents.length) currentLogAgent = agents[0].agent_id;
+                if (currentLogAgent) await loadAgentLogs(currentLogAgent);
+                clearInterval(agentLogTimer);
+                agentLogTimer = setInterval(() => {
+                    if (agentLogsScreen.classList.contains('show') && currentLogAgent) loadAgentLogs(currentLogAgent, true);
+                }, 5000);
+            } catch (error) {
+                console.error('Agent log catalog failed:', error);
+                tabs.innerHTML = '<span class="trader-badge bad">לא ניתן לטעון את רשימת הסוכנים</span>';
+            }
+        }
+
+        async function loadAgentLogs(agentId, quiet=false) {
+            const output = document.getElementById('agent-log-output');
+            const meta = document.getElementById('agent-log-meta');
+            if (!quiet) output.textContent = 'טוען פעילות...';
+            try {
+                const response = await safeFetch(`/api/control/agents/${encodeURIComponent(agentId)}/logs?limit=200`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+                const logs = data.logs || [];
+                const wasNearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 80;
+                output.textContent = logs.length ? logs.map(item => `${item.timestamp || '—'}  ${(item.level || 'INFO').padEnd(8)}  ${item.module || agentId}${item.function ? ':' + item.function : ''}  ${item.message || ''}`).join('\n') : 'אין עדיין אירועי פעילות עבור סוכן זה.';
+                meta.textContent = `סוכן: ${agentId} · מקור: ${data.source || 'unknown'} · אירועים: ${logs.length} · רענון אוטומטי כל 5 שניות`;
+                if (wasNearBottom || !quiet) output.scrollTop = output.scrollHeight;
+            } catch (error) {
+                console.error('Agent logs failed:', error);
+                if (!quiet) output.textContent = `לא ניתן לטעון פעילות עבור ${agentId}.`;
+            }
+        }
+
+        document.getElementById('agent-logs-open').addEventListener('click', () => showScreen('agent-logs'));
+        document.getElementById('agent-logs-refresh').addEventListener('click', () => currentLogAgent && loadAgentLogs(currentLogAgent));
+        document.getElementById('agent-log-tabs').addEventListener('click', event => {
+            const button = event.target.closest('[data-log-agent]');
+            if (!button) return;
+            currentLogAgent = button.dataset.logAgent;
+            document.querySelectorAll('[data-log-agent]').forEach(item => item.className = `trader-btn ${item === button ? 'trader-btn-primary' : 'trader-btn-secondary'}`);
+            loadAgentLogs(currentLogAgent);
+        });
+
         function traderEndpoint(group, path) {
             const item = group?.[path];
             return item?.data ?? item ?? {};
@@ -2413,6 +2486,7 @@
             const trades = traderEndpoint(analytics, '/orders/trades');
             const health = traderEndpoint(telemetry, '/health');
             const alerts = traderEndpoint(telemetry, '/alerts');
+            const workflows = traderEndpoint(telemetry, '/workflows');
             const regime = traderEndpoint(telemetry, '/regime/summary');
             const models = traderEndpoint(telemetry, '/model/summary');
             document.getElementById('trader-value').textContent = traderMoney(portfolio.total_value ?? status.portfolio_value);
@@ -2423,8 +2497,12 @@
             const healthStatus = String(health.status ?? 'unknown').toLowerCase();
             const observedRegime = regime.last_observed_regime || 'לא זמין';
             const statusRow = document.getElementById('trader-status-row');
-            statusRow.innerHTML = `<span class="trader-badge ${healthStatus === 'ok' ? 'ok' : 'warn'}">מערכת: ${escapeFitnessHtml(healthStatus)}</span><span class="trader-badge ${mode === 'PAPER' ? 'warn' : 'bad'}">מצב: ${escapeFitnessHtml(mode)}</span><span class="trader-badge">משטר שוק: ${escapeFitnessHtml(observedRegime)}</span><span class="trader-badge">עודכן: ${escapeFitnessHtml(portfolio.last_saved || status.last_saved || 'לא זמין')}</span>`;
-            document.getElementById('trader-risk').innerHTML = `<p><strong>משטר שוק:</strong> ${escapeFitnessHtml(observedRegime)}</p><p><strong>שיא תיק:</strong> ${escapeFitnessHtml(traderMoney(portfolio.peak_value))}</p><p><strong>עצירת מסחר עד:</strong> ${escapeFitnessHtml(portfolio.circuit_breaker_cooldown_until || 'לא פעילה')}</p><p><strong>מודלים זמינים:</strong> ${escapeFitnessHtml(Object.values(models.files || {}).filter(file => file.present).length)} / ${escapeFitnessHtml(Object.keys(models.files || {}).length)}</p>`;
+            const fetchStatus = workflows.jobs?.fetch?.status || 'unknown';
+            const paperStatus = workflows.jobs?.paper?.status || 'unknown';
+            const reportStatus = workflows.jobs?.report?.status || 'unknown';
+            const dataFresh = workflows.market_data?.fresh;
+            statusRow.innerHTML = `<span class="trader-badge ${healthStatus === 'ok' ? 'ok' : 'warn'}">מערכת: ${escapeFitnessHtml(healthStatus)}</span><span class="trader-badge ${mode === 'PAPER' ? 'warn' : 'bad'}">מצב: ${escapeFitnessHtml(mode)}</span><span class="trader-badge ${fetchStatus === 'success' ? 'ok' : 'bad'}">Tiingo: ${escapeFitnessHtml(fetchStatus)}</span><span class="trader-badge ${paperStatus === 'success' ? 'ok' : 'bad'}">ניתוח: ${escapeFitnessHtml(paperStatus)}</span><span class="trader-badge ${reportStatus === 'success' ? 'ok' : 'bad'}">Telegram: ${escapeFitnessHtml(reportStatus)}</span><span class="trader-badge">משטר שוק: ${escapeFitnessHtml(observedRegime)}</span>`;
+            document.getElementById('trader-risk').innerHTML = `<p><strong>משטר שוק:</strong> ${escapeFitnessHtml(observedRegime)}</p><p><strong>שיא תיק:</strong> ${escapeFitnessHtml(traderMoney(portfolio.peak_value))}</p><p><strong>עצירת מסחר עד:</strong> ${escapeFitnessHtml(portfolio.circuit_breaker_cooldown_until || 'לא פעילה')}</p><p><strong>מודלים זמינים:</strong> ${escapeFitnessHtml(Object.values(models.files || {}).filter(file => file.present).length)} / ${escapeFitnessHtml(Object.keys(models.files || {}).length)}</p><p><strong>נתוני שוק:</strong> ${dataFresh ? 'עדכניים' : 'ישנים או חסרים'} (${escapeFitnessHtml(traderNumber(workflows.market_data?.age_hours,' שעות'))})</p><p><strong>הרצת Fetch אחרונה:</strong> ${escapeFitnessHtml(workflows.jobs?.fetch?.last_run || 'לא זמינה')}</p><p><strong>ניתוח אחרון:</strong> ${escapeFitnessHtml(workflows.jobs?.paper?.last_run || 'לא זמין')}</p><p><strong>דוח אחרון:</strong> ${escapeFitnessHtml(workflows.jobs?.report?.last_run || 'לא זמין')}</p>`;
             document.getElementById('trader-positions').innerHTML = traderTable(positions, [
                 {key:'ticker',label:'Ticker'}, {key:'shares',label:'Shares'}, {key:'cost_basis',label:'Entry',format:traderMoney}, {key:'current_price',label:'Current',format:traderMoney}, {key:'market_value',label:'Value',format:traderMoney}, {key:'pnl_usd',label:'P/L',format:traderMoney}, {key:'pnl_pct',label:'P/L %',format:value => traderNumber(value,'%')}, {key:'weight_pct',label:'Weight',format:value => traderNumber(value,'%')}
             ]);

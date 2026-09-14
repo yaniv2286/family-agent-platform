@@ -197,6 +197,33 @@ async def test_child_cannot_post_health_for_nutrition(client, child_headers):
 
 
 # ── telemetry snapshot / refresh / analytics cache ───────────────────────────
+async def test_parent_can_read_sanitized_builtin_agent_logs(client, parent_headers):
+    control_plane._AGENT_LOGS.clear()
+    control_plane._AGENT_LOGS.append({
+        "timestamp": "2026-01-01T00:00:00Z",
+        "level": "INFO",
+        "module": "fitness_agent",
+        "function": "generate_plan",
+        "message": control_plane._sanitize_log_message("token=secret-value user@example.com"),
+        "agents": ["fitness"],
+    })
+    resp = await client.get("/api/control/agents/fitness/logs", headers=parent_headers)
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "local"
+    assert resp.json()["logs"][0]["message"] == "token=[REDACTED] [EMAIL]"
+
+
+async def test_child_cannot_read_agent_logs(client, child_headers):
+    resp = await client.get("/api/control/agents/fitness/logs", headers=child_headers)
+    assert resp.status_code == 403
+
+
+async def test_remote_agent_logs_are_proxied(client, parent_headers, fake_connector):
+    resp = await client.get("/api/control/agents/neuraltrader/logs", headers=parent_headers)
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "remote"
+
+
 async def test_refresh_snapshot_caches_telemetry(client, parent_headers, fake_connector):
     resp = await client.post("/api/control/agents/neuraltrader/snapshot/refresh", headers=parent_headers)
     assert resp.status_code == 200

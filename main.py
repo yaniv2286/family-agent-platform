@@ -37,7 +37,7 @@ from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memo
 from scheduler import start_scheduler, stop_scheduler
 from orchestrator import run_daily_orchestration, router as orchestrator_router
 from collaboration_api import router as collaboration_router
-from control_plane import router as control_plane_router
+from control_plane import capture_agent_log, router as control_plane_router
 from fitness_agent import router as fitness_router
 from agents.messenger_agent import router as messenger_router
 from agents.data_agent import router as data_router
@@ -156,6 +156,7 @@ logger.add(
     level="INFO",
 )
 logger.add(sys.stderr, colorize=True, level="INFO", enqueue=True, format=_STDERR_FORMAT)
+logger.add(capture_agent_log, level="INFO")
 
 @app.middleware("http")
 async def pin_middleware(request: Request, call_next):
@@ -180,7 +181,7 @@ async def request_id_middleware(request: Request, call_next):
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
     start_time = time.perf_counter()
-    with logger.contextualize(request_id=request_id):
+    with logger.contextualize(request_id=request_id, request_path=request.url.path):
         logger.info(f"Request started: {request.method} {request.url.path}")
         response = await call_next(request)
         process_time = time.perf_counter() - start_time
