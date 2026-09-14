@@ -1119,6 +1119,9 @@
         let timerInterval = null;
         let isListening = false;
         let recognition = null;
+        let voiceAudioContext = null;
+        let voiceStream = null;
+        let voiceAnimationFrame = null;
         let currentAudio = null;
         let isEnding = false;
 
@@ -1821,12 +1824,13 @@
                 recognition.onstart = () => {
                     isListening = true;
                     voiceButton.classList.add('listening');
-                    voiceButton.textContent = '🎧 מקשיב...';
+                    voiceButton.textContent = '🎧 מקשיב... לחץ לסיום';
                 };
 
                 recognition.onresult = (event) => {
                     const transcript = event.results[0][0].transcript;
                     textInput.value = transcript;
+                    if (recognition && isListening) recognition.stop();
                     sendMessage(transcript);
                 };
 
@@ -1847,21 +1851,68 @@
             }
         }
 
-        function startListening() {
-            if (recognition && !isListening) {
-                try {
-                    recognition.start();
-                    return true;
-                } catch (err) {
-                    console.error('Speech recognition start failed:', err);
-                    recognition = null;
-                    return false;
+        async function startVoiceActivityDetection() {
+            if (!navigator.mediaDevices?.getUserMedia) return;
+            voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            voiceAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = voiceAudioContext.createAnalyser();
+            analyser.fftSize = 1024;
+            voiceAudioContext.createMediaStreamSource(voiceStream).connect(analyser);
+            const samples = new Uint8Array(analyser.fftSize);
+            const startedAt = performance.now();
+            let noiseFloor = 0.01;
+            let speechDetected = false;
+            let quietSince = null;
+            const monitor = now => {
+                analyser.getByteTimeDomainData(samples);
+                let energy = 0;
+                for (const sample of samples) {
+                    const amplitude = (sample - 128) / 128;
+                    energy += amplitude * amplitude;
                 }
+                const level = Math.sqrt(energy / samples.length);
+                if (now - startedAt < 1000) {
+                    noiseFloor = Math.max(noiseFloor, level);
+                } else {
+                    const threshold = Math.max(0.025, noiseFloor * 2.2);
+                    if (level > threshold) {
+                        speechDetected = true;
+                        quietSince = null;
+                    } else if (speechDetected) {
+                        quietSince ??= now;
+                        if (now - quietSince >= 1800) {
+                            if (recognition && isListening) recognition.stop();
+                            return;
+                        }
+                    } else {
+                        noiseFloor = noiseFloor * 0.95 + level * 0.05;
+                    }
+                }
+                voiceAnimationFrame = requestAnimationFrame(monitor);
+            };
+            voiceAnimationFrame = requestAnimationFrame(monitor);
+        }
+
+        async function startListening() {
+            if (!recognition || isListening) return false;
+            try {
+                await startVoiceActivityDetection();
+                recognition.start();
+                return true;
+            } catch (err) {
+                console.error('Speech recognition start failed:', err);
+                stopListening();
+                return false;
             }
-            return false;
         }
 
         function stopListening() {
+            if (voiceAnimationFrame) cancelAnimationFrame(voiceAnimationFrame);
+            voiceAnimationFrame = null;
+            if (voiceStream) voiceStream.getTracks().forEach(track => track.stop());
+            voiceStream = null;
+            if (voiceAudioContext) voiceAudioContext.close().catch(() => {});
+            voiceAudioContext = null;
             isListening = false;
             voiceButton.classList.remove('listening');
             voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
@@ -2276,7 +2327,7 @@
             }
         });
 
-        voiceButton.addEventListener('click', () => {
+        voiceButton.addEventListener('click', async () => {
             // Stop any playing TTS the instant the child presses the microphone,
             // before getUserMedia or any other async work.
             if (currentAudio) {
@@ -2285,17 +2336,12 @@
                 currentAudio = null;
             }
 
-            const resetVoiceButton = () => {
-                voiceButton.classList.remove('listening');
-                voiceButton.textContent = recognition ? '🎤 לחץ לדיבור' : '🎤 הקלט/י הודעה';
-            };
-
-            const handleVoiceClick = () => {
+            const handleVoiceClick = async () => {
                 if (recognition) {
                     if (isListening) {
                         recognition.stop();
                     } else {
-                        const started = startListening();
+                        const started = await startListening();
                         if (!started) {
                             // Web Speech failed; fall back to file upload.
                             voiceFileInput.click();
@@ -2307,20 +2353,7 @@
                 }
             };
 
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                navigator.mediaDevices.getUserMedia({ audio: true })
-                    .then(stream => {
-                        stream.getTracks().forEach(track => track.stop());
-                        handleVoiceClick();
-                    })
-                    .catch(error => {
-                        console.error('Microphone permission error:', error);
-                        resetVoiceButton();
-                        alert("Microphone access blocked. HTTPS is required.");
-                    });
-            } else {
-                handleVoiceClick();
-            }
+            await handleVoiceClick();
         });
 
         voiceFileInput.addEventListener('change', (e) => {
