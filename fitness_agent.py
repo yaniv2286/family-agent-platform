@@ -1,11 +1,13 @@
 import json
 import random
+import re
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (Exercise, HealthLog, PlannedWorkoutExercise, ProgressionHistory,
@@ -14,7 +16,21 @@ from database import (Exercise, HealthLog, PlannedWorkoutExercise, ProgressionHi
 from event_bus import event_bus
 from memory_manager import memory_manager
 from memory_layer import MemoryCategory, user_memory
+from rbac import Role, require_permission
 import nutrition_agent  # register collaboration handler
+
+AGENT_ID = "fitness"
+
+
+def read_access(request: Request) -> str:
+    """Enforce the documented RBAC matrix for reads of Coach data."""
+    return require_permission(request, AGENT_ID, "read")
+
+
+def write_access(request: Request) -> str:
+    """Enforce the documented RBAC matrix for Coach mutations."""
+    return require_permission(request, AGENT_ID, "command")
+
 
 router = APIRouter(prefix="/api/fitness", tags=["Coach"])
 DEFAULT_EQUIPMENT = ["none", "balance_board", "balance_pad", "fitball", "pull_up_bar", "resistance_bands", "pilates_mat", "trx"]
@@ -41,7 +57,6 @@ def _normalize_video_url(url: str) -> str:
     """
     if not url:
         return url
-    import re
     url = url.strip()
     if url.startswith("https://youtu.be/"):
         return url
@@ -55,7 +70,12 @@ def _normalize_video_url(url: str) -> str:
 
 
 async def _exercises_to_avoid(db: AsyncSession, user_id: int, lookback_days: int = 30) -> set[int]:
-    """Return exercise IDs that caused pain or very high RPE recently."""
+    """Return exercise IDs from recent sessions the body did not tolerate.
+
+    The thresholds mirror the `blocked` rule in complete_plan exactly, so any
+    session that blocked progression also stops those movements being
+    re-prescribed.
+    """
     cutoff = datetime.utcnow() - timedelta(days=lookback_days)
     rows = (await db.execute(
         select(WorkoutPerformance, WorkoutSet.exercise_id)
@@ -63,7 +83,7 @@ async def _exercises_to_avoid(db: AsyncSession, user_id: int, lookback_days: int
         .where(
             WorkoutPerformance.user_id == user_id,
             WorkoutPerformance.completed_at >= cutoff,
-            ((WorkoutPerformance.pain > 0) | (WorkoutPerformance.perceived_exertion >= 9)),
+            ((WorkoutPerformance.pain > 0) | (WorkoutPerformance.perceived_exertion >= 9) | (WorkoutPerformance.fatigue >= 8)),
         )
     )).all()
     return {int(exercise_id) for _, exercise_id in rows if exercise_id}
@@ -104,11 +124,71 @@ async def _recently_used_exercises(db: AsyncSession, user_id: int, lookback_days
     return {int(exercise_id) for exercise_id in rows if exercise_id}
 
 
+BASELINE_SETS = 2
+BASELINE_REPS = 8
+MAX_REPS = 15
+MAX_SETS = 4
+
+
+async def _progression_targets(db: AsyncSession, user_id: int, exercise_ids: List[int]) -> dict[int, dict]:
+    """Return per-exercise set/rep targets based on the last recorded session.
+
+    This closes the loop on ProgressionHistory: an exercise the user handled
+    comfortably (progression_allowed) earns exactly one small increase - reps
+    first, then an extra set once reps top out. Anything else holds steady, and
+    a blocked session steps back toward the baseline. Never more than one
+    variable changes at a time.
+    """
+    if not exercise_ids:
+        return {}
+    rows = (await db.execute(
+        select(WorkoutSet.exercise_id, WorkoutPerformance.progression_allowed,
+               func.max(WorkoutSet.set_number).label("sets"), func.max(WorkoutSet.reps).label("reps"),
+               WorkoutPerformance.completed_at)
+        .join(WorkoutPerformance, WorkoutPerformance.id == WorkoutSet.performance_id)
+        .where(WorkoutPerformance.user_id == user_id, WorkoutSet.exercise_id.in_(exercise_ids))
+        .group_by(WorkoutSet.exercise_id, WorkoutPerformance.id)
+        .order_by(WorkoutPerformance.completed_at.desc())
+    )).all()
+    targets: dict[int, dict] = {}
+    for exercise_id, allowed, last_sets, last_reps, _ in rows:
+        if exercise_id is None or exercise_id in targets:
+            continue  # rows are newest-first, so the first hit is the latest session
+        sets = int(last_sets or BASELINE_SETS) or BASELINE_SETS
+        reps = int(last_reps or BASELINE_REPS) or BASELINE_REPS
+        if allowed:
+            if reps < MAX_REPS: reps += 1
+            elif sets < MAX_SETS: sets, reps = sets + 1, BASELINE_REPS
+        else:
+            # Step back toward the baseline after a painful or maximal session.
+            reps = max(5, min(reps, BASELINE_REPS))
+            sets = max(1, min(sets, BASELINE_SETS))
+        targets[int(exercise_id)] = {"sets": sets, "reps": reps, "progressed": bool(allowed)}
+    return targets
+
+
+def _next_training_date(training_days: List[str]) -> date:
+    """Return the soonest configured training day, today included."""
+    if not training_days:
+        return date.today()
+    wanted = {d.lower() for d in training_days} & DAYS
+    if not wanted:
+        return date.today()
+    today = date.today()
+    for offset in range(7):
+        candidate = today + timedelta(days=offset)
+        if candidate.strftime("%A").lower() in wanted:
+            return candidate
+    return today
+
+
 async def _memory_notes_for_plan(user_id: int) -> List[str]:
     """Return short safety/preference notes from the unified memory layer."""
     try:
         context = await user_memory.get_context(user_id, "coach")
     except Exception:
+        # Safety-relevant notes must never fail silently and unobserved.
+        logger.exception("Could not load Coach memory context for plan notes", user_id=user_id)
         return []
     notes = []
     for item in context.get("preferences", []):
@@ -133,7 +213,7 @@ def _coach_greeting(user_id: int, exercises: List[dict]) -> str:
     return "Coach here! Let's move with intention and keep everything pain-free."
 
 
-def _workout_insights(data, details, blocked):
+def _workout_insights(data, plan_id, blocked):
     """Build heuristic memory insights from a completed workout."""
     insights = []
     if data.pain > 0:
@@ -174,18 +254,18 @@ def _workout_insights(data, details, blocked):
             "key": "workout_note",
             "value": data.notes.strip()[:500],
             "confidence": 0.95,
-            "evidence": [{"plan_id": details[0].get("plan_id") if details else None}],
+            "evidence": [{"plan_id": plan_id}],
         })
     return insights
 
 
 class ProfileUpdate(BaseModel):
-    equipment: list[str] = Field(default_factory=list)
-    health_constraints: list[str] = Field(default_factory=list)
-    goals: list[str] = Field(default_factory=list)
-    supplements: list[str] = Field(default_factory=list)
+    equipment: list[str] = Field(default_factory=list, max_length=40)
+    health_constraints: list[str] = Field(default_factory=list, max_length=40)
+    goals: list[str] = Field(default_factory=list, max_length=20)
+    supplements: list[str] = Field(default_factory=list, max_length=40)
     preferred_duration_minutes: int = Field(30, ge=5, le=120)
-    training_days: list[str] = Field(default_factory=list)
+    training_days: list[str] = Field(default_factory=list, max_length=7)
     @field_validator("equipment", "health_constraints", "goals", "supplements")
     @classmethod
     def clean_lists(cls, value):
@@ -216,12 +296,23 @@ class CompletionInput(BaseModel):
     pain: int = Field(ge=0, le=10)
     duration_minutes: int = Field(ge=1, le=300)
     notes: str = Field("", max_length=2000)
+LOG_STATUSES = {"completed", "complete", "done", "partial", "skipped", "planned", "in_progress"}
 class WorkoutLogRequest(BaseModel):
     user_id: int
     workout_type: str = Field(min_length=1, max_length=100)
-    exercises: list = Field(default_factory=list)
-    status: str
+    exercises: list = Field(default_factory=list, max_length=50)
+    status: str = Field(min_length=1, max_length=30)
     notes: str = Field("", max_length=2000)
+    @field_validator("status")
+    @classmethod
+    def known_status(cls, value):
+        if value.strip().lower() not in LOG_STATUSES: raise ValueError(f"status must be one of {sorted(LOG_STATUSES)}")
+        return value.strip().lower()
+    @field_validator("exercises")
+    @classmethod
+    def small_entries(cls, value):
+        if any(len(json.dumps(x, ensure_ascii=False)) > 500 for x in value): raise ValueError("exercise entry too large")
+        return value
 class HabitInput(BaseModel):
     user_id: int
     name: str = Field(min_length=1, max_length=100)
@@ -233,6 +324,20 @@ class HabitInput(BaseModel):
 class HabitComplete(BaseModel):
     user_id: int
     completed_date: date = Field(default_factory=date.today)
+    @field_validator("completed_date")
+    @classmethod
+    def not_in_future(cls, value):
+        # A future date combined with the no-backdating rule would permanently
+        # lock the habit out of further completions.
+        if value > date.today(): raise ValueError("completed_date cannot be in the future")
+        return value
+    @field_validator("completed_date")
+    @classmethod
+    def not_in_future(cls, value):
+        # A future date combined with the no-backdating rule would permanently
+        # lock the habit out of further completions.
+        if value > date.today(): raise ValueError("completed_date cannot be in the future")
+        return value
 
 
 async def _user(db, user_id):
@@ -247,7 +352,7 @@ def _profile_dict(p):
             "preferred_duration_minutes": p.preferred_duration_minutes, "training_days": _loads(p.training_days)}
 
 @router.get("/profile/{user_id}")
-async def get_profile(user_id: int, db: AsyncSession = Depends(get_db)):
+async def get_profile(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
     await _user(db, user_id)
     p = await db.get(UserFitnessProfile, user_id)
     if not p:
@@ -266,9 +371,16 @@ async def get_profile(user_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.put("/profile/{user_id}")
 @router.patch("/profile/{user_id}")
-async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = Depends(get_db)):
+async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
     await _user(db, user_id)
     p = await db.get(UserFitnessProfile, user_id)
+    # health_constraints drive the low-impact safety filter, so a child may not
+    # change them. Submitting the unchanged current values is still allowed so
+    # the kids UI can edit equipment/goals without a parent present.
+    if role == Role.CHILD:
+        current = sorted(_loads(p.health_constraints) if p else DEFAULT_HEALTH_CONSTRAINTS)
+        if sorted(data.health_constraints) != current:
+            raise HTTPException(403, "Only a parent can change health constraints")
     values = dict(equipment=json.dumps(data.equipment), health_constraints=json.dumps(data.health_constraints),
                   goal_type=json.dumps(data.goals), supplement_stack=json.dumps(data.supplements),
                   preferred_duration_minutes=data.preferred_duration_minutes, training_days=json.dumps(data.training_days))
@@ -294,12 +406,13 @@ async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = D
     return _profile_dict(p)
 
 @router.get("/exercises")
-async def exercises(category: Optional[str] = None, equipment: Optional[str] = None, low_impact: Optional[bool] = None, db: AsyncSession = Depends(get_db)):
+async def exercises(category: Optional[str] = None, equipment: Optional[str] = None, low_impact: Optional[bool] = None,
+                    limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
     q = select(Exercise)
     if category: q = q.where(Exercise.category == category)
     if equipment: q = q.where(Exercise.equipment == equipment)
     if low_impact is not None: q = q.where(Exercise.low_impact == int(low_impact))
-    rows = (await db.execute(q.order_by(Exercise.name))).scalars().all()
+    rows = (await db.execute(q.order_by(Exercise.name).limit(max(1, min(500, limit))).offset(max(0, offset)))).scalars().all()
     return [{"id": x.id, "slug": x.slug, "name": x.name, "category": x.category, "equipment": x.equipment,
              "goals": _loads(x.goals_json), "instructions": x.instructions, "video_url": _normalize_video_url(x.video_url),
              "low_impact": bool(x.low_impact), "high_impact": bool(x.high_impact)} for x in rows]
@@ -316,8 +429,22 @@ async def _fetch_directives(db: AsyncSession, user_id: int):
     return (await db.execute(q)).scalars().all()
 
 @router.post("/plans/generate/{user_id}")
-async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
-    await _user(db, user_id); p = await db.get(UserFitnessProfile, user_id)
+async def generate_plan(user_id: int, regenerate: bool = False, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
+    await _user(db, user_id)
+    # Idempotency: an untouched plan is reused instead of stacking up duplicates
+    # that would otherwise drag the child's adherence rate down.
+    if not regenerate:
+        open_plan = (await db.execute(
+            select(WorkoutPlan).where(WorkoutPlan.user_id == user_id, WorkoutPlan.status == "planned",
+                                      WorkoutPlan.planned_date >= date.today())
+            .order_by(WorkoutPlan.planned_date, WorkoutPlan.created_at).limit(1)
+        )).scalar_one_or_none()
+        if open_plan:
+            response = await _plan_response(db, open_plan)
+            response["coach_greeting"] = _coach_greeting(user_id, response["exercises"])
+            response["reused_existing_plan"] = True
+            return response
+    p = await db.get(UserFitnessProfile, user_id)
     if not p:
         p = UserFitnessProfile(
             user_id=user_id,
@@ -367,9 +494,16 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     # Append cross-agent memory notes (e.g., recent pain, fatigue, preferences).
     memory_notes = await _memory_notes_for_plan(user_id)
     notes.extend(memory_notes)
-    plan = WorkoutPlan(user_id=user_id, planned_date=date.today(), duration_minutes=p.preferred_duration_minutes, safety_notes_json=json.dumps(notes)); db.add(plan); await db.flush()
+    # Apply the progression earned in previous sessions, one variable at a time.
+    targets = await _progression_targets(db, user_id, [x.id for x in chosen])
+    if any(t["progressed"] for t in targets.values()):
+        notes.append("One small increase applied where your last session felt comfortable.")
+    plan = WorkoutPlan(user_id=user_id, planned_date=_next_training_date(_loads(p.training_days)),
+                       duration_minutes=p.preferred_duration_minutes, safety_notes_json=json.dumps(notes)); db.add(plan); await db.flush()
     for i, exercise in enumerate(chosen):
-        db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=2, reps=8, rest_seconds=60, minimum_version="1 controlled set of 5 reps"))
+        target = targets.get(exercise.id, {"sets": BASELINE_SETS, "reps": BASELINE_REPS})
+        db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=target["sets"],
+                                      reps=target["reps"], rest_seconds=60, minimum_version="1 controlled set of 5 reps"))
     await db.commit()
     await db.refresh(plan)
     response = await _plan_response(db, plan)
@@ -382,17 +516,22 @@ async def _plan_response(db, plan):
             "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "video_url": _normalize_video_url(e.video_url), "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
 
 @router.get("/plans/{user_id}")
-async def list_plans(user_id: int, db: AsyncSession = Depends(get_db)):
+async def list_plans(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
     await _user(db,user_id); rows=(await db.execute(select(WorkoutPlan).where(WorkoutPlan.user_id==user_id).order_by(WorkoutPlan.created_at.desc()).limit(20))).scalars().all()
     return [await _plan_response(db,p) for p in rows]
 
 @router.post("/plans/{plan_id}/complete")
-async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = Depends(get_db)):
+async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
     await _user(db,data.user_id); plan=await db.get(WorkoutPlan,plan_id)
     if not plan or plan.user_id != data.user_id: raise HTTPException(404,"Plan not found")
     if plan.status == "completed": raise HTTPException(409,"Plan already completed")
     valid=set((await db.execute(select(PlannedWorkoutExercise.exercise_id).where(PlannedWorkoutExercise.plan_id==plan_id))).scalars())
     if any(x.exercise_id not in valid for x in data.exercises): raise HTTPException(422,"Exercise is not in this plan")
+    # Claim the plan with a conditional UPDATE so two concurrent submissions
+    # cannot both record a performance for the same session.
+    claimed = await db.execute(update(WorkoutPlan).where(WorkoutPlan.id == plan_id, WorkoutPlan.status != "completed")
+                               .values(status="completed", completed_at=datetime.utcnow()))
+    if claimed.rowcount == 0: raise HTTPException(409,"Plan already completed")
     blocked=data.pain>0 or data.perceived_exertion>=9 or data.fatigue>=8
     guidance=("Do not progress. Stop activity if pain or concerning symptoms continue and seek advice from a qualified clinician when appropriate; this is not a diagnosis." if blocked else "Continue at the same level; after another comfortable session, consider one small increase in reps or resistance.")
     perf=WorkoutPerformance(plan_id=plan_id,user_id=data.user_id,perceived_exertion=data.perceived_exertion,fatigue=data.fatigue,pain=data.pain,duration_minutes=data.duration_minutes,notes=data.notes,guidance=guidance,progression_allowed=int(not blocked)); db.add(perf); await db.flush()
@@ -401,10 +540,11 @@ async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = 
         for s in item.sets: db.add(WorkoutSet(performance_id=perf.id,exercise_id=item.exercise_id,**s.model_dump()))
         details.append({"exercise_id":item.exercise_id,"sets":[s.model_dump() for s in item.sets]})
         if not blocked: db.add(ProgressionHistory(user_id=data.user_id,exercise_id=item.exercise_id,performance_id=perf.id,recommendation="Maintain, then increase only one variable slightly after another comfortable session.",evidence_json=json.dumps({"rpe":data.perceived_exertion,"fatigue":data.fatigue,"pain":data.pain})))
-    plan.status="completed"; plan.completed_at=datetime.utcnow(); await memory_manager.add_fact(data.user_id,data.user_id,"fitness","recommendation","latest_progress",guidance,evidence=[{"plan_id":plan_id,"performance_id":perf.id}],source_agent="fitness",db=db)
+    performance_id = perf.id
+    await memory_manager.add_fact(data.user_id,data.user_id,"fitness","recommendation","latest_progress",guidance,evidence=[{"plan_id":plan_id,"performance_id":performance_id}],source_agent="fitness",db=db)
 
     # Store cross-agent memory insights from this workout.
-    insights = _workout_insights(data, details, blocked)
+    insights = _workout_insights(data, plan_id, blocked)
     await user_memory.add_episode(data.user_id, "coach", "workout_completed", {
         "plan_id": plan_id,
         "duration_minutes": data.duration_minutes,
@@ -417,12 +557,20 @@ async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = 
         await user_memory.store_insights(data.user_id, "coach", insights, db=db)
 
     await db.commit()
-    payload={"plan_id":plan_id,"performance_id":perf.id,"workout_type":"planned","duration_minutes":data.duration_minutes,"perceived_exertion":data.perceived_exertion,"fatigue":data.fatigue,"pain":data.pain,"progression_allowed":not blocked,"exercises":details}
-    await event_bus.publish("fitness.workout_completed",user_id=data.user_id,child_id=data.user_id,source_agent="fitness",payload=payload)
-    return {"performance_id":perf.id,"progression_allowed":not blocked,"guidance":guidance}
+    # NOTE: every value used below is a plain Python local captured before the
+    # commit. Reading an ORM attribute here would expire-and-reload the row and
+    # raise MissingGreenlet inside the async request, so keep it that way.
+    payload={"plan_id":plan_id,"performance_id":performance_id,"workout_type":"planned","duration_minutes":data.duration_minutes,"perceived_exertion":data.perceived_exertion,"fatigue":data.fatigue,"pain":data.pain,"progression_allowed":not blocked,"exercises":details}
+    # The workout is already durably stored; a collaboration failure must not
+    # fail the child's request or lose their session.
+    try:
+        await event_bus.publish("fitness.workout_completed",user_id=data.user_id,child_id=data.user_id,source_agent="fitness",payload=payload)
+    except Exception:
+        logger.exception("Failed to publish fitness.workout_completed", plan_id=plan_id)
+    return {"performance_id":performance_id,"progression_allowed":not blocked,"guidance":guidance}
 
 @router.post("/log")
-async def log_workout(data: WorkoutLogRequest, db: AsyncSession = Depends(get_db)):
+async def log_workout(data: WorkoutLogRequest, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
     await _user(db,data.user_id)
     exercises_json = json.dumps(data.exercises, ensure_ascii=False)
     row=HealthLog(user_id=data.user_id,workout_type=data.workout_type,exercises_json=exercises_json,status=data.status,notes=data.notes,log_type="workout",details_json=exercises_json); db.add(row); await db.flush()
@@ -433,24 +581,30 @@ async def log_workout(data: WorkoutLogRequest, db: AsyncSession = Depends(get_db
         db=db,
     )
     await db.commit(); await db.refresh(row)
-    if data.status.lower() in {"completed","complete","done"}: await event_bus.publish("fitness.workout_completed",data.user_id,data.user_id,"fitness",{"health_log_id":row.id,"workout_type":data.workout_type,"exercises":data.exercises})
-    return {"status":"success","health_log_id":row.id,"message":"Workout logged and synced with cross-agent state."}
+    health_log_id = row.id
+    if data.status in {"completed","complete","done"}:
+        try:
+            await event_bus.publish("fitness.workout_completed",data.user_id,data.user_id,"fitness",{"health_log_id":health_log_id,"workout_type":data.workout_type,"exercises":data.exercises})
+        except Exception:
+            logger.exception("Failed to publish fitness.workout_completed", health_log_id=health_log_id)
+    return {"status":"success","health_log_id":health_log_id,"message":"Workout logged and synced with cross-agent state."}
 
 @router.post("/habits")
-async def create_habit(data: HabitInput, db: AsyncSession=Depends(get_db)):
+async def create_habit(data: HabitInput, db: AsyncSession=Depends(get_db), role: str = Depends(write_access)):
     await _user(db,data.user_id); h=TinyHabit(user_id=data.user_id,name=data.name,anchor=data.anchor,minimum_routine=data.minimum_routine,schedule_json=json.dumps(data.schedule),active=int(data.active)); db.add(h); await db.commit(); await db.refresh(h); return _habit(h)
 @router.put("/habits/{habit_id}")
-async def update_habit(habit_id:int,data:HabitInput,db:AsyncSession=Depends(get_db)):
+async def update_habit(habit_id:int,data:HabitInput,db:AsyncSession=Depends(get_db), role: str = Depends(write_access)):
+    await _user(db,data.user_id)
     h=await db.get(TinyHabit,habit_id)
     if not h or h.user_id!=data.user_id: raise HTTPException(404,"Habit not found")
     for k,v in {"name":data.name,"anchor":data.anchor,"minimum_routine":data.minimum_routine,"schedule_json":json.dumps(data.schedule),"active":int(data.active)}.items(): setattr(h,k,v)
-    await db.commit(); return _habit(h)
+    await db.commit(); await db.refresh(h); return _habit(h)
 def _habit(h): return {"id":h.id,"user_id":h.user_id,"name":h.name,"anchor":h.anchor,"minimum_routine":h.minimum_routine,"schedule":_loads(h.schedule_json),"current_streak":h.current_streak,"best_streak":h.best_streak,"last_completion":h.last_completion,"active":bool(h.active)}
 @router.get("/habits/{user_id}")
-async def habits(user_id:int,db:AsyncSession=Depends(get_db)):
+async def habits(user_id:int,db:AsyncSession=Depends(get_db), role: str = Depends(read_access)):
     await _user(db,user_id); return [_habit(h) for h in (await db.execute(select(TinyHabit).where(TinyHabit.user_id==user_id))).scalars().all()]
 @router.post("/habits/{habit_id}/complete")
-async def habit_complete(habit_id:int,data:HabitComplete,db:AsyncSession=Depends(get_db)):
+async def habit_complete(habit_id:int,data:HabitComplete,db:AsyncSession=Depends(get_db), role: str = Depends(write_access)):
     h=await db.get(TinyHabit,habit_id)
     if not h or h.user_id!=data.user_id: raise HTTPException(404,"Habit not found")
     if h.last_completion and data.completed_date < h.last_completion: raise HTTPException(409,"Cannot backdate before latest completion")
@@ -465,20 +619,36 @@ async def habit_complete(habit_id:int,data:HabitComplete,db:AsyncSession=Depends
             "confidence": 1.0,
         }], db=db)
         await db.commit()
+        await db.refresh(h)
     return _habit(h)
 @router.get("/habits/{habit_id}/history")
-async def habit_history(habit_id:int, user_id:int, db:AsyncSession=Depends(get_db)):
+async def habit_history(habit_id:int, user_id:int, db:AsyncSession=Depends(get_db), role: str = Depends(read_access)):
     await _user(db, user_id)
     h=await db.get(TinyHabit,habit_id)
     if not h or h.user_id != user_id: raise HTTPException(404,"Habit not found")
     rows=(await db.execute(select(TinyHabitCompletion).where(TinyHabitCompletion.habit_id==habit_id).order_by(TinyHabitCompletion.completed_date.desc()).limit(90))).scalars().all()
     return {"habit_id":habit_id,"completions":[{"id":r.id,"date":str(r.completed_date),"created_at":str(r.created_at)} for r in rows]}
 @router.get("/habits/{user_id}/minimum-routine")
-async def minimum_routine(user_id:int,db:AsyncSession=Depends(get_db)):
+async def minimum_routine(user_id:int,db:AsyncSession=Depends(get_db), role: str = Depends(read_access)):
     await _user(db,user_id); rows=(await db.execute(select(TinyHabit).where(TinyHabit.user_id==user_id,TinyHabit.active==1))).scalars().all(); return {"routine":[{"habit_id":h.id,"after":h.anchor,"do":h.minimum_routine} for h in rows]}
 
 @router.get("/analytics/{user_id}")
-async def analytics(user_id:int,db:AsyncSession=Depends(get_db)):
-    await _user(db,user_id); plans=(await db.execute(select(WorkoutPlan).where(WorkoutPlan.user_id==user_id))).scalars().all(); recent=(await db.execute(select(WorkoutPerformance).where(WorkoutPerformance.user_id==user_id).order_by(WorkoutPerformance.completed_at.desc()).limit(10))).scalars().all(); progress=(await db.execute(select(ProgressionHistory).where(ProgressionHistory.user_id==user_id).order_by(ProgressionHistory.created_at.desc()).limit(20))).scalars().all(); hs=(await db.execute(select(TinyHabit).where(TinyHabit.user_id==user_id))).scalars().all()
-    completed=sum(p.status=="completed" for p in plans)
-    return {"adherence":{"planned":len(plans),"completed":completed,"rate":round(completed/len(plans),3) if plans else 0},"recent_sessions":[{"id":r.id,"completed_at":r.completed_at,"duration_minutes":r.duration_minutes,"rpe":r.perceived_exertion,"fatigue":r.fatigue,"pain":r.pain,"progression_allowed":bool(r.progression_allowed)} for r in recent],"progression":[{"exercise_id":p.exercise_id,"recommendation":p.recommendation,"created_at":p.created_at} for p in progress],"streaks":[{"habit_id":h.id,"name":h.name,"current":h.current_streak,"best":h.best_streak} for h in hs],"goal_status":{"completed_workouts":completed,"status":"in_progress" if plans else "not_started"}}
+async def analytics(user_id:int, window_days:int=30, db:AsyncSession=Depends(get_db), role: str = Depends(read_access)):
+    await _user(db,user_id)
+    window_days=max(1,min(365,window_days)); since=date.today()-timedelta(days=window_days)
+    plans=(await db.execute(select(WorkoutPlan).where(WorkoutPlan.user_id==user_id,WorkoutPlan.planned_date>=since))).scalars().all()
+    recent=(await db.execute(select(WorkoutPerformance).where(WorkoutPerformance.user_id==user_id).order_by(WorkoutPerformance.completed_at.desc()).limit(10))).scalars().all()
+    progress=(await db.execute(select(ProgressionHistory).where(ProgressionHistory.user_id==user_id).order_by(ProgressionHistory.created_at.desc()).limit(20))).scalars().all()
+    hs=(await db.execute(select(TinyHabit).where(TinyHabit.user_id==user_id))).scalars().all()
+    # Adherence is measured only over plans whose day has passed. A plan still
+    # scheduled for today or later has not been missed yet, so counting it
+    # would punish the child for the Coach having offered them a session.
+    resolved=[p for p in plans if p.status=="completed" or p.planned_date<date.today()]
+    completed=sum(p.status=="completed" for p in resolved)
+    return {"adherence":{"planned":len(resolved),"completed":completed,"missed":len(resolved)-completed,
+                         "upcoming":len(plans)-len(resolved),"window_days":window_days,
+                         "rate":round(completed/len(resolved),3) if resolved else 0},
+            "recent_sessions":[{"id":r.id,"completed_at":r.completed_at,"duration_minutes":r.duration_minutes,"rpe":r.perceived_exertion,"fatigue":r.fatigue,"pain":r.pain,"progression_allowed":bool(r.progression_allowed)} for r in recent],
+            "progression":[{"exercise_id":p.exercise_id,"recommendation":p.recommendation,"created_at":p.created_at} for p in progress],
+            "streaks":[{"habit_id":h.id,"name":h.name,"current":h.current_streak,"best":h.best_streak} for h in hs],
+            "goal_status":{"completed_workouts":completed,"status":"in_progress" if plans else "not_started"}}

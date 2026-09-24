@@ -336,6 +336,30 @@ class TestOrchestrator:
         assert "נויה / חשבון" in acknowledgement
         assert "ינאי / אנגלית" in acknowledgement
 
+    async def test_daily_report_lock_prevents_duplicate_telegrams(self, monkeypatch):
+        import orchestrator
+
+        # Pin "today" to a deterministic date so this test does not collide with
+        # other tests that may have acquired the daily-report lock.
+        fixed_now = datetime(2030, 1, 1, 21, 30, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        monkeypatch.setattr(orchestrator, "_local_now", lambda: fixed_now)
+
+        # Stub the messenger so no real Telegram calls are made.
+        send_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(orchestrator, "_send_via_messenger", send_mock)
+
+        # First run should acquire the lock and "send" the report.
+        result1 = await orchestrator.run_daily_orchestration()
+        assert result1["skipped"] is False
+        assert result1["telegram_sent"] is True
+        assert send_mock.call_count == 1
+
+        # Second run must be skipped by the daily-report lock and never send.
+        result2 = await orchestrator.run_daily_orchestration()
+        assert result2["skipped"] is True
+        assert result2["telegram_sent"] is False
+        assert send_mock.call_count == 1
+
 
 class TestDatabaseMigrations:
     async def test_chat_history_has_required_columns(self, setup_database):

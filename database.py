@@ -206,6 +206,18 @@ class ScheduledReport(Base):
     sent_at = Column(DateTime, default=datetime.utcnow)
 
 
+class DailyReportLock(Base):
+    __tablename__ = "daily_report_locks"
+
+    # Primary key on the local calendar date gives us an atomic, cross-process
+    # guard. The first process to insert a row for today wins the right to send
+    # the daily summary; all other concurrent attempts get an IntegrityError.
+    report_date = Column(Date, primary_key=True)
+    status = Column(String, nullable=False, default="running")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
+
+
 class MemoryFact(Base):
     __tablename__ = "memory_facts"
 

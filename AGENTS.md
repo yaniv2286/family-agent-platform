@@ -10,6 +10,24 @@ python -m pytest tests -v --ignore=tests/test_live_llm.py
 
 This command runs the fast, no-cost functional tests (PIN auth, chat, anti-cheat hard cap, idempotency, mocked Whisper, and fuzzing). The live LLM integration tests in `tests/test_live_llm.py` are excluded by default.
 
+## Async SQLAlchemy: never read ORM attributes after commit
+
+`SessionLocal` uses the default `expire_on_commit=True`. Reading any ORM
+attribute after `await db.commit()` triggers a lazy reload, which performs sync
+IO inside the async request and raises `sqlalchemy.exc.MissingGreenlet` — a
+hard HTTP 500. This shipped three broken Coach endpoints once already.
+
+Either capture plain Python locals **before** the commit, or `await db.refresh(obj)`
+after it. Note the commit itself succeeds, so the failure mode is "data saved,
+client sees an error" — easy to miss without an endpoint-level test.
+
+## Tests must call endpoints, not re-implement them
+
+Do not work around test-harness errors by reproducing endpoint logic with raw DB
+queries in the test file. That is how the `MissingGreenlet` bugs above stayed
+hidden behind a fully green suite. If a test cannot reach the endpoint through
+`client`, treat it as a bug in the endpoint.
+
 ## Deployment After Development
 
 After completing and verifying any code change, deployment is part of the definition of done. Ask the user for explicit confirmation immediately before deployment because `deploy.bat` replaces files and restarts services on the production VPS. Once confirmed, run:

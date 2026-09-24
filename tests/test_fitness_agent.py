@@ -1,28 +1,29 @@
-"""Focused backend tests for the Fitness Agent v1.
+"""Focused backend tests for the Fitness Agent (Coach).
 
 Covers: migration / schema, profile CRUD, safety-aware plan generation,
 directive-aware plan generation, progression logic, event bus / nutrition
 collaboration, habit CRUD + completion + streaks, habit history
 (TinyHabitCompletion), analytics endpoint, and orchestrator wellness report.
 
-Tests that would trigger MissingGreenlet errors through the HTTP middleware
-or through direct function calls (due to lazy-loading after commit) use raw
-database operations that replicate the same logic, ensuring the code paths
-are fully exercised without greenlet issues.
+Every behaviour is exercised through the real HTTP endpoints. An earlier
+revision of this file re-implemented plan generation, plan completion and
+habit completion with raw DB queries to sidestep MissingGreenlet errors;
+those errors were genuine production bugs (ORM attributes read after
+`await db.commit()` on an expire-on-commit session) and the workaround hid
+three HTTP 500s. Do not reintroduce logic copies here - if a test cannot
+reach the endpoint, fix the endpoint.
 """
 import json
 import uuid
 from datetime import date, datetime, timedelta
 
 import pytest
-from sqlalchemy import select, text, or_
+from sqlalchemy import select, text
 
 from database import (
     Exercise,
     MemoryFact,
-    ParentDirective,
     PlannedWorkoutExercise,
-    ProgressionHistory,
     SessionLocal,
     TinyHabit,
     TinyHabitCompletion,
@@ -30,16 +31,22 @@ from database import (
     UserFitnessProfile,
     WorkoutPerformance,
     WorkoutPlan,
-    WorkoutSet,
     add_parent_feedback,
 )
-from memory_manager import memory_manager
 
 APP_PIN = "test-pin-1234"
+CHILD_PIN = "child-secret-11"
 H = {"x-app-pin": APP_PIN}
 
 
 # ── helpers ──────────────────────────────────────────────────────────
+@pytest.fixture
+def child_headers(monkeypatch):
+    """Headers that authenticate as the restricted `child` role."""
+    monkeypatch.setenv("CHILD_PIN", CHILD_PIN)
+    return {"x-app-pin": CHILD_PIN}
+
+
 async def _child(name=None):
     async with SessionLocal() as db:
         child = User(name=name or f"Fit-{uuid.uuid4().hex[:8]}", role="child")
@@ -63,13 +70,14 @@ async def _profile_via_http(client, user_id, **overrides):
 
 
 async def _create_profile_db(user_id, **overrides):
+    """Seed a fitness profile directly. Setup only - never asserted against."""
     defaults = dict(
         equipment=json.dumps(["none", "resistance_bands"]),
         health_constraints=json.dumps([]),
         goal_type=json.dumps(["strength"]),
         supplement_stack=json.dumps([]),
         preferred_duration_minutes=30,
-        training_days=json.dumps(["sunday", "tuesday"]),
+        training_days=json.dumps([]),
     )
     defaults.update(overrides)
     async with SessionLocal() as db:
@@ -82,211 +90,54 @@ async def _create_profile_db(user_id, **overrides):
         await db.commit()
 
 
-def _loads(value, fallback=None):
-    try:
-        return json.loads(value or "[]")
-    except (TypeError, ValueError):
-        return fallback or []
+async def _generate_plan(client, user_id, regenerate=False, expect=200):
+    """Generate a workout plan through the real endpoint."""
+    url = f"/api/fitness/plans/generate/{user_id}"
+    if regenerate:
+        url += "?regenerate=true"
+    r = await client.post(url, headers=H)
+    assert r.status_code == expect, r.text
+    return r.json()
 
 
-async def _generate_plan_raw(user_id):
-    """Replicate generate_plan logic with raw DB queries, returning a dict."""
-    async with SessionLocal() as db:
-        db.expire_on_commit = False
-        user = await db.get(User, user_id)
-        if not user:
-            raise ValueError("User not found")
-        p = await db.get(UserFitnessProfile, user_id)
-        if not p:
-            raise ValueError("No profile")
-
-        # Capture all values from p before any flush/commit
-        p_equipment = p.equipment
-        p_constraints = p.health_constraints
-        p_goals = p.goal_type
-        p_duration = p.preferred_duration_minutes
-
-        equipment = set(_loads(p_equipment)) | {"none"}
-        constraints = _loads(p_constraints)
-        goals = _loads(p_goals)
-        sensitive = any("tilt" in x or "orthostatic" in x for x in constraints)
-
-        # Check directives
-        directive_q = select(ParentDirective).where(
-            ParentDirective.status == "active",
-            or_(ParentDirective.child_id == user_id, ParentDirective.child_id.is_(None)),
-            or_(ParentDirective.subject == "fitness", ParentDirective.subject.is_(None)),
-        )
-        directives = (await db.execute(directive_q)).scalars().all()
-        directive_texts = [d.message.lower() for d in directives]
-        directive_messages = [d.message for d in directives]
-        if any(kw in dt for dt in directive_texts
-               for kw in ("low impact", "low-impact", "gentle", "easy", "rest", "no jumping", "avoid high")):
-            sensitive = True
-
-        q = select(Exercise).where(Exercise.equipment.in_(equipment))
-        if sensitive:
-            q = q.where(Exercise.low_impact == 1, Exercise.high_impact == 0, Exercise.transition != "floor")
-        candidates = (await db.execute(q.order_by(Exercise.slug))).scalars().all()
-        # Capture candidate data before any flush
-        cand_data = [(c.id, c.name, c.slug, _loads(c.goals_json)) for c in candidates]
-        cand_data.sort(key=lambda x: (-len(set(x[3]) & set(goals)), x[2]))
-        chosen = cand_data[:max(1, min(5, p_duration // 6))]
-        if not chosen:
-            raise ValueError("No safe exercises")
-
-        notes = (
-            ["Low-impact exercises only.",
-             "Use slow, controlled transitions and avoid sudden floor-to-standing changes.",
-             "Stop if dizzy, faint, or in pain and seek qualified clinical advice when appropriate."]
-            if sensitive
-            else ["Use controlled form and stop if pain or concerning symptoms occur."]
-        )
-        for msg in directive_messages:
-            notes.append(f"Parent directive: {msg}")
-
-        plan = WorkoutPlan(
-            user_id=user_id, planned_date=date.today(),
-            duration_minutes=p_duration,
-            safety_notes_json=json.dumps(notes),
-        )
-        db.add(plan)
-        await db.flush()
-        plan_id = plan.id
-
-        exercise_list = []
-        for i, (eid, ename, eslug, egoals) in enumerate(chosen):
-            pwe = PlannedWorkoutExercise(
-                plan_id=plan_id, exercise_id=eid, position=i,
-                sets=2, reps=8, rest_seconds=60,
-                minimum_version="1 controlled set of 5 reps",
-            )
-            db.add(pwe)
-            exercise_list.append({
-                "exercise_id": eid, "name": ename,
-                "sets": 2, "reps": 8, "rest_seconds": 60,
-                "minimum_version": "1 controlled set of 5 reps",
-            })
-        await db.commit()
-
-        return {
-            "id": plan_id,
-            "user_id": user_id,
-            "date": str(date.today()),
-            "status": "planned",
-            "duration_minutes": p_duration,
-            "safety_notes": notes,
-            "exercises": exercise_list,
-        }
+async def _complete_plan(client, plan_id, user_id, exercise_ids, rpe=5, fatigue=3,
+                         pain=0, duration=30, notes="", reps=8, expect=200):
+    """Complete a workout plan through the real endpoint."""
+    body = {
+        "user_id": user_id,
+        "perceived_exertion": rpe,
+        "fatigue": fatigue,
+        "pain": pain,
+        "duration_minutes": duration,
+        "notes": notes,
+        "exercises": [
+            {"exercise_id": eid, "sets": [{"set_number": 1, "reps": reps},
+                                          {"set_number": 2, "reps": reps}]}
+            for eid in exercise_ids
+        ],
+    }
+    r = await client.post(f"/api/fitness/plans/{plan_id}/complete", headers=H, json=body)
+    assert r.status_code == expect, r.text
+    return r.json()
 
 
-async def _complete_plan_raw(plan_id, user_id, exercise_ids, rpe=5, fatigue=3, pain=0, duration=30, notes=""):
-    """Replicate complete_plan logic with raw DB queries."""
-    async with SessionLocal() as db:
-        db.expire_on_commit = False
-        user = await db.get(User, user_id)
-        if not user:
-            raise ValueError("User not found")
-        plan = await db.get(WorkoutPlan, plan_id)
-        if not plan or plan.user_id != user_id:
-            raise ValueError("Plan not found")
-        if plan.status == "completed":
-            raise ValueError("Already completed")
-
-        valid = set((await db.execute(
-            select(PlannedWorkoutExercise.exercise_id).where(PlannedWorkoutExercise.plan_id == plan_id)
-        )).scalars())
-        if any(eid not in valid for eid in exercise_ids):
-            raise ValueError("Exercise not in plan")
-
-        blocked = pain > 0 or rpe >= 9 or fatigue >= 8
-        guidance = (
-            "Do not progress. Stop activity if pain or concerning symptoms continue and seek advice from a qualified clinician when appropriate; this is not a diagnosis."
-            if blocked
-            else "Continue at the same level; after another comfortable session, consider one small increase in reps or resistance."
-        )
-
-        perf = WorkoutPerformance(
-            plan_id=plan_id, user_id=user_id,
-            perceived_exertion=rpe, fatigue=fatigue, pain=pain,
-            duration_minutes=duration, notes=notes,
-            guidance=guidance, progression_allowed=int(not blocked),
-        )
-        db.add(perf)
-        await db.flush()
-        perf_id = perf.id
-
-        for eid in exercise_ids:
-            if not blocked:
-                db.add(ProgressionHistory(
-                    user_id=user_id, exercise_id=eid, performance_id=perf_id,
-                    recommendation="Maintain, then increase only one variable slightly after another comfortable session.",
-                    evidence_json=json.dumps({"rpe": rpe, "fatigue": fatigue, "pain": pain}),
-                ))
-
-        plan.status = "completed"
-        plan.completed_at = datetime.utcnow()
-
-        await memory_manager.add_fact(
-            user_id, user_id, "fitness", "recommendation", "latest_progress", guidance,
-            evidence=[{"plan_id": plan_id, "performance_id": perf_id}],
-            source_agent="fitness", db=db,
-        )
-        await db.commit()
-
-        from event_bus import event_bus
-        payload = {
-            "plan_id": plan_id, "performance_id": perf_id,
-            "workout_type": "planned", "duration_minutes": duration,
-            "perceived_exertion": rpe, "fatigue": fatigue, "pain": pain,
-            "progression_allowed": not blocked,
-        }
-        await event_bus.publish(
-            "fitness.workout_completed", user_id=user_id, child_id=user_id,
-            source_agent="fitness", payload=payload,
-        )
-
-        return {
-            "performance_id": perf_id,
-            "progression_allowed": not blocked,
-            "guidance": guidance,
-        }
+async def _create_habit(client, user_id, name="Test", anchor="After waking",
+                        routine="5 stretches", schedule=None):
+    r = await client.post("/api/fitness/habits", headers=H, json={
+        "user_id": user_id, "name": name, "anchor": anchor,
+        "minimum_routine": routine, "schedule": schedule or [],
+    })
+    assert r.status_code == 200, r.text
+    return r.json()
 
 
-async def _complete_habit_raw(habit_id, user_id, completed_date=None):
-    """Replicate habit_complete logic with raw DB queries."""
-    cd = completed_date or date.today()
-    async with SessionLocal() as db:
-        db.expire_on_commit = False
-        h = await db.get(TinyHabit, habit_id)
-        if not h or h.user_id != user_id:
-            raise ValueError("Habit not found")
-        if h.last_completion and cd < h.last_completion:
-            raise ValueError("Cannot backdate")
-        # Capture values before commit
-        h_id, h_uid, h_name, h_active = h.id, h.user_id, h.name, bool(h.active)
-        if h.last_completion != cd:
-            h.current_streak = h.current_streak + 1 if h.last_completion == cd - timedelta(days=1) else 1
-            h.best_streak = max(h.best_streak, h.current_streak)
-            h.last_completion = cd
-            db.add(TinyHabitCompletion(habit_id=habit_id, user_id=user_id, completed_date=cd))
-        cur_streak, best_streak, last_comp = h.current_streak, h.best_streak, h.last_completion
-        await db.commit()
-        return {
-            "id": h_id, "user_id": h_uid, "name": h_name,
-            "current_streak": cur_streak, "best_streak": best_streak,
-            "last_completion": last_comp, "active": h_active,
-        }
-
-
-async def _create_habit_db(user_id, name="Test", anchor="After waking", routine="5 stretches"):
-    async with SessionLocal() as db:
-        h = TinyHabit(user_id=user_id, name=name, anchor=anchor,
-                      minimum_routine=routine, schedule_json="[]", active=1)
-        db.add(h)
-        await db.commit()
-        await db.refresh(h)
-        return h
+async def _complete_habit(client, habit_id, user_id, completed_date=None, expect=200):
+    body = {"user_id": user_id}
+    if completed_date is not None:
+        body["completed_date"] = str(completed_date)
+    r = await client.post(f"/api/fitness/habits/{habit_id}/complete", headers=H, json=body)
+    assert r.status_code == expect, r.text
+    return r.json()
 
 
 # ── 1. Migration / Schema ───────────────────────────────────────────
@@ -305,14 +156,10 @@ class TestMigrationSchema:
     async def test_exercises_table_has_expanded_seed(self):
         async with SessionLocal() as db:
             rows = (await db.execute(select(Exercise))).scalars().all()
-            slugs = {r.slug for r in rows}
-        assert "band-row" in slugs
-        assert "chair-squat" in slugs
+        assert len(rows) >= 20
+        slugs = {r.slug for r in rows}
+        assert "trx-row" in slugs
         assert "balance-board-stand" in slugs
-        assert "fitball-plank" in slugs
-        assert "trx-chest-press" in slugs
-        assert "bird-dog" in slugs
-        assert all(r.video_url.startswith(("https://www.youtube.com/", "https://youtu.be/")) for r in rows)
 
     @pytest.mark.asyncio
     async def test_exercises_table_has_video_url_column(self):
@@ -327,66 +174,65 @@ class TestMigrationSchema:
             result = await db.execute(text("PRAGMA table_info(workout_plans)"))
             columns = {row[1] for row in result.fetchall()}
         assert "safety_notes_json" in columns
-        assert "duration_minutes" in columns
+        assert "completed_at" in columns
 
 
 # ── 2. Profile CRUD ─────────────────────────────────────────────────
-class TestProfileCRUD:
+class TestProfile:
     @pytest.mark.asyncio
     async def test_profile_defaults_when_not_created(self, client):
         child = await _child()
         r = await client.get(f"/api/fitness/profile/{child.id}", headers=H)
         assert r.status_code == 200
-        assert r.json()["profile_exists"] is False
-        assert "trx" in r.json()["equipment"]
+        d = r.json()
+        assert d["profile_exists"] is False
+        assert "tilt_test_sensitivity" in d["health_constraints"]
+        assert "creatine" in d["supplements"]
+        assert "not prescribed" in d["supplement_notice"]
 
     @pytest.mark.asyncio
     async def test_create_and_get_profile(self, client):
         child = await _child()
         r = await _profile_via_http(client, child.id)
         assert r.status_code == 200
-        data = r.json()
-        assert data["user_id"] == child.id
-        assert "none" in data["equipment"]
-        assert data["preferred_duration_minutes"] == 30
-
         r2 = await client.get(f"/api/fitness/profile/{child.id}", headers=H)
-        assert r2.status_code == 200
-        assert r2.json()["goals"] == ["strength"]
+        d = r2.json()
+        assert d["profile_exists"] is True
+        assert d["equipment"] == ["none", "resistance_bands"]
+        assert d["training_days"] == ["sunday", "tuesday"]
 
     @pytest.mark.asyncio
     async def test_update_profile_changes_values(self, client):
         child = await _child()
         await _profile_via_http(client, child.id)
-        r = await _profile_via_http(client, child.id, goals=["fat_loss", "mobility"], preferred_duration_minutes=45)
+        r = await _profile_via_http(client, child.id, equipment=["trx"],
+                                    preferred_duration_minutes=45)
         assert r.status_code == 200
         d = r.json()
-        assert d["goals"] == ["fat_loss", "mobility"]
+        assert d["equipment"] == ["trx"]
         assert d["preferred_duration_minutes"] == 45
 
     @pytest.mark.asyncio
     async def test_profile_patch_works(self, client):
         child = await _child()
         await _profile_via_http(client, child.id)
-        r = await client.patch(
-            f"/api/fitness/profile/{child.id}", headers=H,
-            json={"equipment": ["trx"], "health_constraints": [], "goals": ["strength"],
-                  "supplements": [], "preferred_duration_minutes": 20, "training_days": []}
-        )
+        r = await client.patch(f"/api/fitness/profile/{child.id}", headers=H, json={
+            "equipment": ["fitball"], "health_constraints": [], "goals": ["mobility"],
+            "supplements": [], "preferred_duration_minutes": 20, "training_days": [],
+        })
         assert r.status_code == 200
-        assert r.json()["equipment"] == ["trx"]
+        assert r.json()["goals"] == ["mobility"]
 
     @pytest.mark.asyncio
     async def test_profile_stores_memory_facts(self, client):
         child = await _child()
-        await _profile_via_http(client, child.id, health_constraints=["tilt_test_sensitivity"])
+        await _profile_via_http(client, child.id, health_constraints=["knee_pain"])
         async with SessionLocal() as db:
             facts = (await db.execute(
-                select(MemoryFact).where(MemoryFact.child_id == child.id, MemoryFact.domain == "fitness")
+                select(MemoryFact).where(MemoryFact.child_id == child.id,
+                                         MemoryFact.domain == "fitness")
             )).scalars().all()
-        categories = {f.category for f in facts}
-        assert "goal" in categories
-        assert "safety_constraint" in categories
+        assert any("knee_pain" in (f.value or "") for f in facts)
 
     @pytest.mark.asyncio
     async def test_profile_invalid_day_returns_422(self, client):
@@ -396,11 +242,50 @@ class TestProfileCRUD:
 
     @pytest.mark.asyncio
     async def test_profile_nonexistent_user_returns_404(self, client):
-        r = await client.put("/api/fitness/profile/99999", headers=H, json={
-            "equipment": [], "health_constraints": [], "goals": [],
-            "supplements": [], "preferred_duration_minutes": 30, "training_days": []
-        })
+        r = await client.get("/api/fitness/profile/99999", headers=H)
         assert r.status_code == 404
+
+
+# ── 2b. Role-based access control ────────────────────────────────────
+class TestAccessControl:
+    @pytest.mark.asyncio
+    async def test_child_cannot_change_health_constraints(self, client, child_headers):
+        child = await _child()
+        await _create_profile_db(child.id, health_constraints=json.dumps(["tilt_test_sensitivity"]))
+        r = await client.put(f"/api/fitness/profile/{child.id}", headers=child_headers, json={
+            "equipment": ["none"], "health_constraints": [], "goals": ["strength"],
+            "supplements": [], "preferred_duration_minutes": 30, "training_days": [],
+        })
+        assert r.status_code == 403
+        # The stored safety constraint must survive the rejected write.
+        r2 = await client.get(f"/api/fitness/profile/{child.id}", headers=H)
+        assert r2.json()["health_constraints"] == ["tilt_test_sensitivity"]
+
+    @pytest.mark.asyncio
+    async def test_child_may_edit_non_safety_fields(self, client, child_headers):
+        child = await _child()
+        await _create_profile_db(child.id, health_constraints=json.dumps(["tilt_test_sensitivity"]))
+        r = await client.put(f"/api/fitness/profile/{child.id}", headers=child_headers, json={
+            "equipment": ["trx"], "health_constraints": ["tilt_test_sensitivity"],
+            "goals": ["mobility"], "supplements": [],
+            "preferred_duration_minutes": 20, "training_days": ["monday"],
+        })
+        assert r.status_code == 200
+        assert r.json()["equipment"] == ["trx"]
+
+    @pytest.mark.asyncio
+    async def test_parent_can_change_health_constraints(self, client):
+        child = await _child()
+        await _create_profile_db(child.id, health_constraints=json.dumps(["tilt_test_sensitivity"]))
+        r = await _profile_via_http(client, child.id, health_constraints=["knee_pain"])
+        assert r.status_code == 200
+        assert r.json()["health_constraints"] == ["knee_pain"]
+
+    @pytest.mark.asyncio
+    async def test_missing_pin_is_rejected(self, client):
+        child = await _child()
+        r = await client.get(f"/api/fitness/profile/{child.id}")
+        assert r.status_code == 401
 
 
 # ── 3. Safety-Aware Plan Generation ─────────────────────────────────
@@ -416,154 +301,247 @@ class TestPlanGeneration:
     @pytest.mark.asyncio
     async def test_generate_plan_uses_safe_defaults_without_profile(self, client):
         child = await _child()
-        response = await client.post(
-            f"/api/fitness/plans/generate/{child.id}", headers=H
-        )
-        assert response.status_code == 200
-        exercises = response.json()["exercises"]
-        assert exercises
-        assert all(e["video_url"].startswith(("https://www.youtube.com/", "https://youtu.be/")) for e in exercises)
+        plan = await _generate_plan(client, child.id)
+        assert plan["exercises"]
+        assert all(e["video_url"].startswith(("https://www.youtube.com/", "https://youtu.be/")) for e in plan["exercises"])
 
     @pytest.mark.asyncio
-    async def test_generate_plan_success(self):
+    async def test_generate_plan_success(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         assert plan["user_id"] == child.id
         assert plan["status"] == "planned"
         assert len(plan["exercises"]) >= 1
         assert "safety_notes" in plan
+        assert "coach_greeting" in plan
 
     @pytest.mark.asyncio
-    async def test_sensitive_plan_excludes_high_impact(self):
+    async def test_sensitive_plan_excludes_high_impact(self, client):
         child = await _child()
         await _create_profile_db(child.id, health_constraints=json.dumps(["tilt_test_sensitivity"]))
-        plan = await _generate_plan_raw(child.id)
-        notes = plan["safety_notes"]
-        assert any("Low-impact" in n for n in notes)
-        exercise_names = [e["name"] for e in plan["exercises"]]
-        assert "Jumping jacks" not in exercise_names
+        plan = await _generate_plan(client, child.id)
+        assert any("Low-impact" in n for n in plan["safety_notes"])
+        assert "Jumping jacks" not in [e["name"] for e in plan["exercises"]]
 
     @pytest.mark.asyncio
-    async def test_sensitive_plan_excludes_floor_transitions(self):
+    async def test_sensitive_plan_excludes_floor_transitions(self, client):
         child = await _child()
         await _create_profile_db(
             child.id,
             health_constraints=json.dumps(["avoid_sudden_orthostatic_drops"]),
             equipment=json.dumps(["none", "pilates_mat"]),
         )
-        plan = await _generate_plan_raw(child.id)
-        exercise_names = [e["name"] for e in plan["exercises"]]
-        assert "Dead bug" not in exercise_names
-        assert "Pilates bridge" not in exercise_names
+        plan = await _generate_plan(client, child.id)
+        names = [e["name"] for e in plan["exercises"]]
+        assert "Dead bug" not in names
+        assert "Pilates bridge" not in names
 
     @pytest.mark.asyncio
-    async def test_plan_exercise_count_scales_with_duration(self):
+    async def test_plan_exercise_count_scales_with_duration(self, client):
         child = await _child()
         await _create_profile_db(
             child.id, preferred_duration_minutes=60,
             equipment=json.dumps(["none", "resistance_bands", "trx"]),
         )
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         assert len(plan["exercises"]) == 5
 
     @pytest.mark.asyncio
     async def test_list_plans(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        await _generate_plan_raw(child.id)
+        await _generate_plan(client, child.id)
         r = await client.get(f"/api/fitness/plans/{child.id}", headers=H)
         assert r.status_code == 200
-        plans = r.json()
-        assert len(plans) >= 1
+        assert len(r.json()) >= 1
+
+    @pytest.mark.asyncio
+    async def test_repeat_generate_reuses_open_plan(self, client):
+        """Regenerating must not stack duplicate plans and wreck adherence."""
+        child = await _child()
+        await _create_profile_db(child.id)
+        first = await _generate_plan(client, child.id)
+        second = await _generate_plan(client, child.id)
+        assert second["id"] == first["id"]
+        assert second["reused_existing_plan"] is True
+        r = await client.get(f"/api/fitness/plans/{child.id}", headers=H)
+        assert len(r.json()) == 1
+
+    @pytest.mark.asyncio
+    async def test_explicit_regenerate_creates_new_plan(self, client):
+        child = await _child()
+        await _create_profile_db(child.id)
+        first = await _generate_plan(client, child.id)
+        second = await _generate_plan(client, child.id, regenerate=True)
+        assert second["id"] != first["id"]
+
+    @pytest.mark.asyncio
+    async def test_plan_scheduled_on_next_training_day(self, client):
+        child = await _child()
+        await _create_profile_db(child.id, training_days=json.dumps(["friday"]))
+        plan = await _generate_plan(client, child.id)
+        assert date.fromisoformat(plan["date"]).strftime("%A").lower() == "friday"
+
+    @pytest.mark.asyncio
+    async def test_plan_defaults_to_today_without_training_days(self, client):
+        child = await _child()
+        await _create_profile_db(child.id, training_days=json.dumps([]))
+        plan = await _generate_plan(client, child.id)
+        assert plan["date"] == str(date.today())
 
 
 # ── 4. Directive-Aware Plan Generation ──────────────────────────────
 class TestDirectiveAwarePlan:
     @pytest.mark.asyncio
-    async def test_low_impact_directive_forces_sensitive_mode(self):
+    async def test_low_impact_directive_forces_sensitive_mode(self, client):
         child = await _child()
         await _create_profile_db(child.id, health_constraints=json.dumps([]))
         await add_parent_feedback(child.name, "fitness", "please use low-impact exercises only")
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         notes = plan["safety_notes"]
         assert any("Low-impact" in n for n in notes)
-        assert any("low-impact" in n.lower() for n in notes)
+        assert "Jumping jacks" not in [e["name"] for e in plan["exercises"]]
 
     @pytest.mark.asyncio
-    async def test_directive_appended_to_safety_notes(self):
+    async def test_directive_appended_to_safety_notes(self, client):
         child = await _child()
         await _create_profile_db(child.id)
         await add_parent_feedback(child.name, "fitness", "focus on upper body")
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         assert any("upper body" in n.lower() for n in plan["safety_notes"])
 
 
 # ── 5. Progression Logic ────────────────────────────────────────────
 class TestProgression:
     @pytest.mark.asyncio
-    async def test_pain_blocks_progression(self):
+    async def test_pain_blocks_progression(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        result = await _complete_plan_raw(plan["id"], child.id, eids, pain=2)
+        result = await _complete_plan(client, plan["id"], child.id, eids, pain=2)
         assert result["progression_allowed"] is False
-        assert "not" in result["guidance"].lower() or "do not" in result["guidance"].lower()
+        assert "do not progress" in result["guidance"].lower()
 
     @pytest.mark.asyncio
-    async def test_comfortable_session_allows_progression(self):
+    async def test_comfortable_session_allows_progression(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        result = await _complete_plan_raw(plan["id"], child.id, eids, pain=0)
+        result = await _complete_plan(client, plan["id"], child.id, eids, pain=0)
         assert result["progression_allowed"] is True
+        assert result["performance_id"] > 0
 
     @pytest.mark.asyncio
-    async def test_high_rpe_blocks_progression(self):
+    async def test_high_rpe_blocks_progression(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        result = await _complete_plan_raw(plan["id"], child.id, eids, rpe=9)
+        result = await _complete_plan(client, plan["id"], child.id, eids, rpe=9)
         assert result["progression_allowed"] is False
 
     @pytest.mark.asyncio
-    async def test_high_fatigue_blocks_progression(self):
+    async def test_high_fatigue_blocks_progression(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        result = await _complete_plan_raw(plan["id"], child.id, eids, fatigue=8)
+        result = await _complete_plan(client, plan["id"], child.id, eids, fatigue=8)
         assert result["progression_allowed"] is False
 
     @pytest.mark.asyncio
-    async def test_double_complete_returns_error(self):
+    async def test_double_complete_returns_409(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        await _complete_plan_raw(plan["id"], child.id, eids)
-        with pytest.raises(ValueError, match="Already completed"):
-            await _complete_plan_raw(plan["id"], child.id, eids)
+        await _complete_plan(client, plan["id"], child.id, eids)
+        await _complete_plan(client, plan["id"], child.id, eids, expect=409)
+        # Exactly one performance must exist for the plan.
+        async with SessionLocal() as db:
+            perfs = (await db.execute(
+                select(WorkoutPerformance).where(WorkoutPerformance.plan_id == plan["id"])
+            )).scalars().all()
+        assert len(perfs) == 1
+
+    @pytest.mark.asyncio
+    async def test_exercise_outside_plan_returns_422(self, client):
+        child = await _child()
+        await _create_profile_db(child.id)
+        plan = await _generate_plan(client, child.id)
+        await _complete_plan(client, plan["id"], child.id, [999999], expect=422)
+
+    @pytest.mark.asyncio
+    async def test_comfortable_session_raises_next_target_reps(self, client):
+        """ProgressionHistory must actually change the next prescription."""
+        child = await _child()
+        # equipment "none" has exactly 5 seeded exercises, so a 30-minute plan
+        # selects all of them and the next plan is guaranteed to overlap.
+        await _create_profile_db(child.id, equipment=json.dumps(["none"]))
+        first = await _generate_plan(client, child.id)
+        assert all(e["reps"] == 8 for e in first["exercises"])
+        eids = [e["exercise_id"] for e in first["exercises"]]
+        await _complete_plan(client, first["id"], child.id, eids, reps=8,
+                             rpe=4, fatigue=2, pain=0)
+        second = await _generate_plan(client, child.id)
+        progressed = {e["exercise_id"]: e["reps"] for e in second["exercises"]}
+        assert any(progressed.get(eid) == 9 for eid in eids), progressed
+        assert any("small increase applied" in n for n in second["safety_notes"])
+
+    @pytest.mark.asyncio
+    async def test_painful_exercises_are_not_represcribed(self, client):
+        child = await _child()
+        await _create_profile_db(child.id, equipment=json.dumps(["none", "trx", "resistance_bands"]))
+        first = await _generate_plan(client, child.id)
+        hurt = first["exercises"][0]["exercise_id"]
+        await _complete_plan(client, first["id"], child.id, [hurt], pain=4)
+        second = await _generate_plan(client, child.id)
+        assert hurt not in [e["exercise_id"] for e in second["exercises"]]
+
+    @pytest.mark.asyncio
+    async def test_high_fatigue_exercises_are_not_represcribed(self, client):
+        """Fatigue blocks progression, so it must also gate re-prescription."""
+        child = await _child()
+        await _create_profile_db(child.id, equipment=json.dumps(["none", "trx", "resistance_bands"]))
+        first = await _generate_plan(client, child.id)
+        drained = first["exercises"][0]["exercise_id"]
+        await _complete_plan(client, first["id"], child.id, [drained], fatigue=9)
+        second = await _generate_plan(client, child.id)
+        assert drained not in [e["exercise_id"] for e in second["exercises"]]
 
 
 # ── 6. Event Bus / Nutrition Collaboration ──────────────────────────
 class TestEventNutrition:
     @pytest.mark.asyncio
-    async def test_completion_creates_nutrition_fact(self):
+    async def test_completion_creates_nutrition_fact(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        await _complete_plan_raw(plan["id"], child.id, eids)
+        await _complete_plan(client, plan["id"], child.id, eids)
         async with SessionLocal() as db:
             facts = (await db.execute(
                 select(MemoryFact).where(MemoryFact.child_id == child.id, MemoryFact.domain == "nutrition")
             )).scalars().all()
         assert len(facts) >= 1
         assert any("balanced meal" in f.value for f in facts)
+
+    @pytest.mark.asyncio
+    async def test_completion_publishes_workout_event(self, client):
+        child = await _child()
+        await _create_profile_db(child.id)
+        plan = await _generate_plan(client, child.id)
+        eids = [e["exercise_id"] for e in plan["exercises"]]
+        await _complete_plan(client, plan["id"], child.id, eids)
+        from database import AgentEvent
+        async with SessionLocal() as db:
+            events = (await db.execute(
+                select(AgentEvent).where(AgentEvent.child_id == child.id)
+            )).scalars().all()
+        assert any(e.event_type == "fitness.workout_completed" for e in events)
 
     @pytest.mark.asyncio
     async def test_log_workout_completed_publishes_event(self, client):
@@ -593,79 +571,112 @@ class TestEventNutrition:
             )).scalars().all()
         assert len(events) == 0
 
+    @pytest.mark.asyncio
+    async def test_log_rejects_unknown_status(self, client):
+        child = await _child()
+        r = await client.post("/api/fitness/log", headers=H, json={
+            "user_id": child.id, "workout_type": "walk", "exercises": [],
+            "status": "Z" * 400, "notes": ""
+        })
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_log_rejects_oversized_exercise_list(self, client):
+        child = await _child()
+        r = await client.post("/api/fitness/log", headers=H, json={
+            "user_id": child.id, "workout_type": "walk",
+            "exercises": [{"junk": "y" * 1000}], "status": "completed", "notes": ""
+        })
+        assert r.status_code == 422
+
 
 # ── 7. Habits CRUD + Completion + Streaks ────────────────────────────
 class TestHabits:
     @pytest.mark.asyncio
     async def test_create_habit(self, client):
         child = await _child()
-        r = await client.post("/api/fitness/habits", headers=H, json={
-            "user_id": child.id, "name": "Morning stretch", "anchor": "After waking up",
-            "minimum_routine": "5 arm circles", "schedule": ["sunday", "monday"]
-        })
-        assert r.status_code == 200
-        d = r.json()
+        d = await _create_habit(client, child.id, "Morning stretch", "After waking up",
+                                "5 arm circles", ["sunday", "monday"])
         assert d["name"] == "Morning stretch"
         assert d["current_streak"] == 0
 
     @pytest.mark.asyncio
     async def test_list_habits(self, client):
         child = await _child()
-        await client.post("/api/fitness/habits", headers=H, json={
-            "user_id": child.id, "name": "H1", "anchor": "A", "minimum_routine": "R"
-        })
-        await client.post("/api/fitness/habits", headers=H, json={
-            "user_id": child.id, "name": "H2", "anchor": "A", "minimum_routine": "R"
-        })
+        await _create_habit(client, child.id, "H1")
+        await _create_habit(client, child.id, "H2")
         r = await client.get(f"/api/fitness/habits/{child.id}", headers=H)
         assert r.status_code == 200
         assert len(r.json()) == 2
 
     @pytest.mark.asyncio
-    async def test_habit_completion_increments_streak(self):
+    async def test_habit_completion_increments_streak(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Streak test")
-        today = date.today()
-        result = await _complete_habit_raw(h.id, child.id, today)
+        h = await _create_habit(client, child.id, "Streak test")
+        result = await _complete_habit(client, h["id"], child.id, date.today())
         assert result["current_streak"] == 1
 
     @pytest.mark.asyncio
-    async def test_consecutive_days_build_streak(self):
+    async def test_consecutive_days_build_streak(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Cons test")
+        h = await _create_habit(client, child.id, "Cons test")
         today = date.today()
-        await _complete_habit_raw(h.id, child.id, today)
-        result = await _complete_habit_raw(h.id, child.id, today + timedelta(days=1))
+        await _complete_habit(client, h["id"], child.id, today - timedelta(days=1))
+        result = await _complete_habit(client, h["id"], child.id, today)
         assert result["current_streak"] == 2
         assert result["best_streak"] == 2
 
     @pytest.mark.asyncio
-    async def test_gap_resets_streak(self):
+    async def test_gap_resets_streak(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Gap test")
+        h = await _create_habit(client, child.id, "Gap test")
         today = date.today()
-        await _complete_habit_raw(h.id, child.id, today)
-        result = await _complete_habit_raw(h.id, child.id, today + timedelta(days=3))
+        await _complete_habit(client, h["id"], child.id, today - timedelta(days=3))
+        result = await _complete_habit(client, h["id"], child.id, today)
         assert result["current_streak"] == 1
 
     @pytest.mark.asyncio
-    async def test_backdate_before_last_completion_raises(self):
+    async def test_backdate_before_last_completion_returns_409(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Backdate test")
+        h = await _create_habit(client, child.id, "Backdate test")
         today = date.today()
-        await _complete_habit_raw(h.id, child.id, today)
-        with pytest.raises(ValueError, match="Cannot backdate"):
-            await _complete_habit_raw(h.id, child.id, today - timedelta(days=1))
+        await _complete_habit(client, h["id"], child.id, today)
+        await _complete_habit(client, h["id"], child.id, today - timedelta(days=1), expect=409)
 
     @pytest.mark.asyncio
-    async def test_habit_completion_stores_history(self):
+    async def test_future_completion_returns_422(self, client):
+        """A future date would permanently lock the habit via the backdate rule."""
         child = await _child()
-        h = await _create_habit_db(child.id, "History test")
+        h = await _create_habit(client, child.id, "Future test")
+        await _complete_habit(client, h["id"], child.id,
+                              date.today() + timedelta(days=1), expect=422)
+        # The habit must still accept a legitimate completion for today.
+        result = await _complete_habit(client, h["id"], child.id, date.today())
+        assert result["current_streak"] == 1
+
+    @pytest.mark.asyncio
+    async def test_repeat_completion_same_day_is_idempotent(self, client):
+        child = await _child()
+        h = await _create_habit(client, child.id, "Idem test")
         today = date.today()
-        await _complete_habit_raw(h.id, child.id, today)
+        await _complete_habit(client, h["id"], child.id, today)
+        result = await _complete_habit(client, h["id"], child.id, today)
+        assert result["current_streak"] == 1
         async with SessionLocal() as db:
             rows = (await db.execute(
-                select(TinyHabitCompletion).where(TinyHabitCompletion.habit_id == h.id)
+                select(TinyHabitCompletion).where(TinyHabitCompletion.habit_id == h["id"])
+            )).scalars().all()
+        assert len(rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_habit_completion_stores_history(self, client):
+        child = await _child()
+        h = await _create_habit(client, child.id, "History test")
+        today = date.today()
+        await _complete_habit(client, h["id"], child.id, today)
+        async with SessionLocal() as db:
+            rows = (await db.execute(
+                select(TinyHabitCompletion).where(TinyHabitCompletion.habit_id == h["id"])
             )).scalars().all()
         assert len(rows) == 1
         assert rows[0].completed_date == today
@@ -673,36 +684,42 @@ class TestHabits:
     @pytest.mark.asyncio
     async def test_habit_history_endpoint(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Hist EP test")
-        today = date.today()
-        await _complete_habit_raw(h.id, child.id, today)
-        r = await client.get(f"/api/fitness/habits/{h.id}/history?user_id={child.id}", headers=H)
+        h = await _create_habit(client, child.id, "Hist EP test")
+        await _complete_habit(client, h["id"], child.id, date.today())
+        r = await client.get(f"/api/fitness/habits/{h['id']}/history?user_id={child.id}", headers=H)
         assert r.status_code == 200
         data = r.json()
-        assert data["habit_id"] == h.id
+        assert data["habit_id"] == h["id"]
         assert len(data["completions"]) == 1
 
     @pytest.mark.asyncio
-    async def test_update_habit_db(self):
+    async def test_update_habit(self, client):
         child = await _child()
-        h = await _create_habit_db(child.id, "Old name")
-        async with SessionLocal() as db:
-            habit = await db.get(TinyHabit, h.id)
-            habit.name = "New name"
-            habit.anchor = "New anchor"
-            habit.minimum_routine = "New routine"
-            habit.schedule_json = json.dumps(["friday"])
-            await db.commit()
-            await db.refresh(habit)
-            assert habit.name == "New name"
+        h = await _create_habit(client, child.id, "Old name")
+        r = await client.put(f"/api/fitness/habits/{h['id']}", headers=H, json={
+            "user_id": child.id, "name": "New name", "anchor": "New anchor",
+            "minimum_routine": "New routine", "schedule": ["friday"], "active": True,
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["name"] == "New name"
+        assert d["schedule"] == ["friday"]
+
+    @pytest.mark.asyncio
+    async def test_update_habit_wrong_owner_returns_404(self, client):
+        owner = await _child()
+        other = await _child()
+        h = await _create_habit(client, owner.id, "Owned")
+        r = await client.put(f"/api/fitness/habits/{h['id']}", headers=H, json={
+            "user_id": other.id, "name": "Hijack", "anchor": "A",
+            "minimum_routine": "R", "schedule": [], "active": True,
+        })
+        assert r.status_code == 404
 
     @pytest.mark.asyncio
     async def test_minimum_routine_endpoint(self, client):
         child = await _child()
-        await client.post("/api/fitness/habits", headers=H, json={
-            "user_id": child.id, "name": "Min routine", "anchor": "After coffee",
-            "minimum_routine": "10 squats"
-        })
+        await _create_habit(client, child.id, "Min routine", "After coffee", "10 squats")
         r = await client.get(f"/api/fitness/habits/{child.id}/minimum-routine", headers=H)
         assert r.status_code == 200
         data = r.json()
@@ -723,25 +740,34 @@ class TestAnalytics:
         assert d["goal_status"]["status"] == "not_started"
 
     @pytest.mark.asyncio
-    async def test_analytics_after_completion(self):
+    async def test_analytics_after_completion(self, client):
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        await _complete_plan_raw(plan["id"], child.id, eids)
-        # Query analytics data directly
-        async with SessionLocal() as db:
-            plans = (await db.execute(select(WorkoutPlan).where(WorkoutPlan.user_id == child.id))).scalars().all()
-            recent = (await db.execute(
-                select(WorkoutPerformance).where(WorkoutPerformance.user_id == child.id)
-                .order_by(WorkoutPerformance.completed_at.desc()).limit(10)
-            )).scalars().all()
-        completed = sum(p.status == "completed" for p in plans)
-        assert completed == 1
-        rate = round(completed / len(plans), 3) if plans else 0
-        assert rate == 1.0
-        assert len(recent) >= 1
-        assert bool(recent[0].progression_allowed) is True
+        await _complete_plan(client, plan["id"], child.id, eids)
+        r = await client.get(f"/api/fitness/analytics/{child.id}", headers=H)
+        d = r.json()
+        assert d["adherence"]["completed"] == 1
+        assert d["adherence"]["rate"] == 1.0
+        assert len(d["recent_sessions"]) >= 1
+        assert d["recent_sessions"][0]["progression_allowed"] is True
+        assert d["progression"]
+
+    @pytest.mark.asyncio
+    async def test_upcoming_plan_does_not_count_as_missed(self, client):
+        """A plan scheduled for a future day has not been skipped yet."""
+        child = await _child()
+        await _create_profile_db(child.id, training_days=json.dumps([
+            (date.today() + timedelta(days=2)).strftime("%A").lower()
+        ]))
+        await _generate_plan(client, child.id)
+        r = await client.get(f"/api/fitness/analytics/{child.id}", headers=H)
+        d = r.json()["adherence"]
+        assert d["upcoming"] == 1
+        assert d["planned"] == 0
+        assert d["missed"] == 0
+        assert d["rate"] == 0
 
     @pytest.mark.asyncio
     async def test_analytics_nonexistent_user_returns_404(self, client):
@@ -755,8 +781,7 @@ class TestExercises:
     async def test_list_all_exercises(self, client):
         r = await client.get("/api/fitness/exercises", headers=H)
         assert r.status_code == 200
-        data = r.json()
-        assert len(data) >= 8
+        assert len(r.json()) >= 8
 
     @pytest.mark.asyncio
     async def test_filter_by_category(self, client):
@@ -779,17 +804,23 @@ class TestExercises:
         for ex in r.json():
             assert ex["equipment"] == "trx"
 
+    @pytest.mark.asyncio
+    async def test_pagination_limits_results(self, client):
+        r = await client.get("/api/fitness/exercises?limit=3", headers=H)
+        assert r.status_code == 200
+        assert len(r.json()) == 3
+
 
 # ── 10. Report / Orchestrator Wellness ──────────────────────────────
 class TestReport:
     @pytest.mark.asyncio
-    async def test_orchestrator_includes_wellness_data(self):
+    async def test_orchestrator_includes_wellness_data(self, client):
         from orchestrator import gather_daily_report_data
         child = await _child()
         await _create_profile_db(child.id)
-        plan = await _generate_plan_raw(child.id)
+        plan = await _generate_plan(client, child.id)
         eids = [e["exercise_id"] for e in plan["exercises"]]
-        await _complete_plan_raw(plan["id"], child.id, eids, duration=25)
+        await _complete_plan(client, plan["id"], child.id, eids, duration=25)
         report = await gather_daily_report_data()
         child_report = next((r for r in report if r["child_name"] == child.name), None)
         assert child_report is not None

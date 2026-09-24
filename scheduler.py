@@ -33,17 +33,23 @@ def start_scheduler():
     """Register and start the daily orchestration job. Safe to call once at
     FastAPI startup.
     """
+    if scheduler.running:
+        logger.warning("Orchestrator scheduler is already running; skipping duplicate start")
+        return
     scheduler.add_job(
         _scheduled_job,
         trigger=CronTrigger(hour=ORCHESTRATOR_HOUR, minute=ORCHESTRATOR_MINUTE, timezone=LOCAL_TIMEZONE),
         id="daily_orchestration",
         replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
     )
     scheduler.add_job(
         _heartbeat_job,
         trigger=CronTrigger(minute="0", timezone=LOCAL_TIMEZONE),
         id="hourly_heartbeat",
         replace_existing=True,
+        max_instances=1,
     )
     scheduler.start()
     logger.info(

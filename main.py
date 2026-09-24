@@ -35,7 +35,7 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
 from scheduler import start_scheduler, stop_scheduler
-from orchestrator import run_daily_orchestration, router as orchestrator_router
+from orchestrator import router as orchestrator_router
 from collaboration_api import router as collaboration_router
 from control_plane import capture_agent_log, router as control_plane_router
 from fitness_agent import router as fitness_router
@@ -366,25 +366,6 @@ async def dashboard_stats(db: AsyncSession = Depends(get_db)):
             })
 
     return {"children": dashboard}
-
-
-@app.post("/api/orchestrator/run-now")
-async def orchestrator_run_now():
-    """
-    Manually trigger the daily orchestration job (gather activity, generate
-    the summary, and send it to Yaniv on Telegram) without waiting for the
-    scheduled time. Useful for testing the Telegram integration.
-    """
-    try:
-        result = await run_daily_orchestration()
-        return {
-            "status": "ok",
-            "telegram_sent": result["telegram_sent"],
-            "summary_text": result["summary_text"],
-        }
-    except Exception as e:
-        logger.exception("Manual orchestrator run failed")
-        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/tutor/chat", response_model=ChatResponse)
