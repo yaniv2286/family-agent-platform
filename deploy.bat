@@ -18,6 +18,10 @@ set "NEURAL_ARCHIVE=%TEMP%\neuraltrader-deploy-%RANDOM%.tar.gz"
 set "HUNTER_REPO=D:\GitHub\VolatilityHunter"
 set "HUNTER_ARCHIVE=%TEMP%\volatilityhunter-deploy-%RANDOM%.tar.gz"
 
+:: Use Windows system tar so archive paths like C:\Users\... are not
+:: misinterpreted as remote hosts by MSYS tar ("Cannot connect to C:").
+set "TAR=C:\Windows\System32\tar.exe"
+
 :: ---------------------------------------------------------------------------
 :: 1. SSH authentication precondition
 :: ---------------------------------------------------------------------------
@@ -78,7 +82,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [INFO] Packaging family-agent-platform...
-tar -czf "%ARCHIVE%" -C "%PROJECT:~0,-1%" --exclude=".git" --exclude="data" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="logs" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude="cert.pem" --exclude="key.pem" .
+%TAR% -czf "%ARCHIVE%" -C "%PROJECT:~0,-1%" --exclude=".git" --exclude="data" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="logs" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude="cert.pem" --exclude="key.pem" .
 
 echo [INFO] Uploading family-agent-platform archive...
 scp %SSH_OPTS% "%ARCHIVE%" %SERVER%:/root/koko-deploy.tar.gz
@@ -148,7 +152,7 @@ ssh %SSH_OPTS% %SERVER% "test -f /root/neuraltrader/data/raw/AAPL.parquet" >nul
 if %ERRORLEVEL% NEQ 0 (
     echo [INFO] No market data found on VPS. Building data/raw seed archive locally...
     set "DATA_ARCHIVE=%TEMP%\neuraltrader-data-%RANDOM%.tar.gz"
-    tar -czf "!DATA_ARCHIVE!" -C "%NEURAL_REPO%" data\raw
+    !TAR! -czf "!DATA_ARCHIVE!" -C "%NEURAL_REPO%" data\raw
     if !ERRORLEVEL! NEQ 0 (
         echo [ERROR] Failed to build data/raw archive
         pause
@@ -171,7 +175,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [INFO] Packaging NeuralTrader...
-tar -czf "%NEURAL_ARCHIVE%" -C "%NEURAL_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
+%TAR% -czf "%NEURAL_ARCHIVE%" -C "%NEURAL_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
 
 echo [INFO] Uploading NeuralTrader archive...
 scp %SSH_OPTS% "%NEURAL_ARCHIVE%" %SERVER%:/root/neuraltrader-deploy.tar.gz
@@ -254,7 +258,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [INFO] Packaging VolatilityHunter without mutable trading state...
-tar -czf "%HUNTER_ARCHIVE%" -C "%HUNTER_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="archive" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
+%TAR% -czf "%HUNTER_ARCHIVE%" -C "%HUNTER_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="archive" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] VolatilityHunter packaging failed.
     pause
