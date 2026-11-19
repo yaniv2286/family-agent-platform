@@ -12,7 +12,8 @@ def run():
     with sync_playwright() as p:
         engine = getattr(p, args.browser)
         browser = engine.launch(**({'channel': 'chrome'} if args.browser == 'chromium' else {}), headless=True)
-        for width, height in [(320, 640), (390, 844), (430, 932), (844, 390)]:
+        # Phones (incl. the smallest common one) plus an iPad-sized tablet.
+        for width, height in [(320, 640), (390, 844), (430, 932), (844, 390), (768, 1024)]:
             page = browser.new_page(viewport={'width': width, 'height': height}, is_mobile=True, has_touch=True)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))

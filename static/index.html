@@ -408,6 +408,8 @@
             min-width: 40px;
             text-align: left;
         }
+        .points-earned.pop { animation: pointsPop .9s ease; font-weight: 800; color: #f59e0b; }
+        @keyframes pointsPop { 0% { transform: scale(.4); opacity: 0; } 40% { transform: scale(1.6); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 
         .daily-practice {
             margin: 10px 15px;
@@ -1736,8 +1738,6 @@
             <div class="session-info">
                 <span id="session-timer">⏰ נותר: 20:00</span>
                 <span id="student-name">👤 תלמיד</span>
-                <span id="subject-label">📚 נושא</span>
-                <span id="message-count">💬 הודעות: 0</span>
                 <button class="history-btn" id="history-btn" style="display: none;">📜 היסטוריה</button>
                 <div class="points-display" id="points-display">
                     <span>⭐ <span id="points-total">0</span> נקודות</span>
@@ -1754,7 +1754,9 @@
                 <button class="tutor-toggle-btn" id="toggle-english-btn" data-subject="english">🔤 אנגלית</button>
             </div>
 
-            <div class="daily-practice" id="daily-practice">מכינים את התרגול היומי...</div>
+            <!-- Hidden: the daily-practice data still feeds the tutor's skill
+                 focus, but the banner was visual noise for the child. -->
+            <div class="daily-practice" id="daily-practice" style="display:none"></div>
 
             <div class="tutor-stage" id="tutor-stage">
                 <button class="avatar-picker-btn" id="avatar-picker-btn" title="החלף דמות" aria-label="החלף דמות">🎭</button>
@@ -1856,9 +1858,7 @@
         const closeModal = document.getElementById('close-modal');
         const sessionTimer = document.getElementById('session-timer');
         const timerBar = document.getElementById('timer-bar');
-        const messageCount = document.getElementById('message-count');
         const studentName = document.getElementById('student-name');
-        const subjectLabel = document.getElementById('subject-label');
         const tutorToggle = document.getElementById('tutor-toggle');
         const toggleMathBtn = document.getElementById('toggle-math-btn');
         const toggleEnglishBtn = document.getElementById('toggle-english-btn');
@@ -2623,7 +2623,7 @@
             selectedSubject = 'english';
             showScreen('tutoring');
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
-            subjectLabel.textContent = `📚 ${lesson.title_he}`;
+
             renderLessonSlide(0, 0);
             speakResponse(lesson.intro_he, 'wave');
         }
@@ -2748,7 +2748,7 @@
         document.getElementById('ec-free-chat').addEventListener('click', () => {
             selectedSubject = 'english';
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
-            subjectLabel.textContent = '📚 🔤 שיעור אנגלית';
+
             updateTutorToggleUI('english');
             if (historyBtn) historyBtn.style.display = 'inline-block';
             showScreen('tutoring');
@@ -2788,7 +2788,6 @@
             selectedSubject = subject;
             
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
-            subjectLabel.textContent = `📚 ${subjectName}`;
             updateTutorToggleUI(subject);
             if (historyBtn) historyBtn.style.display = 'inline-block';
             
@@ -2933,7 +2932,6 @@
                 messages = existing;
                 chatContainer.innerHTML = '';
                 messages.forEach(m => renderBubble(m.role, m.content));
-                messageCount.textContent = `💬 הודעות: ${messages.length}`;
                 stopSessionTimer();
                 sessionStartTime = Date.now();
                 sessionDurationSeconds = 20 * 60;
@@ -2976,7 +2974,16 @@
             const earnedEl = document.getElementById('points-earned');
             if (totalEl) totalEl.textContent = total;
             if (fillEl) fillEl.style.width = `${Math.min((total % 100) || 0, 100)}%`;
-            if (earnedEl) earnedEl.textContent = earned > 0 ? `+${earned}` : '';
+            if (earnedEl) {
+                earnedEl.textContent = earned > 0 ? `+${earned} ⭐` : '';
+                if (earned > 0) {
+                    earnedEl.classList.remove('pop');
+                    void earnedEl.offsetWidth; // restart the animation
+                    earnedEl.classList.add('pop');
+                    clearTimeout(earnedEl._clearT);
+                    earnedEl._clearT = setTimeout(() => { earnedEl.textContent = ''; }, 4000);
+                }
+            }
         }
 
         async function loadHistory() {
@@ -3071,7 +3078,6 @@
         function addMessage(role, content) {
             const bubble = renderBubble(role, content);
             messages.push({ role, content });
-            messageCount.textContent = `💬 הודעות: ${messages.length}`;
             // When Koko asks an arithmetic question, pin a live visual solver
             // under the message - column arithmetic with borrowing/carrying,
             // animated step by step like the pencil videos kids watch.
@@ -4623,6 +4629,7 @@
                     audio.addEventListener('ended', () => {
                         URL.revokeObjectURL(audio.src);
                         if (currentAudio === audio) currentAudio = null;
+                        autoListenAfterSpeech();
                     });
                     await new Promise(res => mediaSource.addEventListener('sourceopen', res, { once: true }));
                     const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
@@ -4682,6 +4689,7 @@
                 currentAudio.addEventListener('ended', () => {
                     URL.revokeObjectURL(url);
                     currentAudio = null;
+                    autoListenAfterSpeech();
                 });
 
                 try {
@@ -4718,6 +4726,26 @@
         }
         function hideAutoplayHint() {
             if (autoplayHintEl) { autoplayHintEl.remove(); autoplayHintEl = null; }
+        }
+
+        /* Lexi-style flow: when Koko finishes a turn, the mic opens so the
+           child answers without pressing anything. Guarded - only on the
+           tutoring screen, only where a spoken answer is expected (free chat
+           or a lesson's speak-slide), and it disarms after a few consecutive
+           empty captures so a noisy room cannot loop it forever. */
+        let autoListenMisses = 0;
+        let listenWasAuto = false;
+
+        function autoListenAfterSpeech() {
+            if (!tutoringScreen.classList.contains('show')) return;
+            if (isListening || micStarting || pushToTalkHeld) return;
+            if (voiceButton.disabled) return;
+            if (activeLesson && !lessonSlideAnswer) return;
+            if (selectedSubject !== 'english' && selectedSubject !== 'math') return;
+            if (autoListenMisses >= 3) return;
+            listenWasAuto = true;
+            reportClientLog('voice', 'auto-listen');
+            startListening();
         }
 
         // Voice capture
@@ -5085,17 +5113,26 @@
                 if (generation !== voiceGeneration) return;
                 reportClientLog('voice', `transcription-result hasText=${!!data.text}`);
                 if (data.text) {
+                    autoListenMisses = 0;
                     if (kokoWasSpeakingAtMic && isEchoOfKoko(data.text)) {
                         console.warn('Discarded TTS echo transcript:', data.text);
                         addMessage('assistant', 'שמעתי את עצמי מדברת 😄 בואי ננסה שוב — מה התשובה?');
+                    } else if (lessonSlideAnswer) {
+                        // Voice answer inside a scripted lesson goes to the
+                        // slide, not the free-chat endpoint.
+                        const slideAnswer = lessonSlideAnswer;
+                        lessonSlideAnswer = null;
+                        slideAnswer(data.text);
                     } else {
                         textInput.value = data.text;
                         sendMessage(data.text);
                     }
                 } else {
+                    if (listenWasAuto) autoListenMisses++;
                     reportClientLog('voice', 'transcription-empty');
                     addMessage('assistant', 'לא הצלחתי לזהות דיבור בהקלטה. נסו שוב, ודברו אחרי שהכפתור מציג הקלטה.');
                 }
+                listenWasAuto = false;
             } catch (error) {
                 console.error('Voice upload failed:', error);
                 if (generation === voiceGeneration) {
@@ -5752,6 +5789,8 @@
             // still being fetched on the server.
             kokoWasSpeakingAtMic = !!currentAudio;
             stopKokoSpeech();
+            listenWasAuto = false;
+            autoListenMisses = 0; // manual engagement re-arms auto-listen
 
             const handleVoiceClick = async () => {
                 if (isListening || micStarting) {
@@ -5799,6 +5838,8 @@
             pttPressedAt = performance.now();
             kokoWasSpeakingAtMic = !!currentAudio;
             stopKokoSpeech();
+            listenWasAuto = false;
+            autoListenMisses = 0;
             playGesture('listen');
             pttStartPromise = (isListening || micStarting) ? Promise.resolve(true) : startListening();
             pttStartPromise.then(started => {
