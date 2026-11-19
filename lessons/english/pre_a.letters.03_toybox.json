@@ -1,0 +1,79 @@
+{
+  "lesson_id": "pre_a.letters.03_toybox",
+  "course_id": "pre_a",
+  "title_he": "קופסת הצעצועים",
+  "intro_he": "מה יש בקופסת הצעצועים? ball ו-toy box, ושלושה צבעים חדשים: pink, orange ו-purple.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "ball",
+      "type": "speak",
+      "prompt_en": "ball",
+      "prompt_he": "בתוך הקופסה יש ball. תגידו ball",
+      "say": "Open the toy box - a ball! Say: ball.",
+      "accept": ["ball"],
+      "praise_he": "ball זה כדור. ball מתחיל בצליל B - כמו ב בעברית.",
+      "hint_he": "בּוֹל - הבעה אחת."
+    },
+    {
+      "id": "pink",
+      "type": "listen",
+      "prompt_en": "pink",
+      "prompt_he": "הקשיבו ובחרו את הצבע",
+      "say": "Listen: pink. Which color is pink?",
+      "options": [
+        {"id": "pink", "label": "pink", "emoji": "🩷"},
+        {"id": "purple", "label": "purple", "emoji": "🟣"},
+        {"id": "orange", "label": "orange", "emoji": "🟠"}
+      ],
+      "correct": "pink",
+      "praise_he": "pink זה ורוד.",
+      "hint_he": "pink הוא הורוד. הקשיבו שוב."
+    },
+    {
+      "id": "orange",
+      "type": "choice",
+      "prompt_en": "orange",
+      "prompt_he": "איזה צבע הוא orange?",
+      "say": "Orange - like a תפוז! Point to orange.",
+      "options": [
+        {"id": "orange", "label": "orange", "emoji": "🟠"},
+        {"id": "pink", "label": "pink", "emoji": "🩷"},
+        {"id": "green", "label": "green", "emoji": "🟢"}
+      ],
+      "correct": "orange",
+      "praise_he": "orange זה כתום - בדיוק כמו תפוז.",
+      "hint_he": "orange הוא הכתום."
+    },
+    {
+      "id": "purple",
+      "type": "listen",
+      "prompt_en": "purple",
+      "prompt_he": "הקשיבו ובחרו את הצבע",
+      "say": "Listen: purple. Which color did I say?",
+      "options": [
+        {"id": "purple", "label": "purple", "emoji": "🟣"},
+        {"id": "pink", "label": "pink", "emoji": "🩷"},
+        {"id": "yellow", "label": "yellow", "emoji": "🟡"}
+      ],
+      "correct": "purple",
+      "praise_he": "purple זה סגול - כמו ענבים.",
+      "hint_he": "purple הוא הסגול."
+    },
+    {
+      "id": "b_sound",
+      "type": "choice",
+      "prompt_en": "ball starts with B",
+      "prompt_he": "ball מתחיל ב-B. איזו עוד מילה מתחילה ב-B?",
+      "say": "Ball starts with the B sound, like ב in Hebrew. Which word also starts with B?",
+      "options": [
+        {"id": "box", "label": "box", "emoji": "📦"},
+        {"id": "ant", "label": "ant", "emoji": "🐜"},
+        {"id": "apple", "label": "apple", "emoji": "🍎"}
+      ],
+      "correct": "box",
+      "praise_he": "box מתחיל ב-B! toy box - קופסת צעצועים.",
+      "hint_he": "ant ו-apple מתחילות ב-A. מחפשים צליל B."
+    }
+  ]
+}

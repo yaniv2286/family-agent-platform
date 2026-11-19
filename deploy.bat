@@ -1,5 +1,4 @@
-@echo off
-setlocal EnableDelayedExpansion
+@echo off & setlocal EnableDelayedExpansion
 
 :: VolatilityHunter is disabled for remote deployment by default (run locally).
 :: Set DEPLOY_VOLATILITYHUNTER=1 to also deploy it to the VPS.
@@ -81,8 +80,21 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo [INFO] Writing deployment metadata...
+python -c "import json; from datetime import datetime, timezone; from pathlib import Path; Path(r'%PROJECT%build_info.json').write_text(json.dumps({'deployed_at': datetime.now(timezone.utc).isoformat()}), encoding='utf-8')"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Failed to write deployment metadata. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
 echo [INFO] Packaging family-agent-platform...
-%TAR% -czf "%ARCHIVE%" -C "%PROJECT:~0,-1%" --exclude=".git" --exclude="data" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="logs" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude="cert.pem" --exclude="key.pem" .
+python "%PROJECT%scripts\create_deploy_archive.py" "%PROJECT:~0,-1%" "%ARCHIVE%" --exclude ".git" --exclude "data" --exclude "__pycache__" --exclude ".pytest_cache" --exclude "logs" --exclude "venv" --exclude ".venv" --exclude "*.db" --exclude "*.sqlite3" --exclude ".env" --exclude "cert.pem" --exclude "key.pem"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Koko packaging failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 echo [INFO] Uploading family-agent-platform archive...
 scp %SSH_OPTS% "%ARCHIVE%" %SERVER%:/root/koko-deploy.tar.gz
@@ -98,7 +110,8 @@ if not exist "%PROJECT%\.env" (
     exit /b 1
 )
 echo [INFO] Uploading Koko .env...
-scp %SSH_OPTS% "%PROJECT%\.env" %SERVER%:/root/.env
+ssh %SSH_OPTS% %SERVER% "mkdir -p /root/koko"
+scp %SSH_OPTS% "%PROJECT%\.env" %SERVER%:/root/koko/.env
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to upload Koko .env
     pause
@@ -106,8 +119,25 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :: ---------------------------------------------------------------------------
+:: 2b. Detect whether NeuralTrader code changed since the last deploy. When it
+:: did not, the entire NeuralTrader section (checks, packaging, upload, remote
+:: rebuild) is skipped - it is the slowest part of a no-op deploy.
+:: ---------------------------------------------------------------------------
+python "%PROJECT%scripts\hash_tree.py" "%NEURAL_REPO%" ".git" "data" "logs" "reports" "__pycache__" ".pytest_cache" "venv" ".venv" > "%TEMP%\nt-local-hash.txt"
+set /p NEURAL_HASH=<"%TEMP%\nt-local-hash.txt"
+ssh %SSH_OPTS% %SERVER% "cat /root/neuraltrader/.deploy_hash 2>nul" > "%TEMP%\nt-remote-hash.txt"
+set /p NEURAL_REMOTE_HASH=<"%TEMP%\nt-remote-hash.txt"
+if "%NEURAL_HASH%"=="%NEURAL_REMOTE_HASH%" (
+    set "NEURAL_CHANGED=0"
+    echo [INFO] NeuralTrader unchanged since last deploy - skipping its build entirely.
+) else (
+    set "NEURAL_CHANGED=1"
+)
+
+:: ---------------------------------------------------------------------------
 :: 3. NeuralTrader package
 :: ---------------------------------------------------------------------------
+if "%NEURAL_CHANGED%"=="0" goto :after_neural
 if not exist "%NEURAL_REPO%\main_orchestrator_ist.py" (
     echo [ERROR] NeuralTrader repository not found at %NEURAL_REPO%
     pause
@@ -175,7 +205,12 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [INFO] Packaging NeuralTrader...
-%TAR% -czf "%NEURAL_ARCHIVE%" -C "%NEURAL_REPO%" --exclude=".git" --exclude="data" --exclude="logs" --exclude="reports" --exclude="__pycache__" --exclude=".pytest_cache" --exclude="venv" --exclude=".venv" --exclude="*.db" --exclude="*.sqlite3" --exclude=".env" --exclude=".env.*" .
+python "%PROJECT%scripts\create_deploy_archive.py" "%NEURAL_REPO%" "%NEURAL_ARCHIVE%" --exclude ".git" --exclude "data" --exclude "logs" --exclude "reports" --exclude "__pycache__" --exclude ".pytest_cache" --exclude "venv" --exclude ".venv" --exclude "*.db" --exclude "*.sqlite3" --exclude ".env" --exclude ".env.*"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] NeuralTrader packaging failed. Deployment aborted.
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 echo [INFO] Uploading NeuralTrader archive...
 scp %SSH_OPTS% "%NEURAL_ARCHIVE%" %SERVER%:/root/neuraltrader-deploy.tar.gz
@@ -185,6 +220,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+:after_neural
 :: ---------------------------------------------------------------------------
 :: 4. VolatilityHunter package
 :: ---------------------------------------------------------------------------
@@ -275,8 +311,16 @@ if %ERRORLEVEL% NEQ 0 (
 :: ---------------------------------------------------------------------------
 :: 5. Deploy Koko and NeuralTrader stacks on the VPS
 :: ---------------------------------------------------------------------------
-echo [INFO] Deploying Koko and NeuralTrader stacks on %SERVER%...
-ssh %SSH_OPTS% %SERVER% "docker network inspect family-agents-net >/dev/null 2>&1 || docker network create family-agents-net; cd /root && rm -rf venv .venv __pycache__ .pytest_cache logs && rm -f koko-deploy.zip dataclasses.py numbers.py *.py *.db *.sqlite3 && tar --no-overwrite-dir -xzf koko-deploy.tar.gz && rm -f koko-deploy.tar.gz && docker compose down && docker compose up -d --build && docker compose ps && mkdir -p /root/neuraltrader && cd /root/neuraltrader && rm -rf core scripts models docs temp *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/neuraltrader-deploy.tar.gz && rm -f /root/neuraltrader-deploy.tar.gz && docker compose -f docker-compose.yml -p neuraltrader down && docker compose -f docker-compose.yml -p neuraltrader up -d --build && docker compose -p neuraltrader ps"
+if "%NEURAL_CHANGED%"=="0" goto :deploy_koko_only
+echo [INFO] Deploying Koko and NeuralTrader stacks on %SERVER% - building in parallel...
+ssh %SSH_OPTS% %SERVER% "gzip -t /root/koko-deploy.tar.gz && gzip -t /root/neuraltrader-deploy.tar.gz && docker network inspect family-agents-net >/dev/null 2>&1 || docker network create family-agents-net; ( mkdir -p /root/koko && cd /root/koko && rm -rf venv .venv __pycache__ .pytest_cache logs && tar -xzf /root/koko-deploy.tar.gz && rm -f /root/koko-deploy.tar.gz && if [ -d /root/data/koko ] && [ ^! -d /root/koko/data/koko ]; then mkdir -p /root/koko/data && mv /root/data/koko /root/koko/data/koko; fi && docker compose up -d --build && docker compose ps ) & KPID=$^!; ( mkdir -p /root/neuraltrader && cd /root/neuraltrader && rm -rf core scripts models docs temp *.py *.toml *.txt *.sh *.yml *.md && tar -xzf /root/neuraltrader-deploy.tar.gz && rm -f /root/neuraltrader-deploy.tar.gz && docker compose -f docker-compose.yml -p neuraltrader down && docker compose -f docker-compose.yml -p neuraltrader up -d --build && docker compose -p neuraltrader ps ) & NPID=$^!; wait $KPID; KOKO_RC=$?; wait $NPID; NT_RC=$?; if [ $KOKO_RC -ne 0 ] || [ $NT_RC -ne 0 ]; then exit 1; fi; echo %NEURAL_HASH% > /root/neuraltrader/.deploy_hash"
+goto :after_stack_deploy
+
+:deploy_koko_only
+echo [INFO] Deploying Koko stack on %SERVER%...
+ssh %SSH_OPTS% %SERVER% "set -e; gzip -t /root/koko-deploy.tar.gz; docker network inspect family-agents-net >/dev/null 2>&1 || docker network create family-agents-net; mkdir -p /root/koko && cd /root/koko && rm -rf venv .venv __pycache__ .pytest_cache logs && tar -xzf /root/koko-deploy.tar.gz && rm -f /root/koko-deploy.tar.gz && if [ -d /root/data/koko ] && [ ^! -d /root/koko/data/koko ]; then mkdir -p /root/koko/data && mv /root/data/koko /root/koko/data/koko; fi && docker compose up -d --build && docker compose ps"
+
+:after_stack_deploy
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Remote deployment failed
@@ -299,7 +343,7 @@ if "%DEPLOY_VOLATILITYHUNTER%"=="1" (
 :: 6. Remote smoke tests
 :: ---------------------------------------------------------------------------
 echo [INFO] Waiting for services to start...
-timeout /t 20 /nobreak >nul
+ping -n 21 127.0.0.1 >nul
 
 echo [INFO] Running remote health smoke tests...
 ssh %SSH_OPTS% %SERVER% "curl -fsS --max-time 10 https://lugassy-agents.duckdns.org/api/health || echo '[SMOKE] Koko public health check failed'"

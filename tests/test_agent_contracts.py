@@ -96,6 +96,33 @@ def _default_expected_signature(secret: str, path: str, timestamp: int, body: by
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
+# ── Contract inventories ─────────────────────────────────────────────────────
+def test_remote_agent_profiles_match_advertised_contracts():
+    neural = agent_connector._profile_for("neuraltrader")
+    assert neural.telemetry_endpoints == [
+        "/health", "/status", "/portfolio", "/alerts", "/workflows",
+        "/model/summary", "/regime/summary",
+    ]
+    assert neural.analytics_endpoints == [
+        "/status", "/portfolio", "/positions", "/performance/history",
+        "/signals", "/orders/trades",
+    ]
+    assert neural.logs_endpoint == "/logs/recent"
+    assert neural.capabilities_endpoint == "/capabilities"
+    assert neural.allowed_commands == frozenset({"fetch", "paper", "report"})
+
+    hunter = agent_connector._profile_for("volatilityhunter")
+    assert hunter.telemetry_endpoints == [
+        "/health", "/status", "/portfolio/totals", "/risk", "/alerts",
+    ]
+    assert hunter.analytics_endpoints == [
+        "/status", "/portfolio/totals", "/positions", "/performance", "/risk",
+    ]
+    assert hunter.logs_endpoint == "/logs"
+    assert hunter.capabilities_endpoint == "/capabilities"
+    assert hunter.command_path is None
+
+
 # ── NeuralTrader contract ────────────────────────────────────────────────────
 async def test_neuraltrader_single_request_path_and_headers(monkeypatch):
     monkeypatch.setenv("AGENT_NEURALTRADER_URL", "https://neural.example.com")
@@ -198,6 +225,18 @@ async def test_neuraltrader_fetch_analytics_aggregates_endpoints(monkeypatch):
         assert f"https://neural.example.com/v1{endpoint}" in {r["url"] for r in _RecordingAsyncClient.requests}
 
 
+async def test_neuraltrader_logs_and_capabilities_paths(monkeypatch):
+    monkeypatch.setenv("AGENT_NEURALTRADER_URL", "https://neural.example.com")
+    monkeypatch.setenv("AGENT_NEURALTRADER_SECRET", "neural-secret")
+
+    connector = agent_connector.AgentConnector("neuraltrader")
+    await connector.fetch_logs()
+    await connector.fetch_capabilities()
+
+    paths = {_parse_request(req)["path"] for req in _RecordingAsyncClient.requests}
+    assert paths == {"/v1/logs/recent", "/v1/capabilities"}
+
+
 # ── VolatilityHunter contract ──────────────────────────────────────────────
 async def test_volatilityhunter_single_request_path_and_headers(monkeypatch):
     monkeypatch.setenv("AGENT_VOLATILITYHUNTER_URL", "https://hunter.example.com")
@@ -293,6 +332,18 @@ async def test_volatilityhunter_fetch_analytics_aggregates_endpoints(monkeypatch
     assert set(snapshot["analytics"].keys()) == set(connector._profile.analytics_endpoints)
     for endpoint in connector._profile.analytics_endpoints:
         assert f"https://hunter.example.com/api/v1{endpoint}" in {r["url"] for r in _RecordingAsyncClient.requests}
+
+
+async def test_volatilityhunter_logs_and_capabilities_paths(monkeypatch):
+    monkeypatch.setenv("AGENT_VOLATILITYHUNTER_URL", "https://hunter.example.com")
+    monkeypatch.setenv("AGENT_VOLATILITYHUNTER_SECRET", "hunter-secret")
+
+    connector = agent_connector.AgentConnector("volatilityhunter")
+    await connector.fetch_logs()
+    await connector.fetch_capabilities()
+
+    paths = {_parse_request(req)["path"] for req in _RecordingAsyncClient.requests}
+    assert paths == {"/api/v1/logs", "/api/v1/capabilities"}
 
 
 # ── Default / future-agent contract ──────────────────────────────────────────

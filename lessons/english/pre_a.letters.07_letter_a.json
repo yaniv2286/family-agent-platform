@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.07_letter_a",
+  "course_id": "pre_a",
+  "title_he": "על המיטה (חלק 2)",
+  "intro_he": "שיעור האות A: כל המילים שמתחילות בצליל אַ, והאותיות A גדולה ו-a קטנה.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "a_sound",
+      "type": "speak",
+      "prompt_en": "A says אַ",
+      "prompt_he": "האות A אומרת אַ - צליל שאין בעברית. תגידו אַ-אַ-אַ",
+      "say": "The letter A says אַ, like in apple. Say it: אַ, אַ, אַ.",
+      "accept": ["a", "א"],
+      "praise_he": "אַ! זה הצליל של A - הפה נפתח רחב.",
+      "hint_he": "תגידו אַ קצרה - כמו בתוך apple."
+    },
+    {
+      "id": "starts_with_a",
+      "type": "listen",
+      "prompt_en": "ant",
+      "prompt_he": "הקשיבו - איזו מילה מתחילה בצליל A?",
+      "say": "Listen: ant. Which word starts with the A sound?",
+      "options": [
+        {"id": "ant", "label": "ant", "emoji": "🐜"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"}
+      ],
+      "correct": "ant",
+      "praise_he": "ant מתחיל ב-A.",
+      "hint_he": "מחפשים את הצליל אַ בהתחלה."
+    },
+    {
+      "id": "a_family",
+      "type": "choice",
+      "prompt_en": "apple, ant, alligator, ambulance",
+      "prompt_he": "משפחת ה-A! איזו מילה לא שייכת למשפחה?",
+      "say": "Apple, ant, alligator, ambulance - the A family. Which word does NOT start with A?",
+      "options": [
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "apple", "label": "apple", "emoji": "🍎"},
+        {"id": "alligator", "label": "alligator", "emoji": "🐊"}
+      ],
+      "correct": "ball",
+      "praise_he": "נכון - ball מתחיל ב-B, לא ב-A.",
+      "hint_he": "שלוש מילים עם אַ ואחת בלי."
+    },
+    {
+      "id": "big_a_small_a",
+      "type": "choice",
+      "prompt_en": "A a",
+      "prompt_he": "באנגלית יש אות גדולה ואות קטנה. בחרו את A הגדולה",
+      "say": "English has a big letter and a small letter. Point to the big A.",
+      "options": [
+        {"id": "big", "label": "A"},
+        {"id": "small", "label": "a"},
+        {"id": "b", "label": "B"}
+      ],
+      "correct": "big",
+      "praise_he": "A גדולה ו-a קטנה - אותה אות, שני גדלים. בעברית אין את זה!",
+      "hint_he": "A הגדולה היא הגבוהה."
+    },
+    {
+      "id": "apple_say",
+      "type": "speak",
+      "prompt_en": "apple, ant",
+      "prompt_he": "תגידו שתי מילות A: apple ו-ant",
+      "say": "Say two A words: apple, ant.",
+      "accept": ["apple ant", "apple", "ant"],
+      "praise_he": "אַפל, אַנט - הצליל של A בהתחלת שתיהן.",
+      "hint_he": "apple ו-ant - שתיהן מתחילות באַ."
+    }
+  ]
+}

@@ -24,7 +24,9 @@ env/
 .DS_Store
 Thumbs.db
 
-# Generated certs and logs
+# Generated certs, logs and deployment metadata
 cert.pem
 key.pem
 logs/
+build_info.json
+nul

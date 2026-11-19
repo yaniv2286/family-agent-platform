@@ -33,6 +33,16 @@ async def setup_database():
     shutil.rmtree(_test_db_dir, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _no_elevenlabs_in_tests(monkeypatch):
+    """Tests must never hit the real ElevenLabs API. The real .env provides
+    ELEVENLABS_API_KEY locally, so disable the provider path here and let
+    tests exercise the mocked OpenAI fallback instead."""
+    import tutors as t
+
+    monkeypatch.setattr(t, "_get_elevenlabs_key", lambda: None)
+
+
 @pytest.fixture
 def app(monkeypatch):
     import main

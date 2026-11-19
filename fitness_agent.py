@@ -10,9 +10,9 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import (Exercise, HealthLog, PlannedWorkoutExercise, ProgressionHistory,
+from database import (BodyMetric, Exercise, HealthLog, PlannedWorkoutExercise, ProgressionHistory,
                       TinyHabit, TinyHabitCompletion, User, UserFitnessProfile,
-                      WorkoutPerformance, WorkoutPlan, WorkoutSet, get_db)
+                      WorkoutPerformance, WorkoutPlan, WorkoutReadiness, WorkoutSet, get_db)
 from event_bus import event_bus
 from memory_manager import memory_manager
 from memory_layer import MemoryCategory, user_memory
@@ -99,8 +99,8 @@ async def _recent_comfortable_exercises(db: AsyncSession, user_id: int, lookback
             WorkoutPerformance.user_id == user_id,
             WorkoutPerformance.completed_at >= cutoff,
             WorkoutPerformance.pain == 0,
-            WorkoutPerformance.perceived_exertion <= 5,
-            WorkoutPerformance.fatigue <= 3,
+            WorkoutPerformance.perceived_exertion <= 7,
+            WorkoutPerformance.fatigue <= 5,
         )
         .group_by(WorkoutSet.exercise_id)
         .order_by(func.count().desc())
@@ -128,6 +128,28 @@ BASELINE_SETS = 2
 BASELINE_REPS = 8
 MAX_REPS = 15
 MAX_SETS = 4
+ADULT_PRESCRIPTIONS = {
+    "beginner": {"sets": 3, "reps": 10, "target_rir": 3.0, "rest_seconds": 90},
+    "intermediate": {"sets": 4, "reps": 10, "target_rir": 2.5, "rest_seconds": 120},
+    "advanced": {"sets": 4, "reps": 12, "target_rir": 2.0, "rest_seconds": 120},
+}
+MUSCLE_VOLUME_TARGETS = {
+    "beginner": {"weekly_sets_per_muscle": 8},
+    "intermediate": {"weekly_sets_per_muscle": 10},
+    "advanced": {"weekly_sets_per_muscle": 12},
+}
+MUSCLE_GROUP_ORDER = ("chest", "back", "legs", "shoulders", "arms", "glutes", "core", "balance", "cardio", "full_body")
+
+
+def _adult_prescription(experience_level: str) -> dict:
+    return ADULT_PRESCRIPTIONS.get(experience_level, ADULT_PRESCRIPTIONS["beginner"])
+
+
+def _muscle_group_sort(exercise: Exercise) -> int:
+    try:
+        return MUSCLE_GROUP_ORDER.index(exercise.muscle_group)
+    except ValueError:
+        return len(MUSCLE_GROUP_ORDER)
 
 
 async def _progression_targets(db: AsyncSession, user_id: int, exercise_ids: List[int]) -> dict[int, dict]:
@@ -144,6 +166,7 @@ async def _progression_targets(db: AsyncSession, user_id: int, exercise_ids: Lis
     rows = (await db.execute(
         select(WorkoutSet.exercise_id, WorkoutPerformance.progression_allowed,
                func.max(WorkoutSet.set_number).label("sets"), func.max(WorkoutSet.reps).label("reps"),
+               func.max(WorkoutSet.resistance).label("resistance"), func.min(WorkoutSet.rir).label("rir"),
                WorkoutPerformance.completed_at)
         .join(WorkoutPerformance, WorkoutPerformance.id == WorkoutSet.performance_id)
         .where(WorkoutPerformance.user_id == user_id, WorkoutSet.exercise_id.in_(exercise_ids))
@@ -151,19 +174,36 @@ async def _progression_targets(db: AsyncSession, user_id: int, exercise_ids: Lis
         .order_by(WorkoutPerformance.completed_at.desc())
     )).all()
     targets: dict[int, dict] = {}
-    for exercise_id, allowed, last_sets, last_reps, _ in rows:
+    for exercise_id, allowed, last_sets, last_reps, last_resistance, last_rir, _ in rows:
         if exercise_id is None or exercise_id in targets:
             continue  # rows are newest-first, so the first hit is the latest session
         sets = int(last_sets or BASELINE_SETS) or BASELINE_SETS
         reps = int(last_reps or BASELINE_REPS) or BASELINE_REPS
+        resistance = float(last_resistance) if last_resistance is not None else None
+        adjustment = "hold"
         if allowed:
-            if reps < MAX_REPS: reps += 1
-            elif sets < MAX_SETS: sets, reps = sets + 1, BASELINE_REPS
+            if resistance is not None and last_rir is not None and float(last_rir) <= 1:
+                resistance = round(resistance * 0.95, 2)
+                adjustment = "reduce_load"
+            elif resistance is not None and last_rir is not None and float(last_rir) >= 2 and reps >= 10:
+                resistance = round(resistance * 1.025, 2)
+                adjustment = "increase_load"
+            elif reps < MAX_REPS:
+                reps += 1
+                adjustment = "increase_reps"
+            elif sets < MAX_SETS:
+                sets, reps = sets + 1, BASELINE_REPS
+                adjustment = "increase_sets"
         else:
             # Step back toward the baseline after a painful or maximal session.
             reps = max(5, min(reps, BASELINE_REPS))
             sets = max(1, min(sets, BASELINE_SETS))
-        targets[int(exercise_id)] = {"sets": sets, "reps": reps, "progressed": bool(allowed)}
+            if resistance is not None:
+                resistance = round(resistance * 0.95, 2)
+            adjustment = "deload"
+        targets[int(exercise_id)] = {"sets": sets, "reps": reps, "resistance": resistance,
+                                      "progressed": adjustment.startswith("increase"),
+                                      "adjustment": adjustment}
     return targets
 
 
@@ -266,6 +306,11 @@ class ProfileUpdate(BaseModel):
     supplements: list[str] = Field(default_factory=list, max_length=40)
     preferred_duration_minutes: int = Field(30, ge=5, le=120)
     training_days: list[str] = Field(default_factory=list, max_length=7)
+    training_mode: str = Field("family_fitness", pattern="^(family_fitness|adult_hypertrophy)$")
+    age: Optional[int] = Field(None, ge=13, le=100)
+    height_cm: Optional[float] = Field(None, ge=100, le=250)
+    weight_kg: Optional[float] = Field(None, ge=30, le=350)
+    experience_level: str = Field("beginner", pattern="^(beginner|intermediate|advanced)$")
     @field_validator("equipment", "health_constraints", "goals", "supplements")
     @classmethod
     def clean_lists(cls, value):
@@ -285,6 +330,7 @@ class SetInput(BaseModel):
     reps: Optional[int] = Field(None, ge=0, le=500)
     duration_seconds: Optional[int] = Field(None, ge=0, le=7200)
     resistance: Optional[float] = Field(None, ge=0, le=1000)
+    rir: Optional[float] = Field(None, ge=0, le=10)
 class ExercisePerformanceInput(BaseModel):
     exercise_id: int
     sets: list[SetInput] = Field(default_factory=list)
@@ -313,6 +359,35 @@ class WorkoutLogRequest(BaseModel):
     def small_entries(cls, value):
         if any(len(json.dumps(x, ensure_ascii=False)) > 500 for x in value): raise ValueError("exercise entry too large")
         return value
+class ReadinessInput(BaseModel):
+    energy: int = Field(ge=1, le=10)
+    sleep_quality: int = Field(ge=1, le=10)
+    soreness: int = Field(ge=0, le=10)
+    pain: int = Field(ge=0, le=10)
+    notes: str = Field("", max_length=500)
+
+
+class SubstitutionInput(BaseModel):
+    user_id: int
+    reason: str = Field("", max_length=300)
+
+
+class BodyMetricInput(BaseModel):
+    weight_kg: Optional[float] = Field(None, ge=30, le=350)
+    waist_cm: Optional[float] = Field(None, ge=40, le=250)
+    chest_cm: Optional[float] = Field(None, ge=40, le=250)
+    arm_cm: Optional[float] = Field(None, ge=10, le=100)
+    notes: str = Field("", max_length=500)
+    measured_at: Optional[date] = None
+
+    @field_validator("measured_at")
+    @classmethod
+    def measured_not_future(cls, value):
+        if value and value > date.today():
+            raise ValueError("measured_at cannot be in the future")
+        return value
+
+
 class HabitInput(BaseModel):
     user_id: int
     name: str = Field(min_length=1, max_length=100)
@@ -331,13 +406,6 @@ class HabitComplete(BaseModel):
         # lock the habit out of further completions.
         if value > date.today(): raise ValueError("completed_date cannot be in the future")
         return value
-    @field_validator("completed_date")
-    @classmethod
-    def not_in_future(cls, value):
-        # A future date combined with the no-backdating rule would permanently
-        # lock the habit out of further completions.
-        if value > date.today(): raise ValueError("completed_date cannot be in the future")
-        return value
 
 
 async def _user(db, user_id):
@@ -349,7 +417,9 @@ def _profile_dict(p):
     return {"user_id": p.user_id, "equipment": _loads(p.equipment), "health_constraints": _loads(p.health_constraints),
             "goals": _loads(p.goal_type, [p.goal_type]), "supplements": _loads(p.supplement_stack),
             "supplement_notice": "Recorded preferences only; supplements are not prescribed by this service.",
-            "preferred_duration_minutes": p.preferred_duration_minutes, "training_days": _loads(p.training_days)}
+            "preferred_duration_minutes": p.preferred_duration_minutes, "training_days": _loads(p.training_days),
+            "training_mode": p.training_mode, "age": p.age, "height_cm": p.height_cm,
+            "weight_kg": p.weight_kg, "experience_level": p.experience_level}
 
 @router.get("/profile/{user_id}")
 async def get_profile(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
@@ -365,6 +435,11 @@ async def get_profile(user_id: int, db: AsyncSession = Depends(get_db), role: st
             "supplement_notice": "Recorded preferences only; supplements are not prescribed by this service.",
             "preferred_duration_minutes": 30,
             "training_days": [],
+            "training_mode": "family_fitness",
+            "age": None,
+            "height_cm": None,
+            "weight_kg": None,
+            "experience_level": "beginner",
             "profile_exists": False,
         }
     return {**_profile_dict(p), "profile_exists": True}
@@ -383,7 +458,9 @@ async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = D
             raise HTTPException(403, "Only a parent can change health constraints")
     values = dict(equipment=json.dumps(data.equipment), health_constraints=json.dumps(data.health_constraints),
                   goal_type=json.dumps(data.goals), supplement_stack=json.dumps(data.supplements),
-                  preferred_duration_minutes=data.preferred_duration_minutes, training_days=json.dumps(data.training_days))
+                  preferred_duration_minutes=data.preferred_duration_minutes, training_days=json.dumps(data.training_days),
+                  training_mode=data.training_mode, age=data.age, height_cm=data.height_cm,
+                  weight_kg=data.weight_kg, experience_level=data.experience_level)
     if p:
         for key, value in values.items(): setattr(p, key, value)
     else: p = UserFitnessProfile(user_id=user_id, **values); db.add(p)
@@ -405,15 +482,67 @@ async def update_profile(user_id: int, data: ProfileUpdate, db: AsyncSession = D
     await db.commit(); await db.refresh(p)
     return _profile_dict(p)
 
+def _readiness_dict(row):
+    reduce = row.energy <= 4 or row.sleep_quality <= 4 or row.soreness >= 7 or row.pain > 0
+    return {"id": row.id, "user_id": row.user_id, "energy": row.energy, "sleep_quality": row.sleep_quality,
+            "soreness": row.soreness, "pain": row.pain, "notes": row.notes or "", "created_at": row.created_at,
+            "load_adjustment": "reduce" if reduce else "normal"}
+
+
+@router.post("/readiness/{user_id}")
+async def record_readiness(user_id: int, data: ReadinessInput, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
+    await _user(db, user_id)
+    row = WorkoutReadiness(user_id=user_id, **data.model_dump())
+    db.add(row); await db.commit(); await db.refresh(row)
+    return _readiness_dict(row)
+
+
+@router.get("/readiness/{user_id}")
+async def latest_readiness(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
+    await _user(db, user_id)
+    row = (await db.execute(select(WorkoutReadiness).where(WorkoutReadiness.user_id == user_id)
+                            .order_by(WorkoutReadiness.created_at.desc()).limit(1))).scalar_one_or_none()
+    return _readiness_dict(row) if row else {"user_id": user_id, "load_adjustment": "unknown"}
+
+
+def _body_metric_dict(row):
+    return {"id": row.id, "user_id": row.user_id, "weight_kg": row.weight_kg,
+            "waist_cm": row.waist_cm, "chest_cm": row.chest_cm, "arm_cm": row.arm_cm,
+            "notes": row.notes or "", "measured_at": row.measured_at, "created_at": row.created_at}
+
+
+@router.post("/body-metrics/{user_id}")
+async def record_body_metric(user_id: int, data: BodyMetricInput, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
+    await _user(db, user_id)
+    row = BodyMetric(user_id=user_id, measured_at=data.measured_at or date.today(),
+                     weight_kg=data.weight_kg, waist_cm=data.waist_cm,
+                     chest_cm=data.chest_cm, arm_cm=data.arm_cm, notes=data.notes)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _body_metric_dict(row)
+
+
+@router.get("/body-metrics/{user_id}")
+async def list_body_metrics(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
+    await _user(db, user_id)
+    rows = (await db.execute(select(BodyMetric).where(BodyMetric.user_id == user_id)
+                             .order_by(BodyMetric.measured_at.desc()).limit(90))).scalars().all()
+    return [_body_metric_dict(row) for row in rows]
+
+
 @router.get("/exercises")
 async def exercises(category: Optional[str] = None, equipment: Optional[str] = None, low_impact: Optional[bool] = None,
-                    limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
+                    muscle_group: Optional[str] = None, limit: int = 200, offset: int = 0,
+                    db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
     q = select(Exercise)
     if category: q = q.where(Exercise.category == category)
+    if muscle_group: q = q.where(Exercise.muscle_group == muscle_group)
     if equipment: q = q.where(Exercise.equipment == equipment)
     if low_impact is not None: q = q.where(Exercise.low_impact == int(low_impact))
     rows = (await db.execute(q.order_by(Exercise.name).limit(max(1, min(500, limit))).offset(max(0, offset)))).scalars().all()
-    return [{"id": x.id, "slug": x.slug, "name": x.name, "category": x.category, "equipment": x.equipment,
+    return [{"id": x.id, "slug": x.slug, "name": x.name, "category": x.category,
+             "muscle_group": x.muscle_group, "equipment": x.equipment,
              "goals": _loads(x.goals_json), "instructions": x.instructions, "video_url": _normalize_video_url(x.video_url),
              "low_impact": bool(x.low_impact), "high_impact": bool(x.high_impact)} for x in rows]
 
@@ -458,7 +587,21 @@ async def generate_plan(user_id: int, regenerate: bool = False, db: AsyncSession
         db.add(p)
         await db.flush()
     equipment, constraints, goals = set(_loads(p.equipment)) | {"none"}, _loads(p.health_constraints), _loads(p.goal_type)
-    sensitive = any("tilt" in x or "orthostatic" in x for x in constraints)
+    adult_mode = p.training_mode == "adult_hypertrophy"
+    if adult_mode:
+        goals = set(goals) | {"hypertrophy", "strength"}
+    readiness = (await db.execute(select(WorkoutReadiness).where(
+        WorkoutReadiness.user_id == user_id,
+        WorkoutReadiness.created_at >= datetime.utcnow() - timedelta(hours=24),
+    ).order_by(WorkoutReadiness.created_at.desc()).limit(1))).scalar_one_or_none()
+    reduce_load = bool(readiness and (readiness.energy <= 4 or readiness.sleep_quality <= 4 or readiness.soreness >= 7 or readiness.pain > 0))
+    recent_sessions = (await db.execute(select(WorkoutPerformance).where(
+        WorkoutPerformance.user_id == user_id
+    ).order_by(WorkoutPerformance.completed_at.desc()).limit(4))).scalars().all()
+    fatigue_flags = sum(1 for session in recent_sessions
+                        if session.pain > 0 or session.perceived_exertion >= 8 or session.fatigue >= 8)
+    recovery_mode = reduce_load or (adult_mode and fatigue_flags >= 2)
+    sensitive = any("tilt" in x or "orthostatic" in x for x in constraints) or bool(readiness and readiness.pain > 0)
     # Incorporate parent directives for safety-aware plan generation
     directives = await _fetch_directives(db, user_id)
     directive_texts = [d.message.lower() for d in directives]
@@ -482,12 +625,37 @@ async def generate_plan(user_id: int, regenerate: bool = False, db: AsyncSession
         goal_overlap = len(set(_loads(x.goals_json)) & set(goals))
         comfort_bonus = 1 if x.id in comfortable_ids else 0
         recent_penalty = 1 if x.id in recently_used_ids else 0
-        return (-goal_overlap, -comfort_bonus, recent_penalty, random.random())
+        return (-goal_overlap, -comfort_bonus, recent_penalty, _muscle_group_sort(x), random.random())
 
     candidates.sort(key=sort_key)
-    chosen = candidates[:max(1, min(5, p.preferred_duration_minutes // 6))]
+    if adult_mode:
+        exercise_count = max(3, min(6, p.preferred_duration_minutes // 10))
+        chosen, used_groups = [], set()
+        for exercise in candidates:
+            if exercise.muscle_group not in used_groups:
+                chosen.append(exercise)
+                used_groups.add(exercise.muscle_group)
+            if len(chosen) == exercise_count:
+                break
+        chosen.extend(exercise for exercise in candidates
+                      if exercise not in chosen and len(chosen) < exercise_count)
+    else:
+        chosen = candidates[:max(1, min(5, p.preferred_duration_minutes // 6))]
     if not chosen: raise HTTPException(422, "No safe exercises match this profile")
     notes = (["Low-impact exercises only.", "Use slow, controlled transitions and avoid sudden floor-to-standing changes.", "Stop if dizzy, faint, or in pain and seek qualified clinical advice when appropriate."] if sensitive else ["Use controlled form and stop if pain or concerning symptoms occur."])
+    adaptations = [{"type": "training_mode", "value": p.training_mode}] if adult_mode else []
+    if adult_mode:
+        adaptations.append({"type": "experience", "value": p.experience_level,
+                            "effect": "sets, rep target, rest, and RIR calibrated to experience"})
+    if reduce_load:
+        notes.append("Readiness check indicates reduced volume today; keep effort controlled and leave several reps in reserve.")
+        adaptations.append({"type": "readiness", "value": "reduce_volume",
+                            "reason": "low energy, poor sleep, soreness, or pain reported in the last 24 hours"})
+    if recovery_mode and not reduce_load:
+        adaptations.append({"type": "fatigue_trend", "value": "deload",
+                            "reason": "multiple recent sessions reported high exertion, fatigue, or pain"})
+    if sensitive:
+        adaptations.append({"type": "safety", "value": "low_impact_only"})
     # Append directive notes to safety notes
     for d in directives:
         notes.append(f"Parent directive: {d.message}")
@@ -496,14 +664,33 @@ async def generate_plan(user_id: int, regenerate: bool = False, db: AsyncSession
     notes.extend(memory_notes)
     # Apply the progression earned in previous sessions, one variable at a time.
     targets = await _progression_targets(db, user_id, [x.id for x in chosen])
-    if any(t["progressed"] for t in targets.values()):
+    progressed_targets = [t for t in targets.values() if t["progressed"]]
+    if progressed_targets:
         notes.append("One small increase applied where your last session felt comfortable.")
+        adaptations.append({"type": "progression", "value": "one_variable_increase",
+                            "exercise_count": len(progressed_targets)})
     plan = WorkoutPlan(user_id=user_id, planned_date=_next_training_date(_loads(p.training_days)),
-                       duration_minutes=p.preferred_duration_minutes, safety_notes_json=json.dumps(notes)); db.add(plan); await db.flush()
+                       duration_minutes=p.preferred_duration_minutes, safety_notes_json=json.dumps(notes),
+                       adaptations_json=json.dumps(adaptations, ensure_ascii=False)); db.add(plan); await db.flush()
+    prescription = _adult_prescription(p.experience_level)
     for i, exercise in enumerate(chosen):
-        target = targets.get(exercise.id, {"sets": BASELINE_SETS, "reps": BASELINE_REPS})
-        db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=target["sets"],
-                                      reps=target["reps"], rest_seconds=60, minimum_version="1 controlled set of 5 reps"))
+        target = targets.get(exercise.id, {"sets": prescription["sets"] if adult_mode else BASELINE_SETS,
+                                         "reps": prescription["reps"] if adult_mode else BASELINE_REPS})
+        target_rir = prescription["target_rir"] if adult_mode else None
+        if recovery_mode:
+            target_sets = min(target["sets"], 2)
+            if target_rir is not None:
+                target_rir = max(target_rir, 3.0)
+        else:
+            target_sets = target["sets"]
+        target_resistance = target.get("resistance")
+        if recovery_mode and target_resistance is not None:
+            target_resistance = round(target_resistance * 0.95, 2)
+        db.add(PlannedWorkoutExercise(plan_id=plan.id, exercise_id=exercise.id, position=i, sets=target_sets,
+                                      reps=target["reps"], target_resistance=target_resistance,
+                                      target_rir=target_rir,
+                                      rest_seconds=prescription["rest_seconds"] if adult_mode else 60,
+                                      minimum_version="1 controlled set of 5 reps"))
     await db.commit()
     await db.refresh(plan)
     response = await _plan_response(db, plan)
@@ -513,12 +700,66 @@ async def generate_plan(user_id: int, regenerate: bool = False, db: AsyncSession
 async def _plan_response(db, plan):
     rows = (await db.execute(select(PlannedWorkoutExercise, Exercise).join(Exercise).where(PlannedWorkoutExercise.plan_id == plan.id).order_by(PlannedWorkoutExercise.position))).all()
     return {"id": plan.id, "user_id": plan.user_id, "date": plan.planned_date, "status": plan.status, "duration_minutes": plan.duration_minutes,
-            "safety_notes": _loads(plan.safety_notes_json), "exercises": [{"exercise_id": e.id, "name": e.name, "video_url": _normalize_video_url(e.video_url), "sets": pe.sets, "reps": pe.reps, "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds, "minimum_version": pe.minimum_version} for pe,e in rows]}
+            "safety_notes": _loads(plan.safety_notes_json), "adaptations": _loads(plan.adaptations_json),
+            "exercises": [{"exercise_id": e.id, "name": e.name, "muscle_group": e.muscle_group,
+                           "video_url": _normalize_video_url(e.video_url), "sets": pe.sets, "reps": pe.reps,
+                           "target_resistance": pe.target_resistance, "target_rir": pe.target_rir,
+                           "duration_seconds": pe.duration_seconds, "rest_seconds": pe.rest_seconds,
+                           "minimum_version": pe.minimum_version} for pe,e in rows]}
 
 @router.get("/plans/{user_id}")
 async def list_plans(user_id: int, db: AsyncSession = Depends(get_db), role: str = Depends(read_access)):
     await _user(db,user_id); rows=(await db.execute(select(WorkoutPlan).where(WorkoutPlan.user_id==user_id).order_by(WorkoutPlan.created_at.desc()).limit(20))).scalars().all()
     return [await _plan_response(db,p) for p in rows]
+
+@router.post("/plans/{plan_id}/substitute/{exercise_id}")
+async def substitute_exercise(plan_id: int, exercise_id: int, data: SubstitutionInput,
+                              db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
+    await _user(db, data.user_id)
+    plan = await db.get(WorkoutPlan, plan_id)
+    if not plan or plan.user_id != data.user_id:
+        raise HTTPException(404, "Plan not found")
+    if plan.status == "completed":
+        raise HTTPException(409, "Cannot substitute exercises in a completed plan")
+    planned = (await db.execute(select(PlannedWorkoutExercise, Exercise)
+                                .join(Exercise, Exercise.id == PlannedWorkoutExercise.exercise_id)
+                                .where(PlannedWorkoutExercise.plan_id == plan_id,
+                                       PlannedWorkoutExercise.exercise_id == exercise_id))).first()
+    if not planned:
+        raise HTTPException(404, "Exercise is not in this plan")
+    planned_row, current = planned
+    profile = await db.get(UserFitnessProfile, data.user_id)
+    equipment = set(_loads(profile.equipment)) | {"none"} if profile else set(DEFAULT_EQUIPMENT)
+    constraints = _loads(profile.health_constraints) if profile else DEFAULT_HEALTH_CONSTRAINTS
+    sensitive = any("tilt" in x or "orthostatic" in x or "low_impact" in x for x in constraints)
+    plan_ids = set((await db.execute(select(PlannedWorkoutExercise.exercise_id)
+                                     .where(PlannedWorkoutExercise.plan_id == plan_id))).scalars())
+    avoid_ids = await _exercises_to_avoid(db, data.user_id)
+    q = select(Exercise).where(
+        Exercise.muscle_group == current.muscle_group,
+        Exercise.equipment.in_(equipment),
+        ~Exercise.id.in_(plan_ids | avoid_ids),
+    )
+    if sensitive:
+        q = q.where(Exercise.low_impact == 1, Exercise.high_impact == 0, Exercise.transition != "floor")
+    replacement = (await db.execute(q.order_by(Exercise.slug).limit(1))).scalar_one_or_none()
+    if not replacement:
+        raise HTTPException(422, "No safe substitute is available for this exercise")
+    current_id, current_group = current.id, current.muscle_group
+    replacement_id, replacement_group = replacement.id, replacement.muscle_group
+    planned_row.exercise_id = replacement_id
+    await db.commit()
+    await db.refresh(planned_row)
+    await db.refresh(plan)
+    response = await _plan_response(db, plan)
+    response["substitution"] = {
+        "from_exercise_id": current_id,
+        "to_exercise_id": replacement_id,
+        "reason": data.reason,
+        "muscle_group": replacement_group,
+    }
+    return response
+
 
 @router.post("/plans/{plan_id}/complete")
 async def complete_plan(plan_id: int, data: CompletionInput, db: AsyncSession = Depends(get_db), role: str = Depends(write_access)):
@@ -645,10 +886,51 @@ async def analytics(user_id:int, window_days:int=30, db:AsyncSession=Depends(get
     # would punish the child for the Coach having offered them a session.
     resolved=[p for p in plans if p.status=="completed" or p.planned_date<date.today()]
     completed=sum(p.status=="completed" for p in resolved)
+    week_cutoff = datetime.utcnow() - timedelta(days=7)
+    strength_rows = (await db.execute(
+        select(WorkoutSet, Exercise.muscle_group)
+        .join(WorkoutPerformance, WorkoutPerformance.id == WorkoutSet.performance_id)
+        .outerjoin(Exercise, Exercise.id == WorkoutSet.exercise_id)
+        .where(WorkoutPerformance.user_id == user_id, WorkoutPerformance.completed_at >= week_cutoff)
+    )).all()
+    strength_sets = [row[0] for row in strength_rows]
+    resistance_sets = [s for s in strength_sets if s.resistance is not None and s.reps is not None]
+    rir_values = [float(s.rir) for s in strength_sets if s.rir is not None]
+    volume_load = sum(float(s.resistance) * int(s.reps) for s in resistance_sets)
+    sets_by_muscle = {}
+    for workout_set, muscle_group in strength_rows:
+        group = muscle_group or "full_body"
+        sets_by_muscle.setdefault(group, {"sets": 0, "volume_load": 0.0})
+        sets_by_muscle[group]["sets"] += 1
+        if workout_set.resistance is not None and workout_set.reps is not None:
+            sets_by_muscle[group]["volume_load"] += float(workout_set.resistance) * int(workout_set.reps)
+    profile = await db.get(UserFitnessProfile, user_id)
+    experience = profile.experience_level if profile else "beginner"
+    weekly_target = MUSCLE_VOLUME_TARGETS.get(experience, MUSCLE_VOLUME_TARGETS["beginner"])["weekly_sets_per_muscle"]
+    readiness_rows = (await db.execute(select(WorkoutReadiness).where(
+        WorkoutReadiness.user_id == user_id,
+        WorkoutReadiness.created_at >= datetime.utcnow() - timedelta(days=14),
+    ).order_by(WorkoutReadiness.created_at.desc()))).scalars().all()
+    metrics = (await db.execute(select(BodyMetric).where(BodyMetric.user_id == user_id)
+                                .order_by(BodyMetric.measured_at.desc()).limit(10))).scalars().all()
+    latest_metric = _body_metric_dict(metrics[0]) if metrics else None
+    weight_change = None
+    if len(metrics) >= 2 and metrics[0].weight_kg is not None and metrics[-1].weight_kg is not None:
+        weight_change = round(metrics[0].weight_kg - metrics[-1].weight_kg, 2)
     return {"adherence":{"planned":len(resolved),"completed":completed,"missed":len(resolved)-completed,
                          "upcoming":len(plans)-len(resolved),"window_days":window_days,
                          "rate":round(completed/len(resolved),3) if resolved else 0},
             "recent_sessions":[{"id":r.id,"completed_at":r.completed_at,"duration_minutes":r.duration_minutes,"rpe":r.perceived_exertion,"fatigue":r.fatigue,"pain":r.pain,"progression_allowed":bool(r.progression_allowed)} for r in recent],
             "progression":[{"exercise_id":p.exercise_id,"recommendation":p.recommendation,"created_at":p.created_at} for p in progress],
             "streaks":[{"habit_id":h.id,"name":h.name,"current":h.current_streak,"best":h.best_streak} for h in hs],
+            "strength_training":{"weekly_working_sets":len(strength_sets),
+                                 "total_volume_load":round(volume_load,2),
+                                 "average_rir":round(sum(rir_values)/len(rir_values),2) if rir_values else None,
+                                 "sets_by_muscle_group":{k:{"sets":v["sets"],"volume_load":round(v["volume_load"],2)} for k,v in sets_by_muscle.items()},
+                                 "weekly_sets_per_muscle_target":weekly_target},
+            "recovery_trend":{"checkins":len(readiness_rows),
+                              "average_energy":round(sum(r.energy for r in readiness_rows)/len(readiness_rows),2) if readiness_rows else None,
+                              "average_sleep":round(sum(r.sleep_quality for r in readiness_rows)/len(readiness_rows),2) if readiness_rows else None,
+                              "average_soreness":round(sum(r.soreness for r in readiness_rows)/len(readiness_rows),2) if readiness_rows else None},
+            "body_metrics":{"latest":latest_metric,"weight_change_kg":weight_change},
             "goal_status":{"completed_workouts":completed,"status":"in_progress" if plans else "not_started"}}

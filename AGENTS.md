@@ -10,6 +10,20 @@ python -m pytest tests -v --ignore=tests/test_live_llm.py
 
 This command runs the fast, no-cost functional tests (PIN auth, chat, anti-cheat hard cap, idempotency, mocked Whisper, and fuzzing). The live LLM integration tests in `tests/test_live_llm.py` are excluded by default.
 
+## Mobile Layout Verification
+
+`scripts/check_mobile.py` exercises the real HTML with mocked API responses and touch-enabled phone viewports. It requires the optional local package `playwright==1.56.0` and installed Chrome. Run from the repository root:
+
+```powershell
+python scripts/check_mobile.py
+python -m playwright install webkit
+python scripts/check_mobile.py --browser webkit
+```
+
+The script does not need a running backend or make live LLM calls. It checks layout and basic touch interactions, not real microphone permissions, soft keyboards, audio quality, or complete tutoring conversations on a physical phone.
+
+`scripts/check_voice.py` uses mocked browser capture APIs and mocked server responses to check recognition-end submission, mobile recorder selection, manual submission, cancellation, delayed microphone permissions, and suspended audio analysers. Run `python scripts/check_voice.py` and `python scripts/check_voice.py --browser webkit` with the same optional Playwright installation. These are lifecycle regressions, not an acoustic or real-device microphone test.
+
 ## Async SQLAlchemy: never read ORM attributes after commit
 
 `SessionLocal` uses the default `expire_on_commit=True`. Reading any ORM

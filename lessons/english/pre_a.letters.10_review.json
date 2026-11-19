@@ -1,0 +1,91 @@
+{
+  "lesson_id": "pre_a.letters.10_review",
+  "course_id": "pre_a",
+  "title_he": "מסתכלים דרך החלון",
+  "intro_he": "שיעור סיום יחידה: ממיינים מילים לפי הצליל הראשון, קוראים bat ו-tab, וחוגגים את יחידה 1.",
+  "stars_total": 6,
+  "slides": [
+    {
+      "id": "sort_a",
+      "type": "choice",
+      "prompt_en": "A family",
+      "prompt_he": "מיון לפי צליל! איזו מילה מתחילה בצליל A כמו ant?",
+      "say": "Sort by first sound: which word starts with A, like ant?",
+      "options": [
+        {"id": "apple", "label": "apple", "emoji": "🍎"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"}
+      ],
+      "correct": "apple",
+      "praise_he": "apple למשפחת A - עם ant ו-alligator.",
+      "hint_he": "מחפשים אַ בהתחלה."
+    },
+    {
+      "id": "sort_b",
+      "type": "choice",
+      "prompt_en": "B family",
+      "prompt_he": "איזו מילה מתחילה בצליל B כמו ball?",
+      "say": "Which word starts with B, like ball?",
+      "options": [
+        {"id": "bat", "label": "bat", "emoji": "🦇"},
+        {"id": "ant", "label": "ant", "emoji": "🐜"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"}
+      ],
+      "correct": "bat",
+      "praise_he": "bat למשפחת B - עם ball, box ו-blanket.",
+      "hint_he": "מחפשים בּ בהתחלה."
+    },
+    {
+      "id": "sort_t",
+      "type": "listen",
+      "prompt_en": "teapot",
+      "prompt_he": "הקשיבו ובחרו את מילת ה-T",
+      "say": "Listen: teapot. Which word did I say - a T family word?",
+      "options": [
+        {"id": "teapot", "label": "teapot", "emoji": "🫖"},
+        {"id": "bat", "label": "bat", "emoji": "🦇"},
+        {"id": "apple", "label": "apple", "emoji": "🍎"}
+      ],
+      "correct": "teapot",
+      "praise_he": "teapot למשפחת T - עם tiger, table וטומי.",
+      "hint_he": "מחפשים ט בהתחלה."
+    },
+    {
+      "id": "read_again",
+      "type": "choice",
+      "prompt_en": "b-a-t",
+      "prompt_he": "עוד פעם קריאה: מה המילה b-a-t אומרת?",
+      "say": "Read it again: b-a-t. What does the word say?",
+      "options": [
+        {"id": "bat", "label": "bat", "emoji": "🦇"},
+        {"id": "tab", "label": "tab"},
+        {"id": "bit", "label": "bit"}
+      ],
+      "correct": "bat",
+      "praise_he": "bat - אתם קוראים!",
+      "hint_he": "בּ-אַ-ט."
+    },
+    {
+      "id": "story",
+      "type": "true_false",
+      "prompt_en": "The bat is black.",
+      "prompt_he": "סיפור מילה אחת! A black bat. האם העטלף שחור?",
+      "story_en": "This is a bat. The bat is black.",
+      "story_he": "זה עטלף. העטלף שחור.",
+      "say": "This is a bat. The bat is black. True or not true?",
+      "correct": true,
+      "praise_he": "נכון - black זה שחור. הבנתם משפט שלם באנגלית!",
+      "hint_he": "הסיפור אומר שהעטלף שחור."
+    },
+    {
+      "id": "celebration",
+      "type": "speak",
+      "prompt_en": "I can read!",
+      "prompt_he": "חגיגה! תגידו I can read - אני יודע לקרוא",
+      "say": "You finished unit one! Say it proudly: I can read!",
+      "accept": ["i can read", "can read"],
+      "praise_he": "I can read! סיימתם יחידה שלמה - כל הכבוד!",
+      "hint_he": "I can read - אני יודע לקרוא."
+    }
+  ]
+}

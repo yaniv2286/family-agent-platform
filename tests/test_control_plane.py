@@ -62,6 +62,12 @@ class FakeConnector:
             "endpoints": self.profile.analytics_endpoints,
         }
 
+    async def fetch_logs(self):
+        return {
+            "agent_id": self.agent_id,
+            "data": {"lines": [f"{self.profile.logs_endpoint} log line"]},
+        }
+
     async def send_command(self, command_type: str, payload: dict):
         if self.profile.command_path is None:
             raise HTTPException(403, detail=f"agent {self.agent_id} does not accept commands")

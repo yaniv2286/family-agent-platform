@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.09_letter_b",
+  "course_id": "pre_a",
+  "title_he": "מתחת למיטה (חלק 2)",
+  "intro_he": "שיעור האות B: כל מילות ה-B, וקריאה ראשונה אמיתית - המילים bat ו-tab רק מהאותיות שלמדנו.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "b_sound",
+      "type": "speak",
+      "prompt_en": "B says בּ",
+      "prompt_he": "האות B אומרת בּ עם קול מלא. תגידו בּ-בּ-בּ",
+      "say": "The letter B says בּ, a full voiced sound. Say it: b, b, b.",
+      "accept": ["b", "ב"],
+      "praise_he": "בּ! כמו ב בעברית, עם הרבה קול.",
+      "hint_he": "תגידו בּ קצר."
+    },
+    {
+      "id": "b_family",
+      "type": "choice",
+      "prompt_en": "balloon, ball, blanket",
+      "prompt_he": "משפחת ה-B! איזו מילה לא שייכת למשפחה?",
+      "say": "Balloon, ball, blanket - the B family. Which word does NOT start with B?",
+      "options": [
+        {"id": "apple", "label": "apple", "emoji": "🍎"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "box", "label": "box", "emoji": "📦"}
+      ],
+      "correct": "apple",
+      "praise_he": "נכון - apple מתחיל ב-A. שאר המילים ב-B.",
+      "hint_he": "שתי מילים עם בּ ואחת עם אַ."
+    },
+    {
+      "id": "read_bat",
+      "type": "choice",
+      "prompt_en": "b-a-t = bat",
+      "prompt_he": "קריאה ראשונה! B אומרת בּ, A אומרת אַ, T אומרת ט. מה המילה אומרת?",
+      "say": "Let's read! B says בּ, A says אַ, T says ט. Together: b-a-t. What word is it?",
+      "options": [
+        {"id": "bat", "label": "bat", "emoji": "🦇"},
+        {"id": "tab", "label": "tab"},
+        {"id": "at", "label": "at"}
+      ],
+      "correct": "bat",
+      "praise_he": "קראתם מילה באנגלית! בּ-אַ-ט = bat - עטלף!",
+      "hint_he": "חברו את הצלילים לאט: בּ אַ ט."
+    },
+    {
+      "id": "read_tab",
+      "type": "listen",
+      "prompt_en": "tab",
+      "prompt_he": "ועכשיו להפך: T-A-B. הקשיבו ומצאו את המילה tab",
+      "say": "Now backwards: t-a-b says tab. Listen and find the word tab.",
+      "options": [
+        {"id": "tab", "label": "tab"},
+        {"id": "bat", "label": "bat", "emoji": "🦇"},
+        {"id": "at", "label": "at"}
+      ],
+      "correct": "tab",
+      "praise_he": "tab! אותם צלילים בסדר הפוך - מילה אחרת לגמרי.",
+      "hint_he": "טַ-אַ-בּ. ה-T בהתחלה."
+    },
+    {
+      "id": "say_bat_tab",
+      "type": "speak",
+      "prompt_en": "bat, tab",
+      "prompt_he": "קראו בשקול: שתי המילים הראשונות שלכם באנגלית",
+      "say": "Read them out loud: bat, tab.",
+      "accept": ["bat tab", "bat", "tab"],
+      "praise_he": "אתם קוראים באנגלית! בדיוק ככה מתחילים.",
+      "hint_he": "bat ואז tab."
+    }
+  ]
+}

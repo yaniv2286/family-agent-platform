@@ -1,0 +1,57 @@
+{
+  "lesson_id": "a2.gtky.01_about_me",
+  "course_id": "a2",
+  "title_he": "ספרו עליי",
+  "intro_he": "משפטי הצגה מלאים, סיבה לרגש, ומשפט אחד על המשפחה בזמן הווה.",
+  "stars_total": 4,
+  "slides": [
+    {
+      "id": "about_me",
+      "type": "speak",
+      "prompt_en": "My name is ... and I am ...",
+      "prompt_he": "תגידו את שמכם ואיך אתם מרגישים, במשפט אחד",
+      "say": "Tell me about you: my name is, and I am happy, or tired, or excited.",
+      "accept": ["my name is", "i am", "i'm"],
+      "praise_he": "משפט מלא. יפה.",
+      "hint_he": "צריך גם My name is וגם I am."
+    },
+    {
+      "id": "because",
+      "type": "choice",
+      "prompt_en": "I am happy because ...",
+      "prompt_he": "איזה משפט נותן סיבה?",
+      "say": "Which sentence tells us why?",
+      "options": [
+        {"id": "because", "label": "I am happy because it is my birthday."},
+        {"id": "and", "label": "I am happy and tired."},
+        {"id": "name", "label": "My name is Lucy."}
+      ],
+      "correct": "because",
+      "praise_he": "because נותן את הסיבה. כל הכבוד.",
+      "hint_he": "מחפשים את המילה because."
+    },
+    {
+      "id": "order",
+      "type": "order",
+      "prompt_en": "Leo is my brother.",
+      "prompt_he": "סדרו את המילים למשפט",
+      "say": "Put the words in order: Leo is my brother.",
+      "words": ["brother", "Leo", "my", "is"],
+      "expected_order": ["Leo", "is", "my", "brother"],
+      "praise_he": "Leo is my brother. מדויק.",
+      "hint_he": "מתחילים בשם: Leo."
+    },
+    {
+      "id": "past",
+      "type": "true_false",
+      "prompt_en": "Yesterday Lucy was tired.",
+      "prompt_he": "אתמול לוסי הייתה עייפה. האם was מתאים לעבר?",
+      "story_en": "Yesterday Lucy was tired. Today she is happy.",
+      "story_he": "אתמול לוסי הייתה עייפה. היום היא שמחה.",
+      "say": "Yesterday Lucy was tired. Is was the right word for yesterday?",
+      "correct": true,
+      "praise_he": "נכון. was הוא העבר של is.",
+      "hint_he": "yesterday דורש עבר: was, לא is."
+    }
+  ]
+}

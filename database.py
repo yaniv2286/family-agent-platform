@@ -5,7 +5,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from loguru import logger
-from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Text, ForeignKey, select, func, text, Index
+from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Text, ForeignKey, select, text, Index
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -94,6 +94,11 @@ class UserFitnessProfile(Base):
     supplement_stack = Column(Text, nullable=False)
     preferred_duration_minutes = Column(Integer, nullable=False, default=30)
     training_days = Column(Text, nullable=False, default="[]")
+    training_mode = Column(String, nullable=False, default="family_fitness")
+    age = Column(Integer, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    experience_level = Column(String, nullable=False, default="beginner")
 
 
 class Exercise(Base):
@@ -102,6 +107,7 @@ class Exercise(Base):
     slug = Column(String, nullable=False, unique=True, index=True)
     name = Column(String, nullable=False)
     category = Column(String, nullable=False, index=True)
+    muscle_group = Column(String, nullable=False, default="full_body", index=True)
     equipment = Column(String, nullable=False, index=True)
     goals_json = Column(Text, nullable=False, default="[]")
     instructions = Column(Text, nullable=False)
@@ -118,6 +124,7 @@ class WorkoutPlan(Base):
     planned_date = Column(Date, nullable=False, default=date.today, index=True)
     status = Column(String, nullable=False, default="planned")
     safety_notes_json = Column(Text, nullable=False, default="[]")
+    adaptations_json = Column(Text, nullable=False, default="[]")
     duration_minutes = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
@@ -133,6 +140,8 @@ class PlannedWorkoutExercise(Base):
     reps = Column(Integer, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     rest_seconds = Column(Integer, nullable=False)
+    target_resistance = Column(Float, nullable=True)
+    target_rir = Column(Float, nullable=True)
     minimum_version = Column(String, nullable=False)
 
 
@@ -161,6 +170,32 @@ class WorkoutSet(Base):
     reps = Column(Integer, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     resistance = Column(Float, nullable=True)
+    rir = Column(Float, nullable=True)
+
+
+class WorkoutReadiness(Base):
+    __tablename__ = "workout_readiness"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    energy = Column(Integer, nullable=False)
+    sleep_quality = Column(Integer, nullable=False)
+    soreness = Column(Integer, nullable=False)
+    pain = Column(Integer, nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class BodyMetric(Base):
+    __tablename__ = "body_metrics"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    weight_kg = Column(Float, nullable=True)
+    waist_cm = Column(Float, nullable=True)
+    chest_cm = Column(Float, nullable=True)
+    arm_cm = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+    measured_at = Column(Date, nullable=False, default=date.today, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TinyHabit(Base):
@@ -562,9 +597,32 @@ async def _migrate_main_schema(conn):
         await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN preferred_duration_minutes INTEGER NOT NULL DEFAULT 30"))
     if profile and "training_days" not in profile:
         await conn.execute(text("ALTER TABLE user_fitness_profile ADD COLUMN training_days TEXT NOT NULL DEFAULT '[]'"))
+    profile_columns = {
+        "training_mode": "VARCHAR NOT NULL DEFAULT 'family_fitness'",
+        "age": "INTEGER",
+        "height_cm": "FLOAT",
+        "weight_kg": "FLOAT",
+        "experience_level": "VARCHAR NOT NULL DEFAULT 'beginner'",
+    }
+    for name, ddl in profile_columns.items():
+        if profile and name not in profile:
+            await conn.execute(text(f"ALTER TABLE user_fitness_profile ADD COLUMN {name} {ddl}"))
+    workout_sets = await _table_columns(conn, "workout_sets")
+    if workout_sets and "rir" not in workout_sets:
+        await conn.execute(text("ALTER TABLE workout_sets ADD COLUMN rir FLOAT"))
+    planned_sets = await _table_columns(conn, "planned_workout_exercises")
+    if planned_sets and "target_resistance" not in planned_sets:
+        await conn.execute(text("ALTER TABLE planned_workout_exercises ADD COLUMN target_resistance FLOAT"))
+    if planned_sets and "target_rir" not in planned_sets:
+        await conn.execute(text("ALTER TABLE planned_workout_exercises ADD COLUMN target_rir FLOAT"))
     exercises = await _table_columns(conn, "exercises")
     if exercises and "video_url" not in exercises:
         await conn.execute(text("ALTER TABLE exercises ADD COLUMN video_url VARCHAR NOT NULL DEFAULT ''"))
+    if exercises and "muscle_group" not in exercises:
+        await conn.execute(text("ALTER TABLE exercises ADD COLUMN muscle_group VARCHAR NOT NULL DEFAULT 'full_body'"))
+    plans = await _table_columns(conn, "workout_plans")
+    if plans and "adaptations_json" not in plans:
+        await conn.execute(text("ALTER TABLE workout_plans ADD COLUMN adaptations_json TEXT NOT NULL DEFAULT '[]'"))
     health = await _table_columns(conn, "health_logs")
     legacy_columns = {
         "date": "DATE",
@@ -604,8 +662,21 @@ async def _seed_exercises(conn):
         ("bird-dog", "Bird dog", "core", "pilates_mat", '["strength","mobility"]', "Extend opposite arm and leg from hands-and-knees position.", "https://youtu.be/xEDnlOxeJH4", 1, "floor", 0),
         ("trx-chest-press", "TRX chest press", "strength", "trx", '["strength","hypertrophy"]', "Lean forward holding TRX and press out with control.", "https://youtu.be/uutnRHSbFgM", 1, "standing", 0),
     ]
+    muscle_groups = {
+        "band-row": "back", "chair-squat": "legs", "wall-pushup": "chest",
+        "band-curl": "arms", "seated-march": "cardio", "dead-bug": "core",
+        "jumping-jacks": "cardio", "trx-row": "back", "balance-board-stand": "balance",
+        "balance-pad-squat": "legs", "fitball-plank": "core", "pullup-negative": "back",
+        "band-pull-apart": "shoulders", "pilates-bridge": "glutes", "trx-squat": "legs",
+        "standing-calf-raise": "legs", "band-lateral-walk": "glutes",
+        "fitball-wall-squat": "legs", "bird-dog": "core", "trx-chest-press": "chest",
+    }
     for row in rows:
-        await conn.execute(text("INSERT INTO exercises (slug,name,category,equipment,goals_json,instructions,video_url,low_impact,transition,high_impact) VALUES (:s,:n,:c,:e,:g,:i,:v,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, video_url=excluded.video_url, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), dict(zip(("s","n","c","e","g","i","v","l","t","h"), row)))
+        await conn.execute(text("INSERT INTO exercises (slug,name,category,muscle_group,equipment,goals_json,instructions,video_url,low_impact,transition,high_impact) VALUES (:s,:n,:c,:mg,:e,:g,:i,:v,:l,:t,:h) ON CONFLICT(slug) DO UPDATE SET name=excluded.name, category=excluded.category, muscle_group=excluded.muscle_group, equipment=excluded.equipment, goals_json=excluded.goals_json, instructions=excluded.instructions, video_url=excluded.video_url, low_impact=excluded.low_impact, transition=excluded.transition, high_impact=excluded.high_impact"), {**dict(zip(("s","n","c","e","g","i","v","l","t","h"), row)), "mg": muscle_groups.get(row[0], "full_body")})
+        await conn.execute(
+            text("UPDATE exercises SET muscle_group = :mg WHERE slug = :s"),
+            {"mg": muscle_groups.get(row[0], "full_body"), "s": row[0]},
+        )
 
 
 async def init_db():
@@ -679,6 +750,78 @@ class ParentFeedback(TutorHistoryBase):
     subject = Column(String, index=True, nullable=True)
     message = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TutorSkillMastery(TutorHistoryBase):
+    __tablename__ = "tutor_skill_mastery"
+
+    id = Column(Integer, primary_key=True, index=True)
+    child_name = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=False, index=True)
+    skill_id = Column(String, nullable=False, index=True)
+    mastery = Column(Float, nullable=False, default=0.0)
+    attempts = Column(Integer, nullable=False, default=0)
+    correct_attempts = Column(Integer, nullable=False, default=0)
+    independent_correct = Column(Integer, nullable=False, default=0)
+    current_difficulty = Column(Integer, nullable=False, default=1)
+    last_practiced_at = Column(DateTime, nullable=True)
+    next_review_at = Column(DateTime, nullable=True, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("uq_tutor_skill_mastery", "child_name", "subject", "skill_id", unique=True),
+    )
+
+
+class EnglishLessonProgress(TutorHistoryBase):
+    """One row per child per lesson: stars earned and whether it was finished.
+
+    The same lesson can be replayed; the best star count is what sticks.
+    """
+    __tablename__ = "english_lesson_progress"
+
+    id = Column(Integer, primary_key=True)
+    child_name = Column(String, nullable=False, index=True)
+    lesson_id = Column(String, nullable=False)
+    stars = Column(Integer, nullable=False, default=0)
+    completed = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("uq_english_lesson_progress", "child_name", "lesson_id", unique=True),
+    )
+
+
+class EnglishCoursePlacement(TutorHistoryBase):
+    """Which English course the parent put this child in.
+
+    The course is a parent decision, never inferred from age or grade, and any
+    child may be placed in any course.
+    """
+    __tablename__ = "english_course_placement"
+
+    child_name = Column(String, primary_key=True)
+    course_id = Column(String, nullable=False)
+    daily_lesson_limit = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TutorPracticeAttempt(TutorHistoryBase):
+    __tablename__ = "tutor_practice_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    child_name = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=False, index=True)
+    skill_id = Column(String, nullable=False, index=True)
+    correct = Column(Integer, nullable=False)
+    hints_used = Column(Integer, nullable=False, default=0)
+    difficulty = Column(Integer, nullable=False, default=1)
+    idempotency_key = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        Index("uq_tutor_practice_attempt", "child_name", "subject", "idempotency_key", unique=True),
+    )
 
 
 async def _table_columns(conn, table_name: str):
@@ -770,22 +913,26 @@ async def append_chat_messages(
     idempotency_key: Optional[str] = None,
 ):
     """Persist the new tail of the conversation plus the latest assistant reply.
-    Uses the current row count (scoped to this subject) to avoid duplicates
-    when the frontend resends the full conversation history. The assistant
-    reply is tagged with the idempotency key of the request so that repeated
-    requests with the same key can be safely replayed without calling the LLM.
+
+    The frontend only sends the *current session's* messages, while this table
+    holds the full history across all sessions — so a positional slice against
+    the total row count silently drops the child's messages forever. Instead we
+    persist the trailing messages that come after the last assistant turn in
+    the payload: those are exactly the new user messages for this turn. The
+    assistant reply is tagged with the idempotency key of the request so that
+    repeated requests with the same key can be safely replayed without calling
+    the LLM.
     """
     if not child_name:
         return
     start = time.perf_counter()
     async with TutorHistorySessionLocal() as db:
-        count_result = await db.execute(
-            select(func.count()).where(
-                ChatHistory.child_name == child_name, ChatHistory.subject == subject
-            )
-        )
-        current_count = count_result.scalar()
-        new_user_messages = conversation_history[current_count:]
+        tail = list(conversation_history or [])
+        last_assistant_idx = -1
+        for idx, msg in enumerate(tail):
+            if (msg.get("role") or "") == "assistant":
+                last_assistant_idx = idx
+        new_user_messages = tail[last_assistant_idx + 1:]
         for msg in new_user_messages:
             db.add(
                 ChatHistory(

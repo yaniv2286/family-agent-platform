@@ -22,10 +22,11 @@ services:
     expose:
       - "8000"
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///app/data/family_platform.db
-      - TUTOR_HISTORY_DATABASE_URL=sqlite+aiosqlite:///app/data/tutor_history.db
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/family_platform.db
+      - TUTOR_HISTORY_DATABASE_URL=sqlite+aiosqlite:////app/data/tutor_history.db
       - TZ=Asia/Jerusalem
       - APP_TIMEZONE=Asia/Jerusalem
+      - DEPLOYMENT_LABEL=CLOUD
       - AGENT_NEURALTRADER_URL=http://neuraltrader-control:8000
       - AGENT_VOLATILITYHUNTER_URL=http://volatilityhunter_monitoring:8080
     env_file:

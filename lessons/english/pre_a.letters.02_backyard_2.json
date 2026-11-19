@@ -1,0 +1,69 @@
+{
+  "lesson_id": "pre_a.letters.02_backyard_2",
+  "course_id": "pre_a",
+  "title_he": "בחצר (חלק 2)",
+  "intro_he": "פוגשים את אני, חברת האות A. נלמד ant ו-apple ונספור עד שמונה.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "meet_a",
+      "type": "speak",
+      "prompt_en": "Hello, Ani!",
+      "prompt_he": "תגידו שלום לאני, חברת האות A",
+      "say": "This is my friend Ani. Say: hello, Ani!",
+      "accept": ["hello", "hello ani"],
+      "praise_he": "אני שמחה לפגוש אתכם! היא אות A.",
+      "hint_he": "תגידו Hello."
+    },
+    {
+      "id": "ant",
+      "type": "speak",
+      "prompt_en": "ant",
+      "prompt_he": "ant זו נמלה. תגידו ant",
+      "say": "Look, a tiny ant on the grass. Say: ant.",
+      "accept": ["ant"],
+      "praise_he": "נכון! ant זו נמלה, והיא מתחילה בצליל A.",
+      "hint_he": "אַנט - כמו הברה אחת קצרה."
+    },
+    {
+      "id": "apple",
+      "type": "listen",
+      "prompt_en": "apple",
+      "prompt_he": "הקשיבו ובחרו את המילה",
+      "say": "Listen: apple. Which word did I say?",
+      "options": [
+        {"id": "apple", "label": "apple", "emoji": "🍎"},
+        {"id": "ant", "label": "ant", "emoji": "🐜"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"}
+      ],
+      "correct": "apple",
+      "praise_he": "apple זה תפוח - גם הוא מתחיל ב-A!",
+      "hint_he": "apple מתחיל ב-אַפל. הקשיבו שוב."
+    },
+    {
+      "id": "a_words",
+      "type": "choice",
+      "prompt_en": "A: ant, apple",
+      "prompt_he": "שתי המילים מתחילות ב-A. איזו עוד מילה מתחילה ב-A?",
+      "say": "Ant and apple start with A. Which word also starts with A?",
+      "options": [
+        {"id": "alligator", "label": "alligator", "emoji": "🐊"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"}
+      ],
+      "correct": "alligator",
+      "praise_he": "alligator מתחיל ב-A - תנין!",
+      "hint_he": "מחפשים מילה עם הצליל אַ בהתחלה."
+    },
+    {
+      "id": "count_eight",
+      "type": "speak",
+      "prompt_en": "five, six, seven, eight",
+      "prompt_he": "בשיעור שעבר ספרנו עד ארבע. עכשיו נמשיך עד שמונה",
+      "say": "One, two, three, four... keep going: five, six, seven, eight!",
+      "accept": ["five six seven eight", "six seven eight", "seven eight"],
+      "praise_he": "ספרתם עד שמונה! יופי.",
+      "hint_he": "אחרי four באים five, six, seven, eight."
+    }
+  ]
+}

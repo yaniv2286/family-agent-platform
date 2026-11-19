@@ -1,0 +1,72 @@
+{
+  "lesson_id": "a1.gtky.01_meet_you",
+  "course_id": "a1",
+  "title_he": "להכיר אותך",
+  "intro_he": "מציגים את עצמנו, אומרים מה שלומנו, ופוגשים את ליאו ואת לוסי.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "name",
+      "type": "speak",
+      "prompt_en": "My name is ... What's your name?",
+      "prompt_he": "תגידו את השם שלכם: My name is",
+      "say": "My name is Angel. What's your name?",
+      "accept": ["my name is"],
+      "praise_he": "נעים להכיר!",
+      "hint_he": "My name is, ואז השם."
+    },
+    {
+      "id": "how_are_you",
+      "type": "speak",
+      "prompt_en": "I'm fine, thank you.",
+      "prompt_he": "כששואלים How are you, עונים ככה",
+      "say": "How are you? Try: I'm fine, thank you.",
+      "accept": ["i'm fine", "im fine", "i am fine", "fine thank you"],
+      "praise_he": "מצוין. I'm fine, thank you.",
+      "hint_he": "נסו: I'm fine, thank you."
+    },
+    {
+      "id": "feelings",
+      "type": "choice",
+      "prompt_en": "happy",
+      "prompt_he": "מי מרגיש happy?",
+      "say": "Happy means שמח. Which face is happy?",
+      "options": [
+        {"id": "happy", "label": "happy", "emoji": "😄"},
+        {"id": "sad", "label": "sad", "emoji": "😢"},
+        {"id": "tired", "label": "tired", "emoji": "😴"},
+        {"id": "angry", "label": "angry", "emoji": "😠"}
+      ],
+      "correct": "happy",
+      "praise_he": "נכון, הפרצוף הצוחק הוא happy.",
+      "hint_he": "happy זה שמח, עם חיוך."
+    },
+    {
+      "id": "greeting_match",
+      "type": "choice",
+      "prompt_en": "How are you?",
+      "prompt_he": "איזו תשובה מתאימה ל-How are you?",
+      "say": "Someone asks: how are you? Pick the right answer.",
+      "options": [
+        {"id": "fine", "label": "I'm fine, thank you."},
+        {"id": "name", "label": "My name is Leo."},
+        {"id": "meet", "label": "Nice to meet you."}
+      ],
+      "correct": "fine",
+      "praise_he": "בדיוק. How are you נענה ב-I'm fine.",
+      "hint_he": "How are you שואל מה שלומך, לא מה שמך."
+    },
+    {
+      "id": "true_false",
+      "type": "true_false",
+      "prompt_en": "Leo is my sister.",
+      "prompt_he": "ליאו הוא אח, לא אחות. המשפט נכון או לא נכון?",
+      "story_en": "This is Leo. He is my brother. He is happy.",
+      "story_he": "זה ליאו. הוא אח שלי. הוא שמח.",
+      "say": "Leo is my brother. Is this sentence true: Leo is my sister?",
+      "correct": false,
+      "praise_he": "נכון לתקן: Leo is my brother, לא sister.",
+      "hint_he": "sister זאת אחות. ליאו הוא אח, אז המשפט לא נכון."
+    }
+  ]
+}

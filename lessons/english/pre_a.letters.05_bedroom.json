@@ -1,0 +1,79 @@
+{
+  "lesson_id": "pre_a.letters.05_bedroom",
+  "course_id": "pre_a",
+  "title_he": "בחדר השינה",
+  "intro_he": "מה יש בחדר השינה? mat, bed, window, door, desk ו-telephone - כולם עם טומי ובני.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "bed",
+      "type": "speak",
+      "prompt_en": "bed",
+      "prompt_he": "bed זו מיטה. תגידו bed",
+      "say": "This is the bedroom. Say: bed.",
+      "accept": ["bed"],
+      "praise_he": "bed זו מיטה - מתחילה ב-B כמו ב.",
+      "hint_he": "בֶּד - הברה אחת קצרה."
+    },
+    {
+      "id": "window",
+      "type": "listen",
+      "prompt_en": "window",
+      "prompt_he": "הקשיבו ובחרו את המילה",
+      "say": "Listen: window. Which word did I say?",
+      "options": [
+        {"id": "window", "label": "window", "emoji": "🪟"},
+        {"id": "door", "label": "door", "emoji": "🚪"},
+        {"id": "desk", "label": "desk", "emoji": "🗄️"}
+      ],
+      "correct": "window",
+      "praise_he": "window זה חלון.",
+      "hint_he": "window הוא החלון. הקשיבו שוב."
+    },
+    {
+      "id": "door",
+      "type": "choice",
+      "prompt_en": "door",
+      "prompt_he": "door זו דלת. בחרו את הדלת",
+      "say": "Door - we open it to come in. Point to the door.",
+      "options": [
+        {"id": "door", "label": "door", "emoji": "🚪"},
+        {"id": "window", "label": "window", "emoji": "🪟"},
+        {"id": "mat", "label": "mat", "emoji": "🟫"}
+      ],
+      "correct": "door",
+      "praise_he": "door זו דלת - מתחילה ב-D כמו ד.",
+      "hint_he": "door היא הדלת."
+    },
+    {
+      "id": "telephone",
+      "type": "listen",
+      "prompt_en": "telephone",
+      "prompt_he": "הקשיבו ובחרו את המילה",
+      "say": "Listen: telephone. Which word did I say?",
+      "options": [
+        {"id": "telephone", "label": "telephone", "emoji": "☎️"},
+        {"id": "television", "label": "television", "emoji": "📺"},
+        {"id": "table", "label": "table", "emoji": "🪑"}
+      ],
+      "correct": "telephone",
+      "praise_he": "telephone זה טלפון - עוד מילה עם T!",
+      "hint_he": "telephone מתחיל ב-טֶלֶפוֹן."
+    },
+    {
+      "id": "letter_t",
+      "type": "choice",
+      "prompt_en": "T t",
+      "prompt_he": "איזו אות אומרת ט? האות של טומי",
+      "say": "Tomi's letter says ט. Which letter is it?",
+      "options": [
+        {"id": "t", "label": "T t"},
+        {"id": "b", "label": "B b"},
+        {"id": "a", "label": "A a"}
+      ],
+      "correct": "t",
+      "praise_he": "T - האות של טומי, אומרת ט כמו טומי!",
+      "hint_he": "האות של טומי היא T."
+    }
+  ]
+}

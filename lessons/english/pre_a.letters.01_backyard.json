@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.01_backyard",
+  "course_id": "pre_a",
+  "title_he": "בחצר",
+  "intro_he": "בחצר האחורית נלמד ארבעה צבעים, נספור עד ארבע ונציג את עצמנו.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "name",
+      "type": "speak",
+      "prompt_en": "My name is ...",
+      "prompt_he": "תציגו את עצמכם: My name is ואז השם",
+      "say": "In the backyard we say: my name is, and your name.",
+      "accept": ["my name is"],
+      "praise_he": "נעים להכיר! My name is ואז השם.",
+      "hint_he": "מתחילים ב-My name is."
+    },
+    {
+      "id": "green",
+      "type": "listen",
+      "prompt_en": "green",
+      "prompt_he": "הקשיבו ובחרו את המילה ששמעתם",
+      "say": "Listen: green. Which word did I say?",
+      "options": [
+        {"id": "green", "label": "green", "emoji": "🟢"},
+        {"id": "red", "label": "red", "emoji": "🔴"},
+        {"id": "blue", "label": "blue", "emoji": "🔵"}
+      ],
+      "correct": "green",
+      "praise_he": "נכון, green זה ירוק - כמו הדשא בחצר.",
+      "hint_he": "green מתחיל ב-גרין. הקשיבו שוב."
+    },
+    {
+      "id": "yellow",
+      "type": "choice",
+      "prompt_en": "yellow",
+      "prompt_he": "איזה צבע הוא yellow?",
+      "say": "Yellow. Point to yellow.",
+      "options": [
+        {"id": "yellow", "label": "yellow", "emoji": "🟡"},
+        {"id": "green", "label": "green", "emoji": "🟢"},
+        {"id": "blue", "label": "blue", "emoji": "🔵"}
+      ],
+      "correct": "yellow",
+      "praise_he": "yellow זה צהוב - כמו השמש!",
+      "hint_he": "yellow הוא הצהוב."
+    },
+    {
+      "id": "count",
+      "type": "speak",
+      "prompt_en": "one, two, three, four",
+      "prompt_he": "נספרו באנגלית מאחת עד ארבע",
+      "say": "Count with me: one, two, three, four!",
+      "accept": ["one two three four", "one two three"],
+      "praise_he": "ספרתם עד ארבע באנגלית!",
+      "hint_he": "נסו שוב: one, two, three, four."
+    },
+    {
+      "id": "how_many",
+      "type": "choice",
+      "prompt_en": "How many balls? three",
+      "prompt_he": "כמה כדורים יש בחצר? בחרו את המספר",
+      "say": "Look at the backyard: ball, ball, ball. How many balls?",
+      "options": [
+        {"id": "three", "label": "three", "emoji": "3️⃣"},
+        {"id": "two", "label": "two", "emoji": "2️⃣"},
+        {"id": "four", "label": "four", "emoji": "4️⃣"}
+      ],
+      "correct": "three",
+      "praise_he": "נכון! three כדורים.",
+      "hint_he": "ספרו ביחד: one, two... ואז עוד אחד."
+    }
+  ]
+}

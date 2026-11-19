@@ -1,0 +1,84 @@
+{
+  "lesson_id": "a1.gtky.03_review",
+  "course_id": "a1",
+  "title_he": "סקירת שיעור",
+  "intro_he": "חוזרים על כל היחידה: הצגה עצמית, רגשות ומשפחה - בשאלות, דיבור ואתגר מילים.",
+  "stars_total": 6,
+  "slides": [
+    {
+      "id": "answer_name",
+      "type": "choice",
+      "prompt_en": "What's your name?",
+      "prompt_he": "איזו תשובה מתאימה לשאלה What's your name?",
+      "say": "Someone asks: what's your name? Pick the right answer.",
+      "options": [
+        {"id": "name", "label": "My name is Dana."},
+        {"id": "fine", "label": "I'm fine, thank you."},
+        {"id": "hello", "label": "Hello!"}
+      ],
+      "correct": "name",
+      "praise_he": "What's your name נענה בשם - My name is.",
+      "hint_he": "השאלה שואלת מה השם."
+    },
+    {
+      "id": "answer_how",
+      "type": "choice",
+      "prompt_en": "How are you?",
+      "prompt_he": "איזו תשובה מתאימה ל-How are you?",
+      "say": "And now: how are you? Pick the right answer.",
+      "options": [
+        {"id": "fine", "label": "I'm fine, thank you."},
+        {"id": "name", "label": "My name is Dana."},
+        {"id": "brother", "label": "This is my brother."}
+      ],
+      "correct": "fine",
+      "praise_he": "How are you נענה ב-I'm fine.",
+      "hint_he": "השאלה שואלת מה שלומך."
+    },
+    {
+      "id": "feelings",
+      "type": "listen",
+      "prompt_en": "tired",
+      "prompt_he": "הקשיבו ובחרו את הרגש",
+      "say": "Listen: tired. Which feeling is tired?",
+      "options": [
+        {"id": "tired", "label": "tired", "emoji": "😴"},
+        {"id": "happy", "label": "happy", "emoji": "😄"},
+        {"id": "angry", "label": "angry", "emoji": "😠"}
+      ],
+      "correct": "tired",
+      "praise_he": "tired זה עייף.",
+      "hint_he": "tired הוא הפרצוף הנרדם."
+    },
+    {
+      "id": "introduce",
+      "type": "speak",
+      "prompt_en": "My name is ... and I am happy.",
+      "prompt_he": "תציגו את עצמכם במשפט מלא: שם + רגש",
+      "say": "Introduce yourself in one full sentence: my name is, and I am happy.",
+      "accept": ["my name is", "i am happy", "i'm happy"],
+      "praise_he": "משפט מלא עליכם - שם ורגש!",
+      "hint_he": "My name is ואז I am ואז רגש."
+    },
+    {
+      "id": "family_quiz",
+      "type": "true_false",
+      "prompt_en": "Father means אח.",
+      "prompt_he": "נכון או לא נכון: father זה אח",
+      "say": "True or not true: father means אח.",
+      "correct": false,
+      "praise_he": "לא נכון - father זה אבא, brother זה אח.",
+      "hint_he": "father זה אבא."
+    },
+    {
+      "id": "celebration",
+      "type": "speak",
+      "prompt_en": "Nice to meet you!",
+      "prompt_he": "לסיום היחידה - תגידו Nice to meet you",
+      "say": "Unit complete! Say goodbye nicely: nice to meet you!",
+      "accept": ["nice to meet you", "meet you"],
+      "praise_he": "Nice to meet you! סיימתם את יחידת נעים להכיר.",
+      "hint_he": "Nice to meet you - נעים להכיר."
+    }
+  ]
+}

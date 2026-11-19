@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.08_under_the_bed",
+  "course_id": "pre_a",
+  "title_he": "מתחת למיטה",
+  "intro_he": "אמא והקוף מוליה מסתכלים מתחת למיטה: bat, map, dinosaur, pajamas ו-monkey.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "monkey",
+      "type": "speak",
+      "prompt_en": "monkey",
+      "prompt_he": "מוליה הוא monkey - קוף. תגידו monkey",
+      "say": "Mulya is a monkey. Say: monkey.",
+      "accept": ["monkey"],
+      "praise_he": "monkey זה קוף - מתחיל ב-M כמו מ.",
+      "hint_he": "מַנקי - שתי הברות."
+    },
+    {
+      "id": "bat",
+      "type": "speak",
+      "prompt_en": "bat",
+      "prompt_he": "מתחת למיטה יש bat - עטלף. תגידו bat",
+      "say": "Under the bed there is a bat. Say: bat.",
+      "accept": ["bat"],
+      "praise_he": "bat זה עטלף. מילה קצרה: B-A-T.",
+      "hint_he": "בַּט - הברה אחת."
+    },
+    {
+      "id": "dinosaur",
+      "type": "listen",
+      "prompt_en": "dinosaur",
+      "prompt_he": "הקשיבו ובחרו את המילה",
+      "say": "Listen: dinosaur. Which word did I say?",
+      "options": [
+        {"id": "dinosaur", "label": "dinosaur", "emoji": "🦕"},
+        {"id": "pajamas", "label": "pajamas", "emoji": "👕"},
+        {"id": "map", "label": "map", "emoji": "🗺️"}
+      ],
+      "correct": "dinosaur",
+      "praise_he": "dinosaur זה דינוזאור - מתחיל ב-D כמו ד.",
+      "hint_he": "dinosaur הוא הדינוזאור."
+    },
+    {
+      "id": "pajamas",
+      "type": "choice",
+      "prompt_en": "pajamas",
+      "prompt_he": "pajamas זו פיג'מה. בחרו את ה-pajamas",
+      "say": "Pajamas - what we wear to sleep. Point to the pajamas.",
+      "options": [
+        {"id": "pajamas", "label": "pajamas", "emoji": "👕"},
+        {"id": "map", "label": "map", "emoji": "🗺️"},
+        {"id": "mat", "label": "mat", "emoji": "🟫"}
+      ],
+      "correct": "pajamas",
+      "praise_he": "pajamas זו פיג'מה - מתחילה ב-P כמו פ.",
+      "hint_he": "pajamas היא הפיג'מה."
+    },
+    {
+      "id": "m_words",
+      "type": "choice",
+      "prompt_en": "M: monkey, map, mat",
+      "prompt_he": "monkey, map ו-mat מתחילות ב-M כמו מ בעברית. איזו מילה עוד מתחילה ב-M?",
+      "say": "Monkey, map, mat - all start with M, like מ. Which word also starts with M?",
+      "options": [
+        {"id": "mother", "label": "mother", "emoji": "👩"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"},
+        {"id": "bat", "label": "bat", "emoji": "🦇"}
+      ],
+      "correct": "mother",
+      "praise_he": "mother זו אמא - מתחילה ב-M. ומוליה הקוף גם ב-M!",
+      "hint_he": "מחפשים צליל מ בהתחלה."
+    }
+  ]
+}

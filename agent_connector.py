@@ -65,6 +65,8 @@ class AgentProfile:
     sign: Callable[[str, str, str, int, bytes], str]
     telemetry_endpoints: List[str]
     analytics_endpoints: List[str]
+    logs_endpoint: Optional[str]
+    capabilities_endpoint: Optional[str]
     command_path: Optional[str]
     allowed_commands: Optional[frozenset]
     command_builder: Optional[Callable[[str, Dict[str, Any]], Dict[str, Any]]]
@@ -125,6 +127,8 @@ _NEURAL_PROFILE = AgentProfile(
         "/signals",
         "/orders/trades",
     ],
+    logs_endpoint="/logs/recent",
+    capabilities_endpoint="/capabilities",
     command_path="/v1/control/command",
     allowed_commands=frozenset({"fetch", "paper", "report"}),
     command_builder=_neural_command,
@@ -151,6 +155,8 @@ _HUNTER_PROFILE = AgentProfile(
         "/performance",
         "/risk",
     ],
+    logs_endpoint="/logs",
+    capabilities_endpoint="/capabilities",
     command_path=None,
     allowed_commands=None,
     command_builder=None,
@@ -165,6 +171,8 @@ _DEFAULT_PROFILE = AgentProfile(
     sign=_default_sign,
     telemetry_endpoints=[],
     analytics_endpoints=[],
+    logs_endpoint="/logs/recent",
+    capabilities_endpoint="/capabilities",
     command_path="/commands/{command_type}",
     allowed_commands=None,
     command_builder=None,
@@ -238,16 +246,21 @@ class AgentConnector:
         """Return (remote_url, secret). Raises ValueError if not configured."""
         remote_url = _agent_url(self.agent_id)
         secret = _agent_secret(self.agent_id)
+        registered_secret_env = None
 
-        if not remote_url:
+        if not remote_url or not secret:
             async with SessionLocal() as db:
                 agent = (
                     await db.execute(
                         select(RegisteredAgent).where(RegisteredAgent.agent_id == self.agent_id)
                     )
                 ).scalar_one_or_none()
-                if agent and agent.remote_url:
-                    remote_url = agent.remote_url
+                if agent:
+                    remote_url = remote_url or agent.remote_url
+                    registered_secret_env = agent.secret_env
+
+        if not secret and registered_secret_env:
+            secret = os.getenv(registered_secret_env)
 
         if not remote_url:
             raise ValueError(f"remote URL not configured for agent {self.agent_id}")
@@ -391,6 +404,14 @@ class AgentConnector:
         if not profile.analytics_endpoints:
             return await self._send_single("GET", "/analytics")
         return await self._aggregate(profile.analytics_endpoints, "analytics")
+
+    async def fetch_capabilities(self) -> dict:
+        """Fetch the agent's self-described capabilities contract."""
+        return await self._send_single("GET", self._profile.capabilities_endpoint or "/capabilities")
+
+    async def fetch_logs(self) -> dict:
+        """Fetch recent logs using the agent profile's actual log endpoint."""
+        return await self._send_single("GET", self._profile.logs_endpoint or "/logs/recent")
 
     async def send_command(self, command_type: str, payload: dict) -> dict:
         """Dispatch a command to the agent using its profile-specific contract."""

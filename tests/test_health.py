@@ -8,6 +8,7 @@ async def test_health_endpoint_returns_ok(client):
     data = response.json()
     assert data["status"] == "ok"
     assert data["version"]
+    assert "deployed_at" in data
     assert data["checks"]["main_db"] is True
     assert data["checks"]["tutor_history_db"] is True
 

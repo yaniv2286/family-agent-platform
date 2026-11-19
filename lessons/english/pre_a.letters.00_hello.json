@@ -1,0 +1,59 @@
+{
+  "lesson_id": "pre_a.letters.00_hello",
+  "course_id": "pre_a",
+  "title_he": "לפני שנתחיל",
+  "intro_he": "היום רק לומדים לדבר עם המורה. מחזיקים את מקש הרווח, אומרים את המילה, ועוזבים.",
+  "stars_total": 4,
+  "slides": [
+    {
+      "id": "hello",
+      "type": "speak",
+      "prompt_en": "Hello!",
+      "prompt_he": "תגידו Hello",
+      "say": "Hello! Hold the space key, say hello, and let go.",
+      "accept": ["hello"],
+      "praise_he": "יופי! אמרת Hello.",
+      "hint_he": "נסו שוב: ה-לו."
+    },
+    {
+      "id": "name",
+      "type": "speak",
+      "prompt_en": "My name is ...",
+      "prompt_he": "תגידו My name is ואז השם שלכם",
+      "say": "Now say: my name is, and your name.",
+      "accept": ["my name is"],
+      "praise_he": "נכון! My name is ואז השם.",
+      "hint_he": "מתחילים ב-My name is."
+    },
+    {
+      "id": "red",
+      "type": "listen",
+      "prompt_en": "red",
+      "prompt_he": "הקשיבו למילה ובחרו אותה",
+      "say": "Listen: red. Which word did I say?",
+      "options": [
+        {"id": "red", "label": "red", "emoji": "🔴"},
+        {"id": "blue", "label": "blue", "emoji": "🔵"},
+        {"id": "yellow", "label": "yellow", "emoji": "🟡"}
+      ],
+      "correct": "red",
+      "praise_he": "נכון, red זה אדום.",
+      "hint_he": "red מתחרז עם bed. הקשיבו שוב."
+    },
+    {
+      "id": "blue",
+      "type": "choice",
+      "prompt_en": "blue",
+      "prompt_he": "איזה צבע הוא blue?",
+      "say": "Blue. Point to blue.",
+      "options": [
+        {"id": "red", "label": "red", "emoji": "🔴"},
+        {"id": "blue", "label": "blue", "emoji": "🔵"},
+        {"id": "green", "label": "green", "emoji": "🟢"}
+      ],
+      "correct": "blue",
+      "praise_he": "blue זה כחול. כל הכבוד!",
+      "hint_he": "blue הוא הכחול."
+    }
+  ]
+}

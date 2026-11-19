@@ -68,10 +68,12 @@ async def send_telegram_message(text: str) -> bool:
         )
         return False
 
+    deployment_label = os.getenv("DEPLOYMENT_LABEL", "LOCAL").strip().upper() or "LOCAL"
+    labeled_text = f"[{deployment_label}]\n{text}"
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json={"chat_id": chat_id, "text": text})
+            response = await client.post(url, json={"chat_id": chat_id, "text": labeled_text})
             response.raise_for_status()
         logger.info("Message sent to Telegram successfully")
         return True

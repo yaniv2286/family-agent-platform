@@ -1,14 +1,29 @@
-from fastapi import FastAPI, BackgroundTasks, Depends, File, UploadFile, Request
+from fastapi import FastAPI, BackgroundTasks, Depends, File, Form, UploadFile, Request, HTTPException, Body
 import io
+import json
 import os
 import re
 import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 _PROCESS_START = time.time()
+
+
+def _load_deployed_at():
+    if os.getenv("APP_DEPLOYED_AT"):
+        return os.getenv("APP_DEPLOYED_AT")
+    build_info = Path(__file__).resolve().with_name("build_info.json")
+    try:
+        return json.loads(build_info.read_text(encoding="utf-8")).get("deployed_at")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+_DEPLOYED_AT = _load_deployed_at()
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 import exceptions
@@ -23,6 +38,10 @@ from database import (
     TutorHistorySessionLocal,
     StudentProfile,
     ChatHistory,
+    TutorSkillMastery,
+    TutorPracticeAttempt,
+    EnglishCoursePlacement,
+    EnglishLessonProgress,
     add_student_points,
     get_student_points,
     get_chat_by_idempotency_key,
@@ -30,10 +49,10 @@ from database import (
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select, func
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
-from datetime import datetime
-from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio
+from datetime import datetime, timedelta
+from tutors import math_tutor, english_tutor, generate_speech, update_tutor_memory, transcribe_audio, stream_speech
 from scheduler import start_scheduler, stop_scheduler
 from orchestrator import router as orchestrator_router
 from collaboration_api import router as collaboration_router
@@ -42,7 +61,9 @@ from fitness_agent import router as fitness_router
 from agents.messenger_agent import router as messenger_router
 from agents.data_agent import router as data_router
 from agents.nutrition_agent import router as nutrition_router
-from rbac import resolve_role
+from rbac import resolve_role, Role
+from english_curriculum import list_courses, get_course, get_lesson, course_ids, DEFAULT_DAILY_LESSON_LIMIT
+from lesson_engine import load_lesson, public_slide, grade as grade_slide
 
 
 # Pydantic models for response
@@ -62,23 +83,30 @@ class ChatRequest(BaseModel):
     subject: str
     messages: List[Dict[str, str]]
     idempotency_key: Optional[str] = None
+    focus_skill_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     reply: str
     points_earned: int = 0
     total_points: int = 0
+    skill_id: Optional[str] = None
+    answer_correct: Optional[bool] = None
+    hints_used: int = 0
+    gesture: Optional[str] = None
 
 
 class EnglishChatRequest(BaseModel):
     user_id: int
     messages: List[Dict[str, str]]
     idempotency_key: Optional[str] = None
+    focus_skill_id: Optional[str] = None
 
 
 class SpeakRequest(BaseModel):
     text: str
     subject: str = "math"
+    student_name: Optional[str] = None
 
 
 class EndSessionRequest(BaseModel):
@@ -86,6 +114,35 @@ class EndSessionRequest(BaseModel):
     subject: str
     messages: List[Dict[str, str]]
     duration_minutes: int
+
+
+class TutorAttemptRequest(BaseModel):
+    subject: str
+    skill_id: str
+    correct: bool
+    hints_used: int = Field(default=0, ge=0, le=10)
+    difficulty: int = Field(default=1, ge=1, le=5)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+TUTOR_CURRICULUM = {
+    "math": [
+        {"skill_id": "math.addition.basic", "name": "חיבור", "level": 1},
+        {"skill_id": "math.subtraction.basic", "name": "חיסור", "level": 1},
+        {"skill_id": "math.multiplication.basic", "name": "כפל", "level": 2},
+        {"skill_id": "math.division.basic", "name": "חילוק", "level": 2},
+        {"skill_id": "math.fractions.basic", "name": "שברים", "level": 3},
+        {"skill_id": "math.word_problems.basic", "name": "בעיות מילוליות", "level": 3},
+    ],
+    "english": [
+        {"skill_id": "english.vocabulary.basic", "name": "אוצר מילים", "level": 1},
+        {"skill_id": "english.sentences.basic", "name": "בניית משפטים", "level": 1},
+        {"skill_id": "english.present_simple", "name": "Present Simple", "level": 2},
+        {"skill_id": "english.past_simple", "name": "Past Simple", "level": 2},
+        {"skill_id": "english.reading.basic", "name": "הבנת הנקרא", "level": 3},
+        {"skill_id": "english.writing.basic", "name": "כתיבה", "level": 3},
+    ],
+}
 
 
 @asynccontextmanager
@@ -230,6 +287,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         content={
             "status": "ok" if healthy else "degraded",
             "version": APP_VERSION,
+            "deployed_at": _DEPLOYED_AT,
             "uptime_seconds": round(time.time() - _PROCESS_START, 3),
             "checks": checks,
         },
@@ -384,6 +442,11 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
     user_profile = await tutor.get_user_profile(request.user_id)
     if not user_profile:
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
+    if request.focus_skill_id:
+        curriculum = _curriculum(request.subject)
+        if request.focus_skill_id not in {skill["skill_id"] for skill in curriculum}:
+            raise HTTPException(422, "unknown focus_skill_id for subject")
+        user_profile["focus_skill_id"] = request.focus_skill_id
     
     # Idempotency: if this exact request has already been processed, replay the
     # stored response without calling the LLM or awarding points again.
@@ -406,8 +469,8 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
             )
     
     # Always use the real OpenAI model (async, non-blocking). get_llm_response
-    # now returns (reply_text, points_earned).
-    reply_text, points_earned = await tutor.get_llm_response(request.messages, user_profile)
+    # returns (reply_text, points_earned, skill_id, answer_correct, hints_used, gesture).
+    reply_text, points_earned, skill_id, answer_correct, hints_used, gesture = await tutor.get_llm_response(request.messages, user_profile)
     total_points = await add_student_points(user_profile["name"], request.subject, points_earned)
 
     # Persist the new turn and update the long-term profile summary in the background.
@@ -421,7 +484,15 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
         request.idempotency_key,
     )
     
-    return ChatResponse(reply=reply_text, points_earned=points_earned, total_points=total_points)
+    return ChatResponse(
+        reply=reply_text,
+        points_earned=points_earned,
+        total_points=total_points,
+        skill_id=skill_id,
+        answer_correct=answer_correct,
+        hints_used=hints_used,
+        gesture=gesture,
+    )
 
 
 @app.post("/api/tutor/english", response_model=ChatResponse)
@@ -432,6 +503,11 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
     user_profile = await english_tutor.get_user_profile(request.user_id)
     if not user_profile:
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
+    if request.focus_skill_id:
+        curriculum = _curriculum("english")
+        if request.focus_skill_id not in {skill["skill_id"] for skill in curriculum}:
+            raise HTTPException(422, "unknown focus_skill_id for subject")
+        user_profile["focus_skill_id"] = request.focus_skill_id
     
     # Idempotency: if this exact request has already been processed, replay the
     # stored response without calling the LLM or awarding points again.
@@ -453,7 +529,7 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
                 total_points=current_total,
             )
     
-    reply_text, points_earned = await english_tutor.get_llm_response(request.messages, user_profile)
+    reply_text, points_earned, skill_id, answer_correct, hints_used, gesture = await english_tutor.get_llm_response(request.messages, user_profile)
     total_points = await add_student_points(user_profile["name"], "english", points_earned)
     
     # Persist the new turn and update the English profile summary in the background.
@@ -467,7 +543,369 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
         request.idempotency_key,
     )
     
-    return ChatResponse(reply=reply_text, points_earned=points_earned, total_points=total_points)
+    return ChatResponse(
+        reply=reply_text,
+        points_earned=points_earned,
+        total_points=total_points,
+        skill_id=skill_id,
+        answer_correct=answer_correct,
+        hints_used=hints_used,
+        gesture=gesture,
+    )
+
+
+def _curriculum(subject: str):
+    curriculum = TUTOR_CURRICULUM.get(subject)
+    if curriculum is None:
+        raise HTTPException(422, "subject must be math or english")
+    return curriculum
+
+
+def _grade_level_cap(grade_level: Optional[str]) -> int:
+    value = (grade_level or "").lower()
+    if any(token in value for token in ("גן", "kindergarten", "כיתה א", "1st", "grade 1")):
+        return 1
+    if any(token in value for token in ("כיתה ב", "כיתה ג", "2nd", "3rd", "grade 2", "grade 3")):
+        return 2
+    return 3
+
+
+def _mastery_status(mastery: float, attempts: int, independent_correct: int) -> str:
+    if mastery >= 0.8 and attempts >= 3 and independent_correct >= 2:
+        return "mastered"
+    if attempts == 0:
+        return "not_started"
+    if mastery >= 0.5:
+        return "developing"
+    return "needs_support"
+
+
+def _skill_response(skill: dict, mastery: Optional[TutorSkillMastery] = None):
+    attempts = mastery.attempts if mastery else 0
+    correct_attempts = mastery.correct_attempts if mastery else 0
+    independent_correct = mastery.independent_correct if mastery else 0
+    score = float(mastery.mastery if mastery else 0.0)
+    return {
+        **skill,
+        "mastery": round(score, 3),
+        "status": _mastery_status(score, attempts, independent_correct),
+        "attempts": attempts,
+        "correct_attempts": correct_attempts,
+        "independent_correct": independent_correct,
+        "accuracy": round(correct_attempts / attempts, 3) if attempts else 0.0,
+        "independent_accuracy": round(independent_correct / attempts, 3) if attempts else 0.0,
+        "current_difficulty": mastery.current_difficulty if mastery else skill["level"],
+        "last_practiced_at": mastery.last_practiced_at if mastery else None,
+        "next_review_at": mastery.next_review_at if mastery else None,
+    }
+
+
+async def _tutor_child(user_id: int, db: AsyncSession):
+    user = await db.get(User, user_id)
+    if not user or user.role != "child":
+        raise HTTPException(404, "child not found")
+    return user
+
+
+class CoursePlacementRequest(BaseModel):
+    course_id: str
+    daily_lesson_limit: Optional[int] = Field(default=None, ge=1, le=6)
+
+
+def _require_parent(request: Request):
+    if getattr(request.state, "role", None) not in (Role.PARENT, Role.ADMIN):
+        raise HTTPException(403, "only a parent can change course placement")
+
+
+class LessonAnswerRequest(BaseModel):
+    slide_id: str
+    answer: object = None
+
+
+def _slide(lesson: dict, slide_id: str) -> dict:
+    slide = next((s for s in lesson["slides"] if s["id"] == slide_id), None)
+    if slide is None:
+        raise HTTPException(422, "unknown slide_id")
+    return slide
+
+
+async def _lessons_today(child_name: str) -> int:
+    """How many distinct lessons this child already finished today."""
+    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    async with TutorHistorySessionLocal() as history_db:
+        rows = (await history_db.execute(
+            select(EnglishLessonProgress).where(
+                EnglishLessonProgress.child_name == child_name,
+                EnglishLessonProgress.completed == 1,
+                EnglishLessonProgress.updated_at >= start,
+            )
+        )).scalars().all()
+    return len({row.lesson_id for row in rows})
+
+
+@app.get("/api/tutor/english/lesson/{lesson_id}")
+async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depends(get_db)):
+    """The slides of one lesson, with the answer keys removed."""
+    user = await _tutor_child(user_id, db)
+    meta = get_lesson(lesson_id)
+    lesson = load_lesson(lesson_id)
+    if meta is None or lesson is None:
+        raise HTTPException(404, "lesson not available yet")
+    done_today = await _lessons_today(user.name)
+    course = get_course(meta["course_id"])
+    limit = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
+    return {
+        "lesson_id": lesson_id,
+        "title_he": lesson["title_he"],
+        "intro_he": lesson.get("intro_he", ""),
+        "stars_total": lesson.get("stars_total", len(lesson["slides"])),
+        "slides": [public_slide(s) for s in lesson["slides"]],
+        "lessons_done_today": done_today,
+        "daily_lesson_limit": limit,
+    }
+
+
+@app.post("/api/tutor/english/lesson/{lesson_id}/answer")
+async def english_lesson_answer(
+    lesson_id: str, user_id: int, body: LessonAnswerRequest, db: AsyncSession = Depends(get_db)
+):
+    """Grade one slide. The browser never learns the answer before answering."""
+    user = await _tutor_child(user_id, db)
+    lesson = load_lesson(lesson_id)
+    if lesson is None:
+        raise HTTPException(404, "lesson not available yet")
+    result = grade_slide(_slide(lesson, body.slide_id), body.answer)
+    result["child_name"] = user.name
+    return result
+
+
+@app.post("/api/tutor/english/lesson/{lesson_id}/complete")
+async def english_lesson_complete(
+    lesson_id: str, user_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Record a finished lesson, respecting the daily lesson limit."""
+    user = await _tutor_child(user_id, db)
+    lesson = load_lesson(lesson_id)
+    meta = get_lesson(lesson_id)
+    if lesson is None or meta is None:
+        raise HTTPException(404, "lesson not available yet")
+    course = get_course(meta["course_id"])
+    limit = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
+    async with TutorHistorySessionLocal() as history_db:
+        row = (await history_db.execute(
+            select(EnglishLessonProgress).where(
+                EnglishLessonProgress.child_name == user.name,
+                EnglishLessonProgress.lesson_id == lesson_id,
+            )
+        )).scalar_one_or_none()
+        already = row is not None and row.completed
+        if not already and await _lessons_today(user.name) >= limit:
+            raise HTTPException(409, f"daily lesson limit reached ({limit})")
+        if row is None:
+            row = EnglishLessonProgress(child_name=user.name, lesson_id=lesson_id)
+            history_db.add(row)
+        row.completed = 1
+        row.stars = lesson.get("stars_total", 0)
+        row.updated_at = datetime.utcnow()
+        # Read before commit: expire_on_commit would lazy-load afterwards and
+        # raise MissingGreenlet inside the async request.
+        stars = row.stars
+        await history_db.commit()
+    return {"lesson_id": lesson_id, "completed": True, "stars": stars}
+
+
+@app.get("/api/tutor/english/courses")
+async def english_courses():
+    """The full course catalog, including lessons that are not built yet."""
+    return {"courses": list_courses()}
+
+
+@app.get("/api/tutor/english/placement/{user_id}")
+async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Which course this child is in. 'unassigned' until a parent picks one."""
+    user = await _tutor_child(user_id, db)
+    async with TutorHistorySessionLocal() as history_db:
+        placement = await history_db.get(EnglishCoursePlacement, user.name)
+    if placement is None:
+        return {"user_id": user_id, "child_name": user.name, "course": None}
+    course = get_course(placement.course_id)
+    return {
+        "user_id": user_id,
+        "child_name": user.name,
+        "course_id": placement.course_id,
+        "daily_lesson_limit": placement.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
+        "course": course,
+    }
+
+
+@app.put("/api/tutor/english/placement/{user_id}")
+async def set_english_placement(
+    user_id: int,
+    body: CoursePlacementRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Parent-only: put this child in a course. Age and grade are irrelevant."""
+    _require_parent(request)
+    if body.course_id not in course_ids():
+        raise HTTPException(422, "unknown course_id")
+    user = await _tutor_child(user_id, db)
+    async with TutorHistorySessionLocal() as history_db:
+        placement = await history_db.get(EnglishCoursePlacement, user.name)
+        if placement is None:
+            placement = EnglishCoursePlacement(child_name=user.name, course_id=body.course_id)
+            history_db.add(placement)
+        placement.course_id = body.course_id
+        placement.daily_lesson_limit = body.daily_lesson_limit
+        placement.updated_at = datetime.utcnow()
+        await history_db.commit()
+    return {
+        "user_id": user_id,
+        "child_name": user.name,
+        "course_id": body.course_id,
+        "daily_lesson_limit": body.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
+    }
+
+
+@app.get("/api/tutor/daily-practice/{user_id}")
+async def daily_practice(user_id: int, subject: str, db: AsyncSession = Depends(get_db)):
+    user = await _tutor_child(user_id, db)
+    curriculum = _curriculum(subject)
+    async with TutorHistorySessionLocal() as history_db:
+        rows = (await history_db.execute(
+            select(TutorSkillMastery).where(
+                TutorSkillMastery.child_name == user.name,
+                TutorSkillMastery.subject == subject,
+            )
+        )).scalars().all()
+    mastery_by_skill = {row.skill_id: row for row in rows}
+    grade_cap = _grade_level_cap(user.grade_level)
+    eligible = [skill for skill in curriculum if skill["level"] <= grade_cap]
+    ranked = sorted(
+        eligible,
+        key=lambda skill: (
+            float(mastery_by_skill.get(skill["skill_id"]).mastery) if skill["skill_id"] in mastery_by_skill else 0.0,
+            skill["level"],
+            skill["skill_id"],
+        ),
+    )
+    review = next(
+        (
+            skill for skill in ranked
+            if skill["skill_id"] in mastery_by_skill
+            and mastery_by_skill[skill["skill_id"]].next_review_at
+            and mastery_by_skill[skill["skill_id"]].next_review_at <= datetime.utcnow()
+        ),
+        ranked[0],
+    )
+    remaining = [skill for skill in ranked if skill["skill_id"] != review["skill_id"]]
+    practice = remaining[0] if remaining else review
+    challenge = next(
+        (skill for skill in curriculum if skill["skill_id"] not in {review["skill_id"], practice["skill_id"]} and skill["level"] >= grade_cap),
+        practice,
+    )
+    activities = []
+    for purpose, skill in (("review", review), ("practice", practice), ("challenge", challenge)):
+        activities.append({"purpose": purpose, **_skill_response(skill, mastery_by_skill.get(skill["skill_id"]))})
+    return {
+        "child_id": user.id,
+        "child_name": user.name,
+        "subject": subject,
+        "grade_level": user.grade_level,
+        "curriculum_level": grade_cap,
+        "activities": activities,
+        "estimated_minutes": 20,
+    }
+
+
+@app.post("/api/tutor/mastery/{user_id}/attempt")
+async def record_tutor_attempt(user_id: int, data: TutorAttemptRequest, db: AsyncSession = Depends(get_db)):
+    user = await _tutor_child(user_id, db)
+    curriculum = _curriculum(data.subject)
+    skill = next((item for item in curriculum if item["skill_id"] == data.skill_id), None)
+    if skill is None:
+        raise HTTPException(422, "unknown skill_id for subject")
+
+    async with TutorHistorySessionLocal() as history_db:
+        previous = (await history_db.execute(
+            select(TutorPracticeAttempt).where(
+                TutorPracticeAttempt.child_name == user.name,
+                TutorPracticeAttempt.subject == data.subject,
+                TutorPracticeAttempt.idempotency_key == data.idempotency_key,
+            )
+        )).scalar_one_or_none()
+        mastery = (await history_db.execute(
+            select(TutorSkillMastery).where(
+                TutorSkillMastery.child_name == user.name,
+                TutorSkillMastery.subject == data.subject,
+                TutorSkillMastery.skill_id == data.skill_id,
+            )
+        )).scalar_one_or_none()
+        if previous:
+            response = _skill_response(skill, mastery)
+            response["idempotent_replay"] = True
+            return response
+
+        now = datetime.utcnow()
+        if mastery is None:
+            mastery = TutorSkillMastery(
+                child_name=user.name,
+                subject=data.subject,
+                skill_id=data.skill_id,
+                current_difficulty=data.difficulty,
+            )
+            history_db.add(mastery)
+        assisted = data.hints_used > 0
+        if data.correct:
+            delta = 0.1 if assisted else 0.18
+        else:
+            delta = -0.08
+        mastery.mastery = max(0.0, min(1.0, float(mastery.mastery or 0.0) + delta))
+        mastery.attempts = int(mastery.attempts or 0) + 1
+        mastery.correct_attempts = int(mastery.correct_attempts or 0) + int(data.correct)
+        mastery.independent_correct = int(mastery.independent_correct or 0) + int(data.correct and not assisted)
+        mastery.current_difficulty = data.difficulty
+        mastery.last_practiced_at = now
+        review_days = 1 if not data.correct else 7 if mastery.mastery >= 0.8 else 2
+        mastery.next_review_at = now + timedelta(days=review_days)
+        history_db.add(TutorPracticeAttempt(
+            child_name=user.name,
+            subject=data.subject,
+            skill_id=data.skill_id,
+            correct=int(data.correct),
+            hints_used=data.hints_used,
+            difficulty=data.difficulty,
+            idempotency_key=data.idempotency_key,
+        ))
+        response = _skill_response(skill, mastery)
+        response["idempotent_replay"] = False
+        await history_db.commit()
+        return response
+
+
+@app.get("/api/tutor/progress/{user_id}")
+async def tutor_progress(user_id: int, db: AsyncSession = Depends(get_db)):
+    user = await _tutor_child(user_id, db)
+    async with TutorHistorySessionLocal() as history_db:
+        rows = (await history_db.execute(
+            select(TutorSkillMastery).where(TutorSkillMastery.child_name == user.name)
+        )).scalars().all()
+    mastery_by_key = {(row.subject, row.skill_id): row for row in rows}
+    subjects = {}
+    for subject, curriculum in TUTOR_CURRICULUM.items():
+        skills = [
+            _skill_response(skill, mastery_by_key.get((subject, skill["skill_id"])))
+            for skill in curriculum
+        ]
+        practiced = [skill for skill in skills if skill["attempts"] > 0]
+        subjects[subject] = {
+            "skills": skills,
+            "practiced_skills": len(practiced),
+            "mastered_skills": sum(1 for skill in skills if skill["status"] == "mastered"),
+            "average_mastery": round(sum(skill["mastery"] for skill in practiced) / len(practiced), 3) if practiced else 0.0,
+            "total_attempts": sum(skill["attempts"] for skill in skills),
+        }
+    return {"child_id": user.id, "child_name": user.name, "subjects": subjects}
 
 
 @app.get("/api/ping")
@@ -510,15 +948,16 @@ async def get_history(
 @app.post("/api/tutor/speech")
 async def speech(request: SpeakRequest):
     """
-    Convert the provided text to MP3 speech using OpenAI's TTS-1 model,
-    selecting a distinct voice for math vs. English so the two tutors sound
-    different, and stream it back to the client.
+    Convert the provided text to MP3 speech using the configured TTS provider
+    (ElevenLabs with a single shared voice, OpenAI tts-1 as fallback) and
+    stream it back to the client chunk-by-chunk so playback starts on the
+    first chunk instead of waiting for the whole utterance.
     """
     try:
         text = re.sub(r'([א-ת])-(\d+)', r'\1 \2', request.text)
-        tts_response = await generate_speech(text, request.subject)
+        audio_stream = await stream_speech(text, request.subject, request.student_name)
         return StreamingResponse(
-            io.BytesIO(tts_response.content),
+            audio_stream,
             media_type="audio/mpeg",
             headers={"Content-Disposition": "inline; filename=speech.mp3"},
         )
@@ -530,20 +969,34 @@ async def speech(request: SpeakRequest):
 
 
 @app.post("/api/tutor/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(file: UploadFile = File(...), subject: str = Form("math")):
     """
     Transcribe an uploaded audio file using OpenAI's Whisper-1 model.
     Used as a fallback for mobile browsers that do not support Web Speech API.
+    The subject selects the transcription language (English lessons must not
+    force Hebrew output or a child's English comes out as Hebrew gibberish).
     """
     try:
         audio_bytes = await file.read()
-        text = await transcribe_audio(audio_bytes, file.filename or "recording.mp3")
+        text = await transcribe_audio(audio_bytes, file.filename or "recording.mp3", subject=subject)
         return {"text": text}
     except RuntimeError:
         return {"error": "OPENAI_API_KEY is not configured."}
     except Exception as e:
         logger.exception("Whisper transcription request failed")
         return {"text": ""}
+
+
+@app.post("/api/tutor/client-log")
+async def client_log(payload: dict = Body(...)):
+    """Client-side diagnostics sink (voice capture failures etc.) so device
+    bugs are visible in the server log instead of silently failing on a
+    kid's browser."""
+    kind = str(payload.get("kind", "misc"))[:40]
+    detail = str(payload.get("detail", ""))[:400]
+    ua = str(payload.get("ua", ""))[:200]
+    logger.warning("client-log kind={} detail={} ua={}", kind, detail, ua)
+    return {"ok": True}
 
 
 @app.post("/api/tutor/end-session")

@@ -1,0 +1,54 @@
+{
+  "lesson_id": "a2.gtky.00_hello",
+  "course_id": "a2",
+  "title_he": "לפני שנתחיל",
+  "intro_he": "נפגוש את המורה ונתרגל שיחה חופשית - מחזיקים את מקש הרווח ומדברים במשפטים מלאים.",
+  "stars_total": 4,
+  "slides": [
+    {
+      "id": "greet",
+      "type": "speak",
+      "prompt_en": "Hello! How are you today?",
+      "prompt_he": "תגידו שלום ושאלו: How are you today? - מחזיקים מקש רווח ומדברים",
+      "say": "Hello! Hold the space key and greet me: how are you today?",
+      "accept": ["how are you", "hello"],
+      "praise_he": "I'm great! יפה - שאלה מלאה.",
+      "hint_he": "How are you today - מה שלומך היום."
+    },
+    {
+      "id": "answer",
+      "type": "speak",
+      "prompt_en": "I'm great, thank you. And you?",
+      "prompt_he": "תענו במשפט מלא ושאלו בחזרה",
+      "say": "Now answer in a full sentence and ask back: I'm great, thank you. And you?",
+      "accept": ["i'm great", "i am great", "and you", "thank you"],
+      "praise_he": "עניתם וגם שאלתם בחזרה - ככה זורמת שיחה.",
+      "hint_he": "I'm great, thank you. And you?"
+    },
+    {
+      "id": "pick_answer",
+      "type": "choice",
+      "prompt_en": "How are you today?",
+      "prompt_he": "איזו תשובה היא שיחה מלאה ומנומסת?",
+      "say": "Pick the answer that keeps the conversation going.",
+      "options": [
+        {"id": "full", "label": "I'm great, thank you. And you?"},
+        {"id": "short", "label": "Yes."},
+        {"id": "name", "label": "My name is Noya."}
+      ],
+      "correct": "full",
+      "praise_he": "תשובה מלאה + שאלה בחזרה = שיחה אמיתית.",
+      "hint_he": "מחפשים תשובה שגם שואלת בחזרה."
+    },
+    {
+      "id": "free_talk",
+      "type": "speak",
+      "prompt_en": "What's your name? How old are you?",
+      "prompt_he": "תספרו על עצמכם: שם וגיל במשפטים מלאים",
+      "say": "Tell me about you - name and age, in full sentences.",
+      "accept": ["my name is", "i am", "i'm"],
+      "praise_he": "נעים להכיר לעומק! מחר מתחילים את השיעור האמיתי.",
+      "hint_he": "My name is... I am ... years old."
+    }
+  ]
+}

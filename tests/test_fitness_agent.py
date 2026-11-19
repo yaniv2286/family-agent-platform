@@ -167,6 +167,7 @@ class TestMigrationSchema:
             result = await db.execute(text("PRAGMA table_info(exercises)"))
             columns = {row[1] for row in result.fetchall()}
         assert "video_url" in columns
+        assert "muscle_group" in columns
 
     @pytest.mark.asyncio
     async def test_workout_plans_table_exists(self):
@@ -174,7 +175,126 @@ class TestMigrationSchema:
             result = await db.execute(text("PRAGMA table_info(workout_plans)"))
             columns = {row[1] for row in result.fetchall()}
         assert "safety_notes_json" in columns
+        assert "adaptations_json" in columns
         assert "completed_at" in columns
+
+    @pytest.mark.asyncio
+    async def test_adult_body_metrics_and_target_columns_exist(self):
+        async with SessionLocal() as db:
+            result = await db.execute(text("PRAGMA table_info(body_metrics)"))
+            body_columns = {row[1] for row in result.fetchall()}
+            result = await db.execute(text("PRAGMA table_info(planned_workout_exercises)"))
+            planned_columns = {row[1] for row in result.fetchall()}
+        assert {"user_id", "weight_kg", "waist_cm", "measured_at"}.issubset(body_columns)
+        assert "target_rir" in planned_columns
+
+
+class TestAdultCoach:
+    @pytest.mark.asyncio
+    async def test_adult_profile_and_readiness_adapt_plan(self, client):
+        user = await _child()
+        profile = await _profile_via_http(
+            client,
+            user.id,
+            training_mode="adult_hypertrophy",
+            age=40,
+            height_cm=180,
+            weight_kg=82,
+            experience_level="intermediate",
+            goals=["muscle_gain"],
+            preferred_duration_minutes=45,
+        )
+        assert profile.status_code == 200
+        assert profile.json()["training_mode"] == "adult_hypertrophy"
+
+        readiness = await client.post(
+            f"/api/fitness/readiness/{user.id}",
+            headers=H,
+            json={"energy": 3, "sleep_quality": 4, "soreness": 6, "pain": 0, "notes": "Poor sleep"},
+        )
+        assert readiness.status_code == 200
+        assert readiness.json()["load_adjustment"] == "reduce"
+
+        plan = await _generate_plan(client, user.id)
+        assert any("readiness" in note.lower() for note in plan["safety_notes"])
+        assert all(exercise["sets"] <= 2 for exercise in plan["exercises"])
+
+    @pytest.mark.asyncio
+    async def test_adult_set_rir_and_weekly_volume_are_reported(self, client):
+        user = await _child()
+        await _profile_via_http(client, user.id, training_mode="adult_hypertrophy", goals=["muscle_gain"])
+        plan = await _generate_plan(client, user.id)
+        body = {
+            "user_id": user.id,
+            "perceived_exertion": 7,
+            "fatigue": 4,
+            "pain": 0,
+            "duration_minutes": 40,
+            "notes": "Good session",
+            "exercises": [{
+                "exercise_id": plan["exercises"][0]["exercise_id"],
+                "sets": [
+                    {"set_number": 1, "reps": 10, "resistance": 20, "rir": 3},
+                    {"set_number": 2, "reps": 10, "resistance": 20, "rir": 2},
+                ],
+            }],
+        }
+        completed = await client.post(f"/api/fitness/plans/{plan['id']}/complete", headers=H, json=body)
+        assert completed.status_code == 200
+        analytics = await client.get(f"/api/fitness/analytics/{user.id}", headers=H)
+        assert analytics.status_code == 200
+        data = analytics.json()
+        assert data["strength_training"]["weekly_working_sets"] >= 2
+        assert data["strength_training"]["total_volume_load"] >= 400
+        assert data["strength_training"]["average_rir"] == 2.5
+        next_plan = await _generate_plan(client, user.id, regenerate=True)
+        progressed = next(ex for ex in next_plan["exercises"] if ex["exercise_id"] == plan["exercises"][0]["exercise_id"])
+        assert progressed["target_resistance"] == 20.5
+
+    @pytest.mark.asyncio
+    async def test_adult_plan_has_muscle_targets_adaptations_and_substitution(self, client):
+        user = await _child()
+        await _profile_via_http(
+            client,
+            user.id,
+            equipment=["none", "resistance_bands", "trx", "fitball", "pull_up_bar", "balance_pad", "pilates_mat"],
+            training_mode="adult_hypertrophy",
+            experience_level="intermediate",
+            goals=["muscle_gain"],
+        )
+        plan = await _generate_plan(client, user.id)
+        assert plan["adaptations"]
+        assert len({ex["muscle_group"] for ex in plan["exercises"]}) >= 3
+        assert all(ex["target_rir"] == 2.5 for ex in plan["exercises"])
+        assert all(ex["rest_seconds"] == 120 for ex in plan["exercises"])
+
+        original = plan["exercises"][0]
+        response = await client.post(
+            f"/api/fitness/plans/{plan['id']}/substitute/{original['exercise_id']}",
+            headers=H,
+            json={"user_id": user.id, "reason": "variety"},
+        )
+        assert response.status_code == 200, response.text
+        substituted = response.json()
+        assert substituted["substitution"]["muscle_group"] == original["muscle_group"]
+        replacement = next(ex for ex in substituted["exercises"] if ex["muscle_group"] == original["muscle_group"])
+        assert replacement["exercise_id"] != original["exercise_id"]
+
+    @pytest.mark.asyncio
+    async def test_body_metrics_and_recovery_trends_are_reported(self, client):
+        user = await _child()
+        await _profile_via_http(client, user.id, training_mode="adult_hypertrophy")
+        metric = await client.post(
+            f"/api/fitness/body-metrics/{user.id}",
+            headers=H,
+            json={"weight_kg": 82.5, "waist_cm": 90, "notes": "morning"},
+        )
+        assert metric.status_code == 200, metric.text
+        analytics = await client.get(f"/api/fitness/analytics/{user.id}", headers=H)
+        data = analytics.json()
+        assert data["body_metrics"]["latest"]["weight_kg"] == 82.5
+        assert "sets_by_muscle_group" in data["strength_training"]
+        assert data["strength_training"]["weekly_sets_per_muscle_target"] == 8
 
 
 # ── 2. Profile CRUD ─────────────────────────────────────────────────

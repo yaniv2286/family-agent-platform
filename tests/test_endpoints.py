@@ -73,6 +73,53 @@ class TestChat:
         assert data["points_earned"] == 5
         assert data["total_points"] == 5
 
+    async def test_chat_returns_structured_assessment_metadata(
+        self, client, child_user, mock_openai
+    ):
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[
+                MagicMock(
+                    message=MagicMock(
+                        content='{"reply_text":"כל הכבוד!","points_earned":4,"skill_id":"math.addition.basic","answer_correct":true,"hints_used":0}'
+                    )
+                )
+            ]
+        )
+        response = await client.post(
+            "/api/tutor/chat",
+            json={
+                "user_id": child_user.id,
+                "subject": "math",
+                "messages": [
+                    {"role": "assistant", "content": "כמה זה 2 + 2?"},
+                    {"role": "user", "content": "4"},
+                ],
+                "idempotency_key": str(uuid.uuid4()),
+            },
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["skill_id"] == "math.addition.basic"
+        assert data["answer_correct"] is True
+        assert data["hints_used"] == 0
+
+    async def test_unknown_focus_skill_is_rejected(
+        self, client, child_user, mock_openai
+    ):
+        response = await client.post(
+            "/api/tutor/chat",
+            json={
+                "user_id": child_user.id,
+                "subject": "math",
+                "messages": [],
+                "focus_skill_id": "english.vocabulary.basic",
+                "idempotency_key": str(uuid.uuid4()),
+            },
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code == 422
+
     async def test_idempotency_replays_previous_response(
         self, client, child_user, mock_openai
     ):
@@ -116,6 +163,24 @@ class TestTranscribe:
         assert response.status_code == 200
         data = response.json()
         assert data["text"] == "שלום"
+        # Language must never be forced - auto-detect per utterance. Forcing
+        # "he" mangled English speech and forcing "en" mangled Hebrew speech.
+        call = mock_openai.audio.transcriptions.create.call_args
+        assert "language" not in call.kwargs
+
+    async def test_transcribe_english_uses_english_context_prompt(self, client, mock_openai):
+        # Regression: children mix Hebrew and English mid-lesson, so the
+        # Whisper prompt must be bilingual context for English lessons.
+        response = await client.post(
+            "/api/tutor/transcribe",
+            files={"file": ("test.mp3", b"fake-audio-bytes", "audio/mpeg")},
+            data={"subject": "english"},
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code == 200
+        call = mock_openai.audio.transcriptions.create.call_args
+        assert "language" not in call.kwargs
+        assert "אנגלית" in call.kwargs["prompt"]
 
 
 class TestFuzzing:

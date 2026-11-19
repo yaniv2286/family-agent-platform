@@ -276,9 +276,20 @@ async def get_agent_logs(agent_id: str, request: Request, limit: int = 100, db: 
         source = "local" if request.url.hostname in _LOCAL_HOSTNAMES else "server"
         return {"agent_id": agent_id, "source": source, "logs": (persisted_logs + live_logs)[-limit:]}
     try:
-        response = await AgentConnector(agent_id).send("GET", "/logs/recent")
+        response = await AgentConnector(agent_id).fetch_logs()
         data = response.get("data", response) if isinstance(response, dict) else {}
-        lines = data.get("lines", []) if isinstance(data, dict) else []
+        if isinstance(data, dict):
+            raw_logs = data.get("lines") or data.get("logs") or []
+            if isinstance(raw_logs, dict):
+                lines = [
+                    f"[{source}] {line}"
+                    for source, source_lines in raw_logs.items()
+                    for line in (source_lines if isinstance(source_lines, list) else [source_lines])
+                ]
+            else:
+                lines = raw_logs if isinstance(raw_logs, list) else []
+        else:
+            lines = []
         logs = [{"timestamp": None, "level": "INFO", "module": agent_id, "function": None, "message": _sanitize_log_message(line)} for line in lines[-limit:]]
         return {"agent_id": agent_id, "source": "remote", "logs": logs}
     except Exception as exc:

@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.06_on_the_bed",
+  "course_id": "pre_a",
+  "title_he": "על המיטה",
+  "intro_he": "מה יש על המיטה? alligator, blanket, pillow, book, apple ו-ambulance - ומשחק הבזק Quick Flash.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "pillow",
+      "type": "speak",
+      "prompt_en": "pillow",
+      "prompt_he": "pillow זו כרית. תגידו pillow",
+      "say": "On the bed there is a soft pillow. Say: pillow.",
+      "accept": ["pillow"],
+      "praise_he": "pillow זו כרית.",
+      "hint_he": "פִּילוֹ - שתי הברות."
+    },
+    {
+      "id": "blanket",
+      "type": "listen",
+      "prompt_en": "blanket",
+      "prompt_he": "הקשיבו ובחרו את המילה",
+      "say": "Listen: blanket. Which word did I say?",
+      "options": [
+        {"id": "blanket", "label": "blanket", "emoji": "🛏️"},
+        {"id": "pillow", "label": "pillow", "emoji": "🛌"},
+        {"id": "book", "label": "book", "emoji": "📖"}
+      ],
+      "correct": "blanket",
+      "praise_he": "blanket זו שמיכה - מתחילה ב-B.",
+      "hint_he": "blanket היא השמיכה."
+    },
+    {
+      "id": "alligator",
+      "type": "choice",
+      "prompt_en": "alligator",
+      "prompt_he": "alligator זה תנין - צעצוע על המיטה. בחרו את ה-alligator",
+      "say": "A toy alligator sits on the bed. Point to the alligator.",
+      "options": [
+        {"id": "alligator", "label": "alligator", "emoji": "🐊"},
+        {"id": "ambulance", "label": "ambulance", "emoji": "🚑"},
+        {"id": "ant", "label": "ant", "emoji": "🐜"}
+      ],
+      "correct": "alligator",
+      "praise_he": "alligator זה תנין - מתחיל ב-A כמו אַ.",
+      "hint_he": "alligator הוא התנין."
+    },
+    {
+      "id": "flash",
+      "type": "choice",
+      "prompt_en": "Quick Flash: book",
+      "prompt_he": "משחק הבזק! מהר - בחרו את המילה book",
+      "say": "Quick flash! Point to: book. Fast!",
+      "options": [
+        {"id": "book", "label": "book", "emoji": "📖"},
+        {"id": "ball", "label": "ball", "emoji": "⚽"},
+        {"id": "bed", "label": "bed", "emoji": "🛏️"}
+      ],
+      "correct": "book",
+      "praise_he": "book זה ספר - תשובת בזק!",
+      "hint_he": "book הוא הספר."
+    },
+    {
+      "id": "ambulance",
+      "type": "speak",
+      "prompt_en": "ambulance",
+      "prompt_he": "ambulance זו אמבולנס. מילה ארוכה - תגידו am-bu-lance",
+      "say": "One more A word: ambulance. Try it slowly: am-bu-lance.",
+      "accept": ["ambulance", "amulance", "abulance"],
+      "praise_he": "ambulance! מילה ארוכה ואמרתם אותה.",
+      "hint_he": "חלקו את המילה: am-bu-lance."
+    }
+  ]
+}

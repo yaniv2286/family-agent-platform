@@ -1,0 +1,54 @@
+{
+  "lesson_id": "a1.gtky.00_hello",
+  "course_id": "a1",
+  "title_he": "לפני שנתחיל",
+  "intro_he": "נפגוש את המורה, נתרגל להחזיק את מקש הרווח כדי לדבר, ונאמר שלום.",
+  "stars_total": 4,
+  "slides": [
+    {
+      "id": "hello",
+      "type": "speak",
+      "prompt_en": "Hello!",
+      "prompt_he": "תגידו Hello - מחזיקים את מקש הרווח, מדברים, ועוזבים",
+      "say": "Hello! Hold the space key, say hello, and let go.",
+      "accept": ["hello"],
+      "praise_he": "יופי! Hello זה שלום.",
+      "hint_he": "נסו שוב: הֶלוֹ."
+    },
+    {
+      "id": "hi",
+      "type": "speak",
+      "prompt_en": "Hi! What's your name?",
+      "prompt_he": "תשאלו את המורה: What's your name?",
+      "say": "Now ask me: what's your name?",
+      "accept": ["what's your name", "whats your name", "what is your name"],
+      "praise_he": "What's your name - שאלה ראשונה באנגלית!",
+      "hint_he": "What's your name - מה השם שלך."
+    },
+    {
+      "id": "listen_hi",
+      "type": "listen",
+      "prompt_en": "Hi",
+      "prompt_he": "הקשיבו ובחרו את המילה ששמעתם",
+      "say": "Listen: hi. Which word did I say?",
+      "options": [
+        {"id": "hi", "label": "hi", "emoji": "👋"},
+        {"id": "bye", "label": "bye", "emoji": "🚶"},
+        {"id": "name", "label": "name"}
+      ],
+      "correct": "hi",
+      "praise_he": "hi זה היי - שלום קצר.",
+      "hint_he": "האַי. הקשיבו שוב."
+    },
+    {
+      "id": "goodbye",
+      "type": "speak",
+      "prompt_en": "Goodbye!",
+      "prompt_he": "ולסיום - תגידו Goodbye",
+      "say": "Last word for today: goodbye. Say: goodbye!",
+      "accept": ["goodbye", "bye", "good bye"],
+      "praise_he": "Goodbye! ידעתם להגיד שלום ולהתראות.",
+      "hint_he": "גוּדבַי - להתראות."
+    }
+  ]
+}

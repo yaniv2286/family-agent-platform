@@ -1,0 +1,74 @@
+{
+  "lesson_id": "pre_a.letters.04_tomi",
+  "course_id": "pre_a",
+  "title_he": "טומי בא לשחק",
+  "intro_he": "פוגשים את טומי ואת הנמר הצעצוע שלו. tiger, table, teapot, הצבע black, והמשפט I have.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "tiger",
+      "type": "speak",
+      "prompt_en": "tiger",
+      "prompt_he": "לטומי יש נמר צעצוע. tiger זה נמר. תגידו tiger",
+      "say": "Tomi has a toy tiger. Say: tiger.",
+      "accept": ["tiger"],
+      "praise_he": "tiger זה נמר. tiger מתחיל בצליל T - כמו ט בעברית.",
+      "hint_he": "טַייגר - שתי הברות."
+    },
+    {
+      "id": "t_words",
+      "type": "listen",
+      "prompt_en": "table",
+      "prompt_he": "הקשיבו ובחרו את המילה ששמעתם",
+      "say": "Listen: table. Which word did I say?",
+      "options": [
+        {"id": "table", "label": "table", "emoji": "🪑"},
+        {"id": "tiger", "label": "tiger", "emoji": "🐯"},
+        {"id": "teapot", "label": "teapot", "emoji": "🫖"}
+      ],
+      "correct": "table",
+      "praise_he": "table זה שולחן - גם מתחיל ב-T!",
+      "hint_he": "שלוש המילים מתחילות ב-T, אבל שמעתם table."
+    },
+    {
+      "id": "teapot",
+      "type": "choice",
+      "prompt_en": "teapot",
+      "prompt_he": "teapot זה קומקום תה. איזו תמונה היא teapot?",
+      "say": "Teapot - we pour tea from it. Point to the teapot.",
+      "options": [
+        {"id": "teapot", "label": "teapot", "emoji": "🫖"},
+        {"id": "table", "label": "table", "emoji": "🪑"},
+        {"id": "telephone", "label": "telephone", "emoji": "☎️"}
+      ],
+      "correct": "teapot",
+      "praise_he": "teapot - קומקום. עוד מילה עם T.",
+      "hint_he": "teapot מוזג ממנו תה."
+    },
+    {
+      "id": "black",
+      "type": "choice",
+      "prompt_en": "black",
+      "prompt_he": "הנמר של טומי הוא black. איזה צבע הוא black?",
+      "say": "Tomi's tiger is black. Point to black.",
+      "options": [
+        {"id": "black", "label": "black", "emoji": "⚫"},
+        {"id": "white", "label": "white", "emoji": "⚪"},
+        {"id": "red", "label": "red", "emoji": "🔴"}
+      ],
+      "correct": "black",
+      "praise_he": "black זה שחור.",
+      "hint_he": "black הוא השחור."
+    },
+    {
+      "id": "i_have",
+      "type": "speak",
+      "prompt_en": "I have a tiger.",
+      "prompt_he": "תגידו מה יש לכם: I have a ואז חיה או צעצוע",
+      "say": "Tomi says: I have a tiger. Now you say: I have a ball, or I have a tiger.",
+      "accept": ["i have"],
+      "praise_he": "I have זה יש לי. משפט שלם!",
+      "hint_he": "מתחילים ב-I have."
+    }
+  ]
+}

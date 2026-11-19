@@ -1,0 +1,80 @@
+{
+  "lesson_id": "a2.gtky.03_review",
+  "course_id": "a2",
+  "title_he": "סקירת שיעור",
+  "intro_he": "אתגרי סיום יחידה: הצגה מלאה, because, הווה מול עבר, ומשפט סידור.",
+  "stars_total": 6,
+  "slides": [
+    {
+      "id": "full_intro",
+      "type": "speak",
+      "prompt_en": "My name is ... and I am ...",
+      "prompt_he": "הציגו את עצמכם במשפט מלא עם שם ורגש",
+      "say": "Introduce yourself fully: my name is, and I am happy, or excited.",
+      "accept": ["my name is", "i am", "i'm"],
+      "praise_he": "הצגה מלאה - כמו בשיעור הראשון, אבל עכשיו בקלות.",
+      "hint_he": "My name is... and I am..."
+    },
+    {
+      "id": "because_quiz",
+      "type": "choice",
+      "prompt_en": "because",
+      "prompt_he": "איזה משפט נותן סיבה לרגש?",
+      "say": "Which sentence gives a reason for the feeling?",
+      "options": [
+        {"id": "because", "label": "I am excited because we play football today."},
+        {"id": "and", "label": "I am excited and happy."},
+        {"id": "but", "label": "I am excited but tired."}
+      ],
+      "correct": "because",
+      "praise_he": "because מסביר למה - סיבה.",
+      "hint_he": "מחפשים את המילה because."
+    },
+    {
+      "id": "present_past",
+      "type": "true_false",
+      "prompt_en": "Yesterday she is tired.",
+      "prompt_he": "נכון או לא: Yesterday she is tired",
+      "say": "True or not true grammar: yesterday she is tired.",
+      "correct": false,
+      "praise_he": "לא נכון - yesterday דורש was: she was tired.",
+      "hint_he": "is זה הווה. אתמול צריך was."
+    },
+    {
+      "id": "order_review",
+      "type": "order",
+      "prompt_en": "I am happy because it is Friday.",
+      "prompt_he": "סדרו את המילים למשפט עם because",
+      "say": "Build a because sentence from these words.",
+      "words": ["because", "I", "happy", "it", "am", "is", "Friday"],
+      "expected_order": ["I", "am", "happy", "because", "it", "is", "Friday"],
+      "praise_he": "I am happy because it is Friday - משפט עם סיבה, יפה.",
+      "hint_he": "I am happy, ואז because עם הסיבה."
+    },
+    {
+      "id": "vocab_flash",
+      "type": "listen",
+      "prompt_en": "dinner",
+      "prompt_he": "הקשיבו ובחרו את המילה מהסיפור",
+      "say": "Listen: dinner. Which word from the family story did I say?",
+      "options": [
+        {"id": "dinner", "label": "dinner", "emoji": "🍽️"},
+        {"id": "brother", "label": "brother", "emoji": "👦"},
+        {"id": "yard", "label": "yard", "emoji": "🏡"}
+      ],
+      "correct": "dinner",
+      "praise_he": "dinner זו ארוחת ערב.",
+      "hint_he": "dinner היא הארוחה שאמא קראה להם."
+    },
+    {
+      "id": "celebration",
+      "type": "speak",
+      "prompt_en": "I finished the unit!",
+      "prompt_he": "חגיגת סיום - תגידו I finished the unit",
+      "say": "You finished the whole unit! Say it: I finished the unit!",
+      "accept": ["i finished", "finished", "unit"],
+      "praise_he": "יחידת נעים להכיר הושלמה ברמה גבוהה - כל הכבוד!",
+      "hint_he": "I finished the unit - סיימתי את היחידה."
+    }
+  ]
+}

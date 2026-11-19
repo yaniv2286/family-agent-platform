@@ -1,0 +1,72 @@
+{
+  "lesson_id": "a1.gtky.02_my_family",
+  "course_id": "a1",
+  "title_he": "פגוש את המשפחה שלי",
+  "intro_he": "מילים על בני משפחה, סיפור קצר על המשפחה של ליאו, ומשפטים נכונים ולא נכונים.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "mother",
+      "type": "choice",
+      "prompt_en": "mother",
+      "prompt_he": "mother זו אמא. בחרו את ה-mother",
+      "say": "This is Leo's family. Mother means אמא. Point to the mother.",
+      "options": [
+        {"id": "mother", "label": "mother", "emoji": "👩"},
+        {"id": "father", "label": "father", "emoji": "👨"},
+        {"id": "brother", "label": "brother", "emoji": "👦"}
+      ],
+      "correct": "mother",
+      "praise_he": "mother זו אמא.",
+      "hint_he": "mother היא האמא."
+    },
+    {
+      "id": "family_listen",
+      "type": "listen",
+      "prompt_en": "sister",
+      "prompt_he": "הקשיבו ובחרו את בן המשפחה",
+      "say": "Listen: sister. Which family member is sister?",
+      "options": [
+        {"id": "sister", "label": "sister", "emoji": "👧"},
+        {"id": "brother", "label": "brother", "emoji": "👦"},
+        {"id": "father", "label": "father", "emoji": "👨"}
+      ],
+      "correct": "sister",
+      "praise_he": "sister זו אחות. brother זה אח.",
+      "hint_he": "sister היא האחות - הבת."
+    },
+    {
+      "id": "my_family",
+      "type": "speak",
+      "prompt_en": "This is my family.",
+      "prompt_he": "תגידו: This is my family",
+      "say": "Say it: this is my family.",
+      "accept": ["this is my family", "my family"],
+      "praise_he": "This is my family - זו המשפחה שלי.",
+      "hint_he": "This is my family."
+    },
+    {
+      "id": "story_true",
+      "type": "true_false",
+      "prompt_en": "Leo has a sister.",
+      "prompt_he": "קראו את הסיפור על ליאו. האם יש לו אחות?",
+      "story_en": "This is my family. I have a brother and a sister. My mother is happy.",
+      "story_he": "זו המשפחה שלי. יש לי אח ואחות. אמא שלי שמחה.",
+      "say": "Leo says: I have a brother and a sister. Is it true - Leo has a sister?",
+      "correct": true,
+      "praise_he": "נכון - הוא אומר I have a sister.",
+      "hint_he": "בסיפור כתוב: a brother and a sister."
+    },
+    {
+      "id": "have_sentence",
+      "type": "order",
+      "prompt_en": "I have a brother.",
+      "prompt_he": "סדרו את המילים למשפט על המשפחה",
+      "say": "Put the words in order to make a family sentence.",
+      "words": ["a", "I", "brother", "have"],
+      "expected_order": ["I", "have", "a", "brother"],
+      "praise_he": "I have a brother - יש לי אח. מושלם.",
+      "hint_he": "מתחילים ב-I, ואז have."
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "lesson_id": "a2.gtky.02_family_story",
+  "course_id": "a2",
+  "title_he": "הסיפור של המשפחה שלי",
+  "intro_he": "קוראים סיפור קצר, מתקנים משפטים שגויים בזמן עבר, וכותבים משפט על המשפחה.",
+  "stars_total": 5,
+  "slides": [
+    {
+      "id": "story_tf",
+      "type": "true_false",
+      "prompt_en": "Lucy played with her brother yesterday.",
+      "prompt_he": "קראו את הסיפור. האם המשפט נכון?",
+      "story_en": "Yesterday Lucy played with her brother in the yard. They were happy. Then mother called them for dinner.",
+      "story_he": "אתמול לוסי שיחקה עם אחיה בחצר. הם היו שמחים. ואז אמא קראה להם לארוחת ערב.",
+      "say": "Read the story. Is this true: Lucy played with her brother yesterday?",
+      "correct": true,
+      "praise_he": "נכון - הבנתם את הסיפור, כולל זמן העבר.",
+      "hint_he": "המשפט הראשון בסיפור אומר בדיוק את זה."
+    },
+    {
+      "id": "fix_past",
+      "type": "choice",
+      "prompt_en": "Yesterday I was happy.",
+      "prompt_he": "משפט שגוי! Yesterday I am happy. איזה משפט מתקן אותו?",
+      "say": "This sentence is wrong: yesterday I am happy. Pick the sentence that fixes it.",
+      "options": [
+        {"id": "was", "label": "Yesterday I was happy."},
+        {"id": "is", "label": "Yesterday I is happy."},
+        {"id": "will", "label": "Yesterday I will be happy."}
+      ],
+      "correct": "was",
+      "praise_he": "was הוא העבר של am/is - yesterday דורש עבר.",
+      "hint_he": "אתמול = עבר = was."
+    },
+    {
+      "id": "past_words",
+      "type": "choice",
+      "prompt_en": "played",
+      "prompt_he": "מה ההבדל בין play ל-played? בחרו את המשפט הנכון על אתמול",
+      "say": "Which sentence is right for yesterday?",
+      "options": [
+        {"id": "played", "label": "They played in the yard."},
+        {"id": "play", "label": "They play in the yard."},
+        {"id": "playing", "label": "They playing in the yard."}
+      ],
+      "correct": "played",
+      "praise_he": "played עם -ed בסוף = שיחקו, זמן עבר.",
+      "hint_he": "עבר פשוט מוסיף -ed לפועל."
+    },
+    {
+      "id": "order_story",
+      "type": "order",
+      "prompt_en": "Mother called them for dinner.",
+      "prompt_he": "סדרו את המילים למשפט מהסיפור",
+      "say": "Put the words in order to make a sentence from the story.",
+      "words": ["called", "Mother", "for", "them", "dinner"],
+      "expected_order": ["Mother", "called", "them", "for", "dinner"],
+      "praise_he": "Mother called them for dinner - אמא קראה להם לארוחת ערב.",
+      "hint_he": "מתחילים ב-Mother, ואז הפועל called."
+    },
+    {
+      "id": "your_family",
+      "type": "speak",
+      "prompt_en": "My family is ...",
+      "prompt_he": "כתבו/אמרו משפט אחד על המשפחה שלכם בעבר או בהווה",
+      "say": "Your turn - one sentence about YOUR family. My family is big, or I played with my sister.",
+      "accept": ["my family", "i have", "i played", "my mother", "my father", "my brother", "my sister"],
+      "praise_he": "משפט על המשפחה שלכם - יפה מאוד.",
+      "hint_he": "My family is... או I played with..."
+    }
+  ]
+}
