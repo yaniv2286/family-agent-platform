@@ -1707,10 +1707,7 @@
                 </div>
             </div>
 
-            <div class="tutor-toggle" id="tutor-toggle">
-                <button class="tutor-toggle-btn" id="toggle-math-btn" data-subject="math">📐 חשבון</button>
-                <button class="tutor-toggle-btn" id="toggle-english-btn" data-subject="english">🔤 אנגלית</button>
-            </div>
+
 
             <!-- Hidden: the daily-practice data still feeds the tutor's skill
                  focus, but the banner was visual noise for the child. -->
@@ -1817,9 +1814,7 @@
         const sessionTimer = document.getElementById('session-timer');
         const timerBar = document.getElementById('timer-bar');
         const studentName = document.getElementById('student-name');
-        const tutorToggle = document.getElementById('tutor-toggle');
-        const toggleMathBtn = document.getElementById('toggle-math-btn');
-        const toggleEnglishBtn = document.getElementById('toggle-english-btn');
+
         const historyBtn = document.getElementById('history-btn');
         const historySidebar = document.getElementById('history-sidebar');
         const historyOverlay = document.getElementById('history-overlay');
@@ -1865,8 +1860,6 @@
         }
 
         function updateTutorToggleUI(subject) {
-            toggleMathBtn.classList.toggle('active', subject === 'math');
-            toggleEnglishBtn.classList.toggle('active', subject === 'english');
             if (tutorNameTag) tutorNameTag.textContent = subject === 'english' ? 'KOKO' : 'קוקו';
         }
 
@@ -5739,17 +5732,6 @@
                 }
             } catch (error) {
                 console.error('Error starting agent:', error);
-            }
-        });
-
-        tutorToggle.addEventListener('click', async (e) => {
-            const btn = e.target.closest('.tutor-toggle-btn');
-            if (btn) {
-                try {
-                    await switchTutor(btn.dataset.subject);
-                } catch (error) {
-                    console.error('Error switching tutor:', error);
-                }
             }
         });
 
