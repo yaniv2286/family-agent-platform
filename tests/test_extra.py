@@ -410,6 +410,79 @@ class TestEnglishWallet:
             headers={"x-app-pin": "child-pin-9999"})
         assert response.status_code == 403
 
+    async def test_chat_lesson_finish_marks_course_progress(
+        self, client, child_user, mock_openai
+    ):
+        """A free-chat lesson that reaches its summary counts like a scripted
+        one: the syllabus's next lesson is recorded with its stars."""
+        headers = {"x-app-pin": APP_PIN}
+        placed = await client.put(
+            f"/api/tutor/english/placement/{child_user.id}",
+            json={"course_id": "pre_a"}, headers=headers)
+        assert placed.status_code == 200
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content=(
+                    '{"reply_text": "כל הכבוד! סיימנו את השיעור!", '
+                    '"points_earned": 5, "skill_id": "english.vocabulary.basic", '
+                    '"lesson_finished": true}'
+                )
+            ))],
+            usage=MagicMock(model_dump=lambda: {}),
+        )
+        response = await client.post(
+            "/api/tutor/english",
+            json={
+                "user_id": child_user.id,
+                "messages": [{"role": "user", "content": "blue"}],
+                "idempotency_key": str(uuid.uuid4()),
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        placement = (await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)).json()
+        # The first uncompleted authored lesson in pre_a was marked.
+        assert placement["lesson_progress"]["pre_a.letters.00_hello"] > 0
+        assert placement["wallet"]["total_stars"] > 0
+        assert placement["wallet"]["lessons_done"] == 1
+
+    async def test_chat_lesson_finish_needs_placement(
+        self, client, child_user, mock_openai
+    ):
+        """Without a parent placement there is no syllabus to mark against."""
+        headers = {"x-app-pin": APP_PIN}
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content=(
+                    '{"reply_text": "סיימנו!", "points_earned": 1, '
+                    '"skill_id": "english.vocabulary.basic", '
+                    '"lesson_finished": true}'
+                )
+            ))],
+            usage=MagicMock(model_dump=lambda: {}),
+        )
+        response = await client.post(
+            "/api/tutor/english",
+            json={
+                "user_id": child_user.id,
+                "messages": [{"role": "user", "content": "blue"}],
+                "idempotency_key": str(uuid.uuid4()),
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        placement = (await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)).json()
+        assert placement["lesson_progress"] == {}
+
+    def test_english_prompt_documents_lesson_finished(self):
+        from tutors import EnglishTutor
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "ליבי", "grade_level": "כיתה א"}
+        )
+        assert "lesson_finished" in prompt
+
     async def test_unit_bonus_on_last_lesson(self, client, child_user):
         """Finishing every authored lesson in a unit is worth +2 bonus stars."""
         headers = {"x-app-pin": APP_PIN}

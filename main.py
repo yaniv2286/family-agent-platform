@@ -77,6 +77,7 @@ from lesson_engine import (
     public_slide,
     grade as grade_slide,
 )
+from english_progress import record_lesson_completion
 
 
 # Pydantic models for response
@@ -632,12 +633,6 @@ class LessonCompleteRequest(BaseModel):
     stars_earned: Optional[int] = Field(default=None, ge=0, le=30)
 
 
-# A finished lesson is worth a bonus star on top of the per-slide stars, and
-# finishing a whole unit is worth two more.
-LESSON_BONUS_STARS = 1
-UNIT_BONUS_STARS = 2
-
-
 def _require_parent(request: Request):
     if getattr(request.state, "role", None) not in (Role.PARENT, Role.ADMIN):
         raise HTTPException(403, "only a parent can change course placement")
@@ -762,63 +757,10 @@ async def english_lesson_complete(
             )
         )).scalar_one_or_none()
         already = row is not None and row.completed
-        if not already and await _lessons_today(user.name) >= limit:
-            raise HTTPException(409, f"daily lesson limit reached ({limit})")
-        if row is None:
-            row = EnglishLessonProgress(child_name=user.name, lesson_id=lesson_id)
-            history_db.add(row)
-        row.completed = 1
-        row.stars = max(row.stars or 0, earned)
-        row.updated_at = datetime.utcnow()
-
-        wallet = await history_db.get(EnglishChildWallet, user.name)
-        if wallet is None:
-            wallet = EnglishChildWallet(child_name=user.name)
-            history_db.add(wallet)
-
-        stars = row.stars
-        reward_earned = False
-        unit_completed = False
-        if not already:
-            gained = earned + LESSON_BONUS_STARS
-            done_ids = set((await history_db.execute(
-                select(EnglishLessonProgress.lesson_id).where(
-                    EnglishLessonProgress.child_name == user.name,
-                    EnglishLessonProgress.completed == 1,
-                )
-            )).scalars().all()) | {lesson_id}
-            # Unit bonus: every authored lesson in this unit is now done.
-            unit = next(
-                (u for c in COURSES for u in c["units"]
-                 if u["unit_id"] == meta["unit_id"]), None)
-            authored = set(available_lesson_ids())
-            unit_lesson_ids = [
-                l["lesson_id"] for l in (unit or {}).get("lessons", [])
-                if l["lesson_id"] in authored
-            ]
-            unit_completed = bool(unit_lesson_ids) and all(
-                l in done_ids for l in unit_lesson_ids)
-            if unit_completed:
-                gained += UNIT_BONUS_STARS
-            wallet.total_stars = (wallet.total_stars or 0) + gained
-            if wallet.reward_every and len(done_ids) % wallet.reward_every == 0:
-                wallet.rewards_pending = (wallet.rewards_pending or 0) + 1
-                reward_earned = True
-        wallet.updated_at = datetime.utcnow()
-        total_stars = wallet.total_stars or 0
-        rewards_pending = wallet.rewards_pending or 0
-        reward_text = (wallet.reward_text or "") if reward_earned else ""
-        await history_db.commit()
-    return {
-        "lesson_id": lesson_id,
-        "completed": True,
-        "stars": stars,
-        "total_stars": total_stars,
-        "unit_completed": unit_completed,
-        "reward_earned": reward_earned,
-        "reward_text": reward_text,
-        "rewards_pending": rewards_pending,
-    }
+    if not already and await _lessons_today(user.name) >= limit:
+        raise HTTPException(409, f"daily lesson limit reached ({limit})")
+    result = await record_lesson_completion(user.name, lesson_id, earned)
+    return {"lesson_id": lesson_id, "completed": True, **result}
 
 
 @app.get("/api/tutor/english/courses")
