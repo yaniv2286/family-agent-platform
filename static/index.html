@@ -2162,11 +2162,28 @@
             if (appContainer) appContainer.style.display = 'none';
         }
 
+        // A tab suspended across a deploy keeps an old DOM running against a
+        // new API — reload it when the deployed build no longer matches.
+        let appDeployedAt = null;
+
+        async function checkStalePage() {
+            if (!appDeployedAt) return;
+            try {
+                const response = await fetch('/api/health', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (data.deployed_at && data.deployed_at !== appDeployedAt) {
+                    location.reload();
+                }
+            } catch (error) { /* offline - leave the page as is */ }
+        }
+
         async function loadDeployInfo() {
             try {
                 const response = await fetch('/api/health');
                 if (!response.ok || !deployMeta) return;
                 const data = await response.json();
+                appDeployedAt = data.deployed_at || null;
                 const deployedAt = data.deployed_at ? new Date(data.deployed_at) : null;
                 const deployText = deployedAt && !Number.isNaN(deployedAt.getTime())
                     ? deployedAt.toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })
@@ -2177,6 +2194,13 @@
                 console.log('Deploy metadata unavailable');
             }
         }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') checkStalePage();
+        });
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted) checkStalePage();
+        });
 
         async function checkAppPin() {
             const storedPin = localStorage.getItem('app_pin');
@@ -2347,7 +2371,7 @@
                 }
             } catch (error) {
                 console.error('Error loading agents:', error);
-                grid.innerHTML = '<div class="loading">שגיאה בטעינת סוכנים</div>';
+                grid.innerHTML = '<div class="loading">שגיאה בטעינת סוכנים<br><button onclick="loadAgents()" style="margin-top:10px;padding:8px 18px;border-radius:14px;border:none;background:#667eea;color:white;cursor:pointer">נסה שוב</button></div>';
             }
         }
 

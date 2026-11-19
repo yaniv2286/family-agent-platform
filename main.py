@@ -350,7 +350,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.get("/")
 async def serve_index():
     """Serve the main index.html file"""
-    return FileResponse("static/index.html")
+    return FileResponse(
+        "static/index.html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/dashboard")
