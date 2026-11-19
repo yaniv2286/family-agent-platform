@@ -1728,7 +1728,7 @@
                 <div id="ec-wallet"></div>
             </div>
             <div id="ec-list"></div>
-            <button class="end-session-button" id="ec-free-chat" style="background:linear-gradient(135deg,#667eea,#764ba2);margin-top:14px">💬 שיחה חופשית עם KOK</button>
+            <button class="end-session-button" id="ec-free-chat" style="background:linear-gradient(135deg,#667eea,#764ba2);margin-top:14px">💬 שיחה חופשית עם KOKO</button>
         </div>
 
         <!-- Tutoring Screen -->
@@ -1912,7 +1912,7 @@
         function updateTutorToggleUI(subject) {
             toggleMathBtn.classList.toggle('active', subject === 'math');
             toggleEnglishBtn.classList.toggle('active', subject === 'english');
-            if (tutorNameTag) tutorNameTag.textContent = subject === 'english' ? 'KOK' : 'קוקו';
+            if (tutorNameTag) tutorNameTag.textContent = subject === 'english' ? 'KOKO' : 'קוקו';
         }
 
         /* ================= Live tutor avatar =================
@@ -1987,7 +1987,7 @@
                 avatarFrames[f] = img;
             }
             mouthOpen = false;
-            tutorNameTag.textContent = selectedSubject === 'english' ? 'KOK' : 'קוקו';
+            tutorNameTag.textContent = selectedSubject === 'english' ? 'KOKO' : 'קוקו';
         }
 
         /* ---- Status chip + listening ring on the call window ---- */
@@ -2839,7 +2839,7 @@
             const isTrader = screenName === 'trader';
             const isAgentLogs = screenName === 'agent-logs';
             const isCourses = screenName === 'english-courses';
-            headerTitle.textContent = isTutor ? (selectedSubject === 'english' ? 'KOK' : 'Koko') : isCourses ? 'קורסי אנגלית' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : isAgentLogs ? 'Live Agent Logs' : 'Family Agent Platform';
+            headerTitle.textContent = isTutor ? (selectedSubject === 'english' ? 'KOKO' : 'Koko') : isCourses ? 'קורסי אנגלית' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : isAgentLogs ? 'Live Agent Logs' : 'Family Agent Platform';
             headerSubtitle.textContent = isTutor ? 'בואו נלמד ביחד בכיף!' : isFitness ? 'אימון חכם, הדרגתי ובטוח' : isTrader ? 'מסחר אלגוריתמי, ביצועים וניהול סיכונים' : isAgentLogs ? 'ניטור פעילות בזמן אמת' : 'הסוכנים של המשפחה במקום אחד';
             platformAvatar.style.display = isTutor || isCourses || isFitness || isTrader || isAgentLogs ? 'none' : 'inline-block';
             kokoHeaderAvatar.style.display = isTutor ? 'inline-block' : 'none';
@@ -3040,7 +3040,7 @@
                 row.style.background = m.role === 'assistant' ? '#f8f9fa' : '#e9ecef';
                 row.style.borderRadius = '8px';
                 row.style.whiteSpace = 'pre-wrap';
-                const role = m.role === 'assistant' ? (selectedSubject === 'english' ? 'KOK' : 'Koko') : 'תלמיד';
+                const role = m.role === 'assistant' ? (selectedSubject === 'english' ? 'KOKO' : 'Koko') : 'תלמיד';
                 row.innerHTML = `<strong>${role}:</strong> ${m.content}`;
                 historyList.appendChild(row);
             }
@@ -3061,7 +3061,7 @@
         function renderBubble(role, content) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
-            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : (selectedSubject === 'english' ? 'KOK' : 'Koko')}</div>${content}`;
+            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : (selectedSubject === 'english' ? 'KOKO' : 'Koko')}</div>${content}`;
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
             return messageDiv;
@@ -4510,7 +4510,7 @@
             // the 2-4s wait feels like the app froze.
             const thinking = document.createElement('div');
             thinking.className = 'message assistant';
-            thinking.innerHTML = `<div class="role">${selectedSubject === 'english' ? 'KOK' : 'Koko'}</div>חושבת…`;
+            thinking.innerHTML = `<div class="role">${selectedSubject === 'english' ? 'KOKO' : 'Koko'}</div>חושבת…`;
             chatContainer.appendChild(thinking);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
