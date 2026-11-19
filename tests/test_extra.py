@@ -294,6 +294,148 @@ class TestLessonEngine:
         )
         assert response.status_code == 404
 
+    async def test_lesson_locked_outside_assigned_course(self, client, child_user):
+        """Once the parent places a child, lessons in other courses are locked.
+        Unplaced children can still preview any lesson."""
+        headers = {"x-app-pin": APP_PIN}
+        # Unplaced: any lesson is startable.
+        open_lesson = await client.get(
+            f"/api/tutor/english/lesson/a1.gtky.01_meet_you?user_id={child_user.id}",
+            headers=headers)
+        assert open_lesson.status_code == 200
+
+        placed = await client.put(
+            f"/api/tutor/english/placement/{child_user.id}",
+            json={"course_id": "pre_a"}, headers=headers)
+        assert placed.status_code == 200
+
+        locked = await client.get(
+            f"/api/tutor/english/lesson/a1.gtky.01_meet_you?user_id={child_user.id}",
+            headers=headers)
+        assert locked.status_code == 403
+        # Answers are locked too, not just the slide list.
+        locked_answer = await client.post(
+            f"/api/tutor/english/lesson/a1.gtky.01_meet_you/answer?user_id={child_user.id}",
+            json={"slide_id": "name", "answer": "my name is test"},
+            headers=headers)
+        assert locked_answer.status_code == 403
+
+        own = await client.get(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello?user_id={child_user.id}",
+            headers=headers)
+        assert own.status_code == 200
+
+    async def test_placement_reports_lesson_progress(self, client, child_user):
+        headers = {"x-app-pin": APP_PIN}
+        done = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
+            headers=headers)
+        assert done.status_code == 200
+        placement = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)
+        assert placement.json()["lesson_progress"]["pre_a.letters.00_hello"] == 4
+
+
+class TestEnglishWallet:
+    """The star bank: per-slide stars count what the child actually earned,
+    finishing a lesson adds a bonus star, a whole unit adds two more, and the
+    parent's reward cycle produces claimable gifts."""
+
+    async def test_earned_stars_and_lesson_bonus(self, client, child_user):
+        headers = {"x-app-pin": APP_PIN}
+        done = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
+            json={"stars_earned": 2}, headers=headers)
+        assert done.status_code == 200, done.text
+        body = done.json()
+        # 2 slide stars stored, 2 + 1 lesson bonus banked.
+        assert body["stars"] == 2
+        assert body["total_stars"] == 3
+        assert body["reward_earned"] is False
+
+        placement = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)
+        assert placement.json()["wallet"]["total_stars"] == 3
+        assert placement.json()["wallet"]["lessons_done"] == 1
+
+    async def test_replay_does_not_double_count_stars(self, client, child_user):
+        headers = {"x-app-pin": APP_PIN}
+        url = f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}"
+        first = await client.post(url, json={"stars_earned": 3}, headers=headers)
+        again = await client.post(url, json={"stars_earned": 4}, headers=headers)
+        assert again.json()["total_stars"] == first.json()["total_stars"]
+        # A better replay still updates the best star count for the lesson.
+        assert again.json()["stars"] == 4
+
+    async def test_parent_reward_cycle_and_claim(self, client, child_user):
+        headers = {"x-app-pin": APP_PIN}
+        placed = await client.put(
+            f"/api/tutor/english/placement/{child_user.id}",
+            json={"course_id": "pre_a", "daily_lesson_limit": 4,
+                  "reward_every": 2, "reward_text": "גלידה"},
+            headers=headers)
+        assert placed.status_code == 200, placed.text
+
+        first = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
+            json={"stars_earned": 4}, headers=headers)
+        assert first.json()["reward_earned"] is False
+
+        second = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.01_backyard/complete?user_id={child_user.id}",
+            json={"stars_earned": 5}, headers=headers)
+        body = second.json()
+        assert body["reward_earned"] is True
+        assert body["reward_text"] == "גלידה"
+        assert body["rewards_pending"] == 1
+
+        placement = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)
+        wallet = placement.json()["wallet"]
+        assert wallet["reward_every"] == 2
+        assert wallet["reward_text"] == "גלידה"
+        assert wallet["rewards_pending"] == 1
+
+        claim = await client.post(
+            f"/api/tutor/english/rewards/claim/{child_user.id}", headers=headers)
+        assert claim.json()["claimed"] == 1
+        after = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}", headers=headers)
+        assert after.json()["wallet"]["rewards_pending"] == 0
+
+    async def test_child_pin_cannot_claim_rewards(self, client, child_user, monkeypatch):
+        monkeypatch.setenv("CHILD_PIN", "child-pin-9999")
+        response = await client.post(
+            f"/api/tutor/english/rewards/claim/{child_user.id}",
+            headers={"x-app-pin": "child-pin-9999"})
+        assert response.status_code == 403
+
+    async def test_unit_bonus_on_last_lesson(self, client, child_user):
+        """Finishing every authored lesson in a unit is worth +2 bonus stars."""
+        headers = {"x-app-pin": APP_PIN}
+        placed = await client.put(
+            f"/api/tutor/english/placement/{child_user.id}",
+            json={"course_id": "a1", "daily_lesson_limit": 6},
+            headers=headers)
+        assert placed.status_code == 200
+        unit_lessons = ["a1.gtky.00_hello", "a1.gtky.01_meet_you",
+                        "a1.gtky.02_my_family", "a1.gtky.03_review"]
+        totals = []
+        for lesson_id in unit_lessons[:-1]:
+            done = await client.post(
+                f"/api/tutor/english/lesson/{lesson_id}/complete?user_id={child_user.id}",
+                json={"stars_earned": 4}, headers=headers)
+            assert done.status_code == 200, done.text
+            assert done.json()["unit_completed"] is False
+            totals.append(done.json()["total_stars"])
+        last = await client.post(
+            f"/api/tutor/english/lesson/{unit_lessons[-1]}/complete?user_id={child_user.id}",
+            json={"stars_earned": 4}, headers=headers)
+        body = last.json()
+        assert body["unit_completed"] is True
+        # Previous total + 4 earned + 1 lesson bonus + 2 unit bonus.
+        assert body["total_stars"] == totals[-1] + 7
+
 
 class TestUserExpressionEval:
     """Deterministic evaluation of expressions the child sends (e.g. homework).

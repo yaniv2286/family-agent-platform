@@ -40,6 +40,7 @@ from database import (
     ChatHistory,
     TutorSkillMastery,
     TutorPracticeAttempt,
+    EnglishChildWallet,
     EnglishCoursePlacement,
     EnglishLessonProgress,
     add_student_points,
@@ -62,8 +63,20 @@ from agents.messenger_agent import router as messenger_router
 from agents.data_agent import router as data_router
 from agents.nutrition_agent import router as nutrition_router
 from rbac import resolve_role, Role
-from english_curriculum import list_courses, get_course, get_lesson, course_ids, DEFAULT_DAILY_LESSON_LIMIT
-from lesson_engine import load_lesson, public_slide, grade as grade_slide
+from english_curriculum import (
+    COURSES,
+    list_courses,
+    get_course,
+    get_lesson,
+    course_ids,
+    DEFAULT_DAILY_LESSON_LIMIT,
+)
+from lesson_engine import (
+    available_lesson_ids,
+    load_lesson,
+    public_slide,
+    grade as grade_slide,
+)
 
 
 # Pydantic models for response
@@ -610,6 +623,19 @@ async def _tutor_child(user_id: int, db: AsyncSession):
 class CoursePlacementRequest(BaseModel):
     course_id: str
     daily_lesson_limit: Optional[int] = Field(default=None, ge=1, le=6)
+    # Parent-set reward cycle: a gift after every N completed lessons.
+    reward_every: Optional[int] = Field(default=None, ge=0, le=30)
+    reward_text: Optional[str] = Field(default=None, max_length=120)
+
+
+class LessonCompleteRequest(BaseModel):
+    stars_earned: Optional[int] = Field(default=None, ge=0, le=30)
+
+
+# A finished lesson is worth a bonus star on top of the per-slide stars, and
+# finishing a whole unit is worth two more.
+LESSON_BONUS_STARS = 1
+UNIT_BONUS_STARS = 2
 
 
 def _require_parent(request: Request):
@@ -627,6 +653,30 @@ def _slide(lesson: dict, slide_id: str) -> dict:
     if slide is None:
         raise HTTPException(422, "unknown slide_id")
     return slide
+
+
+async def _require_lesson_course(child_name: str, meta: dict) -> None:
+    """A scripted lesson is startable only inside the parent's chosen course.
+
+    When the parent has not placed the child yet, the catalog stays open so
+    the parent can preview; once a course is assigned, lessons outside it are
+    locked until the parent changes the placement.
+    """
+    async with TutorHistorySessionLocal() as history_db:
+        placement = await history_db.get(EnglishCoursePlacement, child_name)
+    if placement is not None and placement.course_id != meta["course_id"]:
+        raise HTTPException(403, "lesson is not in the child's assigned course")
+
+
+async def _daily_limit(child_name: str, meta: dict) -> int:
+    """The parent's placement override wins; otherwise the course default."""
+    course = get_course(meta["course_id"])
+    fallback = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
+    async with TutorHistorySessionLocal() as history_db:
+        placement = await history_db.get(EnglishCoursePlacement, child_name)
+    if placement is not None and placement.daily_lesson_limit:
+        return placement.daily_lesson_limit
+    return fallback
 
 
 async def _lessons_today(child_name: str) -> int:
@@ -651,9 +701,9 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
     lesson = load_lesson(lesson_id)
     if meta is None or lesson is None:
         raise HTTPException(404, "lesson not available yet")
+    await _require_lesson_course(user.name, meta)
     done_today = await _lessons_today(user.name)
-    course = get_course(meta["course_id"])
-    limit = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
+    limit = await _daily_limit(user.name, meta)
     return {
         "lesson_id": lesson_id,
         "title_he": lesson["title_he"],
@@ -672,8 +722,10 @@ async def english_lesson_answer(
     """Grade one slide. The browser never learns the answer before answering."""
     user = await _tutor_child(user_id, db)
     lesson = load_lesson(lesson_id)
-    if lesson is None:
+    meta = get_lesson(lesson_id)
+    if lesson is None or meta is None:
         raise HTTPException(404, "lesson not available yet")
+    await _require_lesson_course(user.name, meta)
     result = grade_slide(_slide(lesson, body.slide_id), body.answer)
     result["child_name"] = user.name
     return result
@@ -681,16 +733,27 @@ async def english_lesson_answer(
 
 @app.post("/api/tutor/english/lesson/{lesson_id}/complete")
 async def english_lesson_complete(
-    lesson_id: str, user_id: int, db: AsyncSession = Depends(get_db)
+    lesson_id: str,
+    user_id: int,
+    body: Optional[LessonCompleteRequest] = None,
+    db: AsyncSession = Depends(get_db),
 ):
-    """Record a finished lesson, respecting the daily lesson limit."""
+    """Record a finished lesson: slide stars, bonuses, and parent rewards."""
     user = await _tutor_child(user_id, db)
     lesson = load_lesson(lesson_id)
     meta = get_lesson(lesson_id)
     if lesson is None or meta is None:
         raise HTTPException(404, "lesson not available yet")
-    course = get_course(meta["course_id"])
-    limit = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
+    await _require_lesson_course(user.name, meta)
+    limit = await _daily_limit(user.name, meta)
+    stars_total = lesson.get("stars_total", 0)
+    # The browser counted the slides the child actually got right; when it
+    # does not say (older clients), keep the previous max-stars behavior.
+    earned = (
+        stars_total
+        if body is None or body.stars_earned is None
+        else min(body.stars_earned, stars_total)
+    )
     async with TutorHistorySessionLocal() as history_db:
         row = (await history_db.execute(
             select(EnglishLessonProgress).where(
@@ -705,13 +768,57 @@ async def english_lesson_complete(
             row = EnglishLessonProgress(child_name=user.name, lesson_id=lesson_id)
             history_db.add(row)
         row.completed = 1
-        row.stars = lesson.get("stars_total", 0)
+        row.stars = max(row.stars or 0, earned)
         row.updated_at = datetime.utcnow()
-        # Read before commit: expire_on_commit would lazy-load afterwards and
-        # raise MissingGreenlet inside the async request.
+
+        wallet = await history_db.get(EnglishChildWallet, user.name)
+        if wallet is None:
+            wallet = EnglishChildWallet(child_name=user.name)
+            history_db.add(wallet)
+
         stars = row.stars
+        reward_earned = False
+        unit_completed = False
+        if not already:
+            gained = earned + LESSON_BONUS_STARS
+            done_ids = set((await history_db.execute(
+                select(EnglishLessonProgress.lesson_id).where(
+                    EnglishLessonProgress.child_name == user.name,
+                    EnglishLessonProgress.completed == 1,
+                )
+            )).scalars().all()) | {lesson_id}
+            # Unit bonus: every authored lesson in this unit is now done.
+            unit = next(
+                (u for c in COURSES for u in c["units"]
+                 if u["unit_id"] == meta["unit_id"]), None)
+            authored = set(available_lesson_ids())
+            unit_lesson_ids = [
+                l["lesson_id"] for l in (unit or {}).get("lessons", [])
+                if l["lesson_id"] in authored
+            ]
+            unit_completed = bool(unit_lesson_ids) and all(
+                l in done_ids for l in unit_lesson_ids)
+            if unit_completed:
+                gained += UNIT_BONUS_STARS
+            wallet.total_stars = (wallet.total_stars or 0) + gained
+            if wallet.reward_every and len(done_ids) % wallet.reward_every == 0:
+                wallet.rewards_pending = (wallet.rewards_pending or 0) + 1
+                reward_earned = True
+        wallet.updated_at = datetime.utcnow()
+        total_stars = wallet.total_stars or 0
+        rewards_pending = wallet.rewards_pending or 0
+        reward_text = (wallet.reward_text or "") if reward_earned else ""
         await history_db.commit()
-    return {"lesson_id": lesson_id, "completed": True, "stars": stars}
+    return {
+        "lesson_id": lesson_id,
+        "completed": True,
+        "stars": stars,
+        "total_stars": total_stars,
+        "unit_completed": unit_completed,
+        "reward_earned": reward_earned,
+        "reward_text": reward_text,
+        "rewards_pending": rewards_pending,
+    }
 
 
 @app.get("/api/tutor/english/courses")
@@ -726,8 +833,29 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
     user = await _tutor_child(user_id, db)
     async with TutorHistorySessionLocal() as history_db:
         placement = await history_db.get(EnglishCoursePlacement, user.name)
+        wallet = await history_db.get(EnglishChildWallet, user.name)
+        progress_rows = (await history_db.execute(
+            select(EnglishLessonProgress).where(
+                EnglishLessonProgress.child_name == user.name,
+                EnglishLessonProgress.completed == 1,
+            )
+        )).scalars().all()
+    lesson_progress = {row.lesson_id: row.stars for row in progress_rows}
+    wallet_state = {
+        "total_stars": (wallet.total_stars if wallet else 0),
+        "reward_every": (wallet.reward_every if wallet else 0),
+        "reward_text": (wallet.reward_text if wallet else ""),
+        "rewards_pending": (wallet.rewards_pending if wallet else 0),
+        "lessons_done": len(lesson_progress),
+    }
     if placement is None:
-        return {"user_id": user_id, "child_name": user.name, "course": None}
+        return {
+            "user_id": user_id,
+            "child_name": user.name,
+            "course": None,
+            "lesson_progress": lesson_progress,
+            "wallet": wallet_state,
+        }
     course = get_course(placement.course_id)
     return {
         "user_id": user_id,
@@ -735,6 +863,8 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
         "course_id": placement.course_id,
         "daily_lesson_limit": placement.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
         "course": course,
+        "lesson_progress": lesson_progress,
+        "wallet": wallet_state,
     }
 
 
@@ -758,6 +888,16 @@ async def set_english_placement(
         placement.course_id = body.course_id
         placement.daily_lesson_limit = body.daily_lesson_limit
         placement.updated_at = datetime.utcnow()
+        if body.reward_every is not None or body.reward_text is not None:
+            wallet = await history_db.get(EnglishChildWallet, user.name)
+            if wallet is None:
+                wallet = EnglishChildWallet(child_name=user.name)
+                history_db.add(wallet)
+            if body.reward_every is not None:
+                wallet.reward_every = body.reward_every
+            if body.reward_text is not None:
+                wallet.reward_text = body.reward_text
+            wallet.updated_at = datetime.utcnow()
         await history_db.commit()
     return {
         "user_id": user_id,
@@ -765,6 +905,25 @@ async def set_english_placement(
         "course_id": body.course_id,
         "daily_lesson_limit": body.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
     }
+
+
+@app.post("/api/tutor/english/rewards/claim/{user_id}")
+async def claim_english_rewards(
+    user_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Parent-only: mark all pending rewards as actually given to the child."""
+    _require_parent(request)
+    user = await _tutor_child(user_id, db)
+    async with TutorHistorySessionLocal() as history_db:
+        wallet = await history_db.get(EnglishChildWallet, user.name)
+        claimed = 0
+        if wallet is not None and wallet.rewards_pending:
+            claimed = wallet.rewards_pending
+            wallet.rewards_claimed = (wallet.rewards_claimed or 0) + claimed
+            wallet.rewards_pending = 0
+            wallet.updated_at = datetime.utcnow()
+            await history_db.commit()
+    return {"child_name": user.name, "claimed": claimed}
 
 
 @app.get("/api/tutor/daily-practice/{user_id}")

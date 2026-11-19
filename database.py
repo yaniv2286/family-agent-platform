@@ -792,6 +792,23 @@ class EnglishLessonProgress(TutorHistoryBase):
     )
 
 
+class EnglishChildWallet(TutorHistoryBase):
+    """Star bank and the parent's reward settings for the English courses.
+
+    Stars accumulate across lessons (one per correct slide, plus finish and
+    unit bonuses). reward_every=0 means the parent has not set a gift cycle.
+    """
+    __tablename__ = "english_child_wallet"
+
+    child_name = Column(String, primary_key=True)
+    total_stars = Column(Integer, nullable=False, default=0)
+    reward_every = Column(Integer, nullable=False, default=0)
+    reward_text = Column(String, nullable=False, default="")
+    rewards_pending = Column(Integer, nullable=False, default=0)
+    rewards_claimed = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class EnglishCoursePlacement(TutorHistoryBase):
     """Which English course the parent put this child in.
 

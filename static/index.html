@@ -594,17 +594,32 @@
         .ec-unit { margin: 8px 0; }
         .ec-unit summary { cursor: pointer; font-weight: 700; color: #3730a3; }
         .ec-lesson { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed #e5e7eb; font-size: 14px; }
+        .ec-lesson.done { color: #15803d; }
+        .ec-lesson.next { background: #eef2ff; border-radius: 10px; padding: 6px 8px; font-weight: 700; }
+        .ec-stars { font-size: 12px; }
         .ec-soon { color: #9ca3af; font-size: 12px; white-space: nowrap; }
         .ec-assign { border: none; background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; border-radius: 999px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
         .ec-assign[disabled] { background: #d1d5db; cursor: default; }
         .ec-start { border: 1px solid #667eea; background: #fff; color: #4338ca; border-radius: 999px; padding: 4px 14px; font-weight: 700; cursor: pointer; }
-        .lesson-slide { background: #fff; border-radius: 18px; padding: 22px; text-align: center; box-shadow: 0 2px 12px rgba(74,87,184,.12); }
+        .ec-wallet { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -6px 0 14px; }
+        .ec-stars-total { font-size: 20px; font-weight: 800; color: #b8860b; }
+        .ec-goal { color: #64748b; font-size: 14px; }
+        .ec-gift { color: #d97706; font-weight: 700; }
+        .ec-claim { border: none; background: #f59e0b; color: #fff; border-radius: 999px; padding: 6px 14px; font-weight: 700; cursor: pointer; }
+        .ec-reward-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: #64748b; width: 100%; }
+        .ec-reward-form input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; }
+        .ec-reward-form input[type=number] { width: 58px; }
+        .ec-reward-form input[type=text] { flex: 1; min-width: 120px; max-width: 220px; }
+        .lesson-slide { background: #fff; border-radius: 18px; padding: 22px; text-align: center; box-shadow: 0 2px 12px rgba(74,87,184,.12); position: relative; }
         .ls-progress { color: #f59e0b; font-size: 18px; letter-spacing: 2px; }
         .ls-he { color: #64748b; margin: 8px 0; font-size: 15px; }
         .ls-en { color: #312e81; font-size: 28px; font-weight: 800; margin: 6px 0 16px; }
         .ls-options { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
         .ls-options .ec-start { font-size: 18px; padding: 12px 20px; }
         .ls-feedback { margin-top: 14px; font-weight: 700; color: #3730a3; min-height: 22px; }
+        .ls-reward { color: #d97706; font-weight: 700; font-size: 18px; margin-top: 6px; }
+        .ls-star-pop { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); font-size: 42px; pointer-events: none; animation: lsStarPop 1.4s ease forwards; }
+        @keyframes lsStarPop { 0% { opacity: 0; transform: translateX(-50%) scale(.3); } 30% { opacity: 1; transform: translateX(-50%) scale(1.4); } 100% { opacity: 0; transform: translateX(-50%) translateY(-34px) scale(1); } }
 
         /* Syllable-clap chips inside the game modal */
         .syl-chips { display: flex; gap: 8px; justify-content: center; margin: 12px 0; flex-wrap: wrap; }
@@ -1710,6 +1725,7 @@
             <div class="ec-head">
                 <h2 id="ec-heading">קורסי אנגלית</h2>
                 <p id="ec-placement">טוען את הקורס...</p>
+                <div id="ec-wallet"></div>
             </div>
             <div id="ec-list"></div>
             <button class="end-session-button" id="ec-free-chat" style="background:linear-gradient(135deg,#667eea,#764ba2);margin-top:14px">💬 שיחה חופשית עם KOK</button>
@@ -2497,23 +2513,41 @@
                 if (!catalogRes.ok || !placementRes.ok) throw new Error('catalog');
                 const catalog = await catalogRes.json();
                 const placement = await placementRes.json();
+                const progress = placement.lesson_progress || {};
+                const placed = !!placement.course_id;
                 placementEl.textContent = placement.course
-                    ? `הקורס הנוכחי: ${placement.course.title_he} · עד ${placement.daily_lesson_limit} שיעורים ביום`
+                    ? `הקורס הנוכחי: ${placement.course.title_he} · עד ${placement.daily_lesson_limit} שיעורים ביום · ${Object.keys(progress).length} שיעורים הושלמו`
                     : 'עדיין אין קורס. ההורה בוחר קורס - כל ילד יכול להיות בכל קורס, בלי קשר לגיל.';
+                renderEnglishWallet(placement.wallet || {}, placement);
                 list.innerHTML = '';
+                // The next uncompleted lesson in the child's own course is
+                // highlighted so the path forward is obvious.
+                let nextMarked = false;
                 for (const course of catalog.courses) {
+                    const isCurrent = placement.course_id === course.course_id;
                     const card = document.createElement('div');
-                    card.className = 'ec-course' + (placement.course_id === course.course_id ? ' current' : '');
+                    card.className = 'ec-course' + (isCurrent ? ' current' : '');
                     const units = course.units.map(unit => {
-                        const lessons = unit.lessons.map(lesson =>
-                            `<div class="ec-lesson"><span>${escapeFitnessHtml(lesson.title_he)}</span>` +
-                            (lesson.available
-                                ? `<button class="ec-start" data-lesson="${lesson.lesson_id}">התחל</button>`
-                                : `<span class="ec-soon">בקרוב</span>`) + `</div>`).join('');
-                        return `<details class="ec-unit"><summary>${escapeFitnessHtml(unit.title_he)} · ${unit.available_count}/${unit.lesson_count}</summary>` +
+                        const lessons = unit.lessons.map(lesson => {
+                            if (!lesson.available)
+                                return `<div class="ec-lesson"><span>${escapeFitnessHtml(lesson.title_he)}</span><span class="ec-soon">בקרוב</span></div>`;
+                            // Lessons outside the assigned course stay visible
+                            // in the catalog but are not startable.
+                            if (placed && !isCurrent)
+                                return `<div class="ec-lesson"><span>${escapeFitnessHtml(lesson.title_he)}</span><span class="ec-soon">🔒</span></div>`;
+                            const stars = progress[lesson.lesson_id];
+                            const done = stars !== undefined;
+                            let label = escapeFitnessHtml(lesson.title_he);
+                            if (done) label = `✅ ${label} <span class="ec-stars">${'⭐'.repeat(stars)}</span>`;
+                            let cls = 'ec-lesson';
+                            if (done) cls += ' done';
+                            if (!done && isCurrent && !nextMarked) { cls += ' next'; nextMarked = true; label = `▶ ${label}`; }
+                            return `<div class="${cls}"><span>${label}</span>` +
+                                `<button class="ec-start" data-lesson="${lesson.lesson_id}">${done ? 'שוב' : 'התחל'}</button></div>`;
+                        }).join('');
+                        return `<details class="ec-unit"${isCurrent ? ' open' : ''}><summary>${escapeFitnessHtml(unit.title_he)} · ${unit.available_count}/${unit.lesson_count}</summary>` +
                             `<p style="color:#64748b;font-size:13px">${escapeFitnessHtml(unit.blurb_he)}</p>${lessons}</details>`;
                     }).join('');
-                    const isCurrent = placement.course_id === course.course_id;
                     card.innerHTML = `<h3>${escapeFitnessHtml(course.title_he)} <span class="ec-badge">${escapeFitnessHtml(course.cefr)}</span></h3>` +
                         `<p>${escapeFitnessHtml(course.blurb_he)}</p>${units}` +
                         `<button class="ec-assign" data-course="${course.course_id}" ${isCurrent ? 'disabled' : ''}>${isCurrent ? '✓ הקורס הנוכחי' : 'שיבוץ לקורס הזה'}</button>`;
@@ -2527,6 +2561,45 @@
             }
         }
 
+        /* Star bank + parent reward settings. Stars accumulate across lessons;
+           the parent sets a gift every N lessons and claims it once given. */
+        function renderEnglishWallet(wallet, placement) {
+            const el = document.getElementById('ec-wallet');
+            const isParent = ['parent', 'admin'].includes(currentRole);
+            const parts = [`<span class="ec-stars-total">⭐ ${wallet.total_stars || 0}</span>`];
+            if ((wallet.rewards_pending || 0) > 0) {
+                parts.push(`<span class="ec-gift">🎁 ${wallet.rewards_pending} מתנות ממתינות${wallet.reward_text ? ` — ${escapeFitnessHtml(wallet.reward_text)}` : ''}!</span>`);
+            } else if ((wallet.reward_every || 0) > 0) {
+                const next = wallet.reward_every - ((wallet.lessons_done || 0) % wallet.reward_every);
+                parts.push(`<span class="ec-goal">עוד ${next} ${next === 1 ? 'שיעור' : 'שיעורים'} למתנה${wallet.reward_text ? ` (${escapeFitnessHtml(wallet.reward_text)})` : ''} 🎁</span>`);
+            }
+            if (isParent && (wallet.rewards_pending || 0) > 0)
+                parts.push('<button class="ec-claim" id="ec-claim">נתנו את המתנה ✓</button>');
+            if (isParent && placement.course_id) {
+                parts.push(`<div class="ec-reward-form"><span>🎁 מתנה אחרי</span>` +
+                    `<input id="ec-reward-every" type="number" min="0" max="30" value="${wallet.reward_every || 0}">` +
+                    `<span>שיעורים:</span>` +
+                    `<input id="ec-reward-text" type="text" maxlength="60" placeholder="למשל: גלידה 🍦" value="${escapeFitnessHtml(wallet.reward_text || '')}">` +
+                    `<button class="ec-assign" id="ec-reward-save" style="padding:6px 12px;font-size:13px">שמור</button></div>`);
+            }
+            el.innerHTML = parts.join('');
+            const claim = document.getElementById('ec-claim');
+            if (claim) claim.onclick = async () => {
+                await safeFetch(`/api/tutor/english/rewards/claim/${selectedUserId}`, { method: 'POST' });
+                loadEnglishCourses();
+            };
+            const save = document.getElementById('ec-reward-save');
+            if (save) save.onclick = async () => {
+                const every = parseInt(document.getElementById('ec-reward-every').value) || 0;
+                const text = document.getElementById('ec-reward-text').value;
+                const response = await safeFetch(`/api/tutor/english/placement/${selectedUserId}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ course_id: placement.course_id, reward_every: every, reward_text: text }),
+                });
+                if (response.ok) loadEnglishCourses();
+            };
+        }
+
         /* Scripted lesson player. The tutor reads each slide aloud; the child
            answers by tapping or by holding Space. Grading happens on the
            server, so the page never knows the right answer in advance. */
@@ -2535,7 +2608,9 @@
         async function startEnglishLesson(lessonId) {
             const response = await safeFetch(`/api/tutor/english/lesson/${lessonId}?user_id=${selectedUserId}`);
             if (!response.ok) {
-                document.getElementById('ec-placement').textContent = 'השיעור הזה עדיין לא מוכן.';
+                document.getElementById('ec-placement').textContent = response.status === 403
+                    ? 'השיעור הזה לא בקורס שההורה בחר. ההורה יכול להחליף קורס למטה.'
+                    : 'השיעור הזה עדיין לא מוכן.';
                 return;
             }
             const lesson = await response.json();
@@ -2572,11 +2647,28 @@
             const finish = async (earned) => {
                 const done = await safeFetch(
                     `/api/tutor/english/lesson/${lesson.lesson_id}/complete?user_id=${selectedUserId}`,
-                    { method: 'POST' });
-                box.innerHTML = done.ok
-                    ? `<div class="ls-en">כל הכבוד!</div><div class="ls-he">סיימתם את "${escapeFitnessHtml(lesson.title_he)}" עם ${earned} כוכבים.</div>`
-                    : `<div class="ls-he">השיעור נגמר, אבל הגעתם למכסת השיעורים היומית.</div>`;
-                speakResponse('כל הכבוד! סיימתם את השיעור.', 'celebrate');
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ stars_earned: earned }) });
+                if (!done.ok) {
+                    box.innerHTML = `<div class="ls-he">השיעור נגמר, אבל הגעתם למכסת השיעורים היומית.</div>`;
+                    speakResponse('כל הכבוד! סיימתם את השיעור.', 'celebrate');
+                    return;
+                }
+                const data = await done.json();
+                const lines = [`<div class="ls-en">כל הכבוד!</div>`,
+                    `<div class="ls-he">סיימתם את "${escapeFitnessHtml(lesson.title_he)}" עם ${earned} ⭐ +1 ⭐ בונוס על השיעור — סה"כ ${data.total_stars} כוכבים!</div>`];
+                if (data.unit_completed)
+                    lines.push(`<div class="ls-he ls-reward">🏆 הושלמה כל היחידה — +2 ⭐ בונוס!</div>`);
+                if (data.reward_earned)
+                    lines.push(`<div class="ls-he ls-reward">🎁 קיבלת מתנה${data.reward_text ? ` — ${escapeFitnessHtml(data.reward_text)}` : ''}! ספרו להורה.</div>`);
+                box.innerHTML = lines.join('');
+                speakResponse(
+                    data.reward_earned
+                        ? 'כל הכבוד! הרווחת מתנה! ספרי להורה!'
+                        : data.unit_completed
+                            ? 'כל הכבוד! סיימתם את כל היחידה!'
+                            : 'כל הכבוד! סיימתם את השיעור.',
+                    'celebrate');
             };
 
             const answered = async (answer) => {
@@ -2587,6 +2679,13 @@
                       body: JSON.stringify({ slide_id: slide.id, answer }) });
                 const result = await response.json();
                 const nextStars = stars + (result.star ? 1 : 0);
+                if (result.star) {
+                    const pop = document.createElement('span');
+                    pop.className = 'ls-star-pop';
+                    pop.textContent = '+⭐';
+                    box.appendChild(pop);
+                    setTimeout(() => pop.remove(), 1400);
+                }
                 feedback.textContent = result.praise_he || '';
                 speakResponse(result.praise_he || '', result.correct ? 'celebrate' : 'nod');
                 const last = index + 1 >= lesson.slides.length;
