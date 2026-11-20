@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -45,7 +46,11 @@ _NEWER_MODELS = {PRIMARY_MODEL}
 # Once we discover a model is unavailable for this account, we remember that
 # for the lifetime of the process to avoid paying the latency cost of a
 # failing request on every single chat turn. The set stores failed model names.
-_unavailable_models: set = set()
+# model -> monotonic timestamp after which it may be tried again. A 429
+# demotes the primary model only briefly (rate limits are transient), not
+# for the whole process lifetime.
+_unavailable_models: dict = {}
+_MODEL_RETRY_AFTER_SECONDS = 90
 
 
 def _parse_json_reply(raw: str) -> Tuple[str, int, Optional[str], Optional[bool], int]:
@@ -377,7 +382,11 @@ class BaseAgent:
                 role = "user"
             messages.append({"role": role, "content": msg.get("content") or ""})
 
-        model_to_try = primary if primary not in _unavailable_models else fallback
+        model_to_try = (
+            primary
+            if _unavailable_models.get(primary, 0) < time.monotonic()
+            else fallback
+        )
 
         try:
             start = time.perf_counter()
@@ -404,7 +413,7 @@ class BaseAgent:
                     fallback_model=fallback,
                     error=str(primary_error),
                 )
-                _unavailable_models.add(primary)
+                _unavailable_models[primary] = time.monotonic() + _MODEL_RETRY_AFTER_SECONDS
                 try:
                     start = time.perf_counter()
                     logger.info("OpenAI chat fallback started", model=fallback)
@@ -423,8 +432,17 @@ class BaseAgent:
                     reply = response.choices[0].message.content
                     return reply.strip() if reply else ""
                 except Exception:
-                    logger.exception("Fallback model failed")
-                    return "מצטערים, יש בעיה זמנית בחיבור. אנא נסו שוב בעוד רגע!"
+                    logger.warning("Fallback model failed, retrying once after short wait")
+                    try:
+                        await asyncio.sleep(1.5)
+                        response = await client.chat.completions.create(
+                            **_build_completion_kwargs(fallback, messages, max_tokens, json_response=json_response)
+                        )
+                        reply = response.choices[0].message.content
+                        return reply.strip() if reply else ""
+                    except Exception:
+                        logger.exception("Fallback model failed twice")
+                        return "מצטערים, יש בעיה זמנית בחיבור. אנא נסו שוב בעוד רגע!"
             logger.exception("OpenAI chat completion failed")
             return "מצטערים, יש בעיה זמנית בחיבור. אנא נסו שוב בעוד רגע!"
 
