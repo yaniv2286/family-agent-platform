@@ -841,20 +841,14 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "recording.mp3", 
     # plausible-looking words ("if Sharon mishpat" for Hebrew speech during an
     # English lesson). Auto-detect per utterance is the only safe option.
     # The prompt still nudges Whisper toward the lesson context.
+    # NOTE: keep these prompts SHORT and free of example phrases. Whisper
+    # hallucinates prompt text on silent/unclear audio - a vocabulary list
+    # literally became the child's message in production (ינאי's turn was the
+    # full prompt verbatim, and "איך אומרים" kept appearing out of thin air).
     if subject == "english":
-        prompt = (
-            "ילד ישראלי מתרגל אנגלית, יכול לענות באנגלית או לשאול בעברית. "
-            "The child is practicing simple English words like car, cat, dog, ball, red, blue, "
-            "hello, kid, friend - expect accented single English words as answers. "
-            "שאלות נפוצות: 'איך אומרים', 'מה זה', 'איך כותבים', 'לא הבנתי', 'עוד פעם'. "
-            "Important: a short English word like 'car' may be transcribed as a similar-sounding "
-            "Hebrew word like 'קר' - prefer the English vocabulary word when the lesson expects it."
-        )
+        prompt = "Israeli child practicing English vocabulary."
     else:
-        prompt = (
-            "ילד קטן שמדבר לאט ומשלב קצת שגיאות, שיחה בעברית, יכול לומר מספרים. "
-            "שאלות נפוצות: 'איך אומרים', 'מה זה', 'לא הבנתי', 'עוד פעם'."
-        )
+        prompt = "ילד קטן עונה על שאלות חשבון בעברית, ממשפט במספרים."
 
     async def _call(model, audio_obj, context, fmt):
         return await client.audio.transcriptions.create(
@@ -914,6 +908,26 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "recording.mp3", 
                 return ""
         latency = time.perf_counter() - start
         text = response.text.strip()
+
+        # Whisper hallucination guard: on silent/unclear audio the model
+        # sometimes echoes its own context prompt or meta-descriptions as the
+        # "transcript" (seen in production - the full prompt became the
+        # child's message). Those are never real child speech.
+        if any(
+            marker in text
+            for marker in (
+                "שאלות נפוצות",
+                "ילד קטן שמדבר",
+                "שיחה בעברית, יכול לומר",
+                "practicing English",
+                "Israeli child",
+                "speech-recognition",
+                "תמלול",
+            )
+        ):
+            logger.warning("transcription echoed prompt/meta text, discarding", text=text[:120])
+            return ""
+
         logger.info(
             "OpenAI transcription finished",
             model=model,
@@ -1242,6 +1256,8 @@ class MathTutor(BaseAgent):
 9. השתמש בסימון מתמטי פשוט שמתאים לרמת הכיתה
 10. חובה מוחלטת - סדר פעולות חשבון: בתוך סוגריים ובכל ביטוי, קודם כפל וחילוק (משמאל לימין) ואז חיבור וחיסור. דוגמה: (5+5:5)*5 = (5+1)*5 = 30, ולא 10. לעולם אל תעשה/י חיבור לפני חילוק גם בתוך סוגריים. אם נכתב ביטוי עם סוגריים, פרט/י את החישוב צעד-אחר-צעד לפי הסדר הזה לפני שאת/ה מכריז/ה על תשובה.
 11. חובה מוחלטת - עיצוב מתמטי: אין להשתמש אף פעם בפורמט LaTeX (למשל \\times, \\frac, או סימני לוכסן). השתמש תמיד בסימנים פשוטים בטקסט: * או המילה "כפול" לכפל, / לחילוק, ומספרים רגילים. ההודעות חייבות להיות נקיות מארטיפקטים של קוד.
+12. חובה מוחלטת - נושא אחד בלבד: את/ה מורה לחשבון בלבד. אם התלמיד/ה שואל שאלה מחוץ לנושא (למשל "איך אומרים X באנגלית", שאלה על נושא אחר) - ענה/י במשפט אחד קצר או אמור/י שזה שייך לשיעור אחר, וחזור/י מיד לאתגר החשבון. אסור להמציא תרגומים או תוכן מנושא אחר.
+13. חובה מוחלטת - שבח רק על תשובה נכונה: אם התשובה המספרית שגויה - אסור לשבח כאילו היא נכונה ואסור להגיד "התשובה היא X" כשהילד אמר Y שונה. אמור/י בכנות ובעדינות שהתשובה שגויה, תן/י רמז קטן, ותן/י ניסיון נוסף. שבח סותר ("כל הכבוד! התשובה היא 4" אחרי שהילד אמר 5) מבלבל את הילד.
 
 חובה מוחלטת - טריקים, קיצורי דרך וחשיבה מחוץ לקופסה:
 א. אל תלמד/י רק "איך מחשבים" - למד/י סודות וקיצורי דרך שגורמים לחשבון להרגיש כמו קסם. לפני תרגיל חדש: הצג/י טריק קצר, הסבר/י במשפט אחד למה הוא עובד, ואז תן/י לילד/ה לנסות אותו על תרגיל דומה.
@@ -1726,6 +1742,7 @@ class EnglishTutor(BaseAgent):
 - התלמיד/ה עונה בעיקר בדיבור שמתומלל אוטומטית, והתמלול לעיתים קרובות משובש - במיוחד אצל ילדים קטנים עם הגייה לא ברורה. מילים כמו "song" או "סונג" במקום "saw", או ג'יבריש חלקי, הן כמעט תמיד ניסיון אמיתי להגות את המשפט.
 - אם ההגייה נשמעת קרובה למילה הנכונה - קבל/י את התשובה כנכונה, שבח/י, ועבור/י למשפט הבא. אסור לתקן על בסיס האיות של התמלול - בדק/י רק שהילד/ה השתמש במילים ובמבנה הנכונים.
 - דוגמאות לתמלול משובש של מילה נכונה: "קר"/"kar"/"col"/"cold" כשהילד אמר "car" | "קיט"/"kid" כשאמר "kid" | "יללו"/"yelo" כשאמר "yellow" | "גרין"/"grin" כשאמר "green". מילה בעברית שנשמעת כמו האנגלית המבוקשת היא כמעט תמיד הצלחה, לא כשלון.
+- כל מילה אמיתית באנגלית שהילד/ה מפיק/ה מקבלת הכרה - גם אם היא מחוץ לתוכנית. אם הילד אמר "cow" באמצע תרגיל אחר, שבח/י אותו על הידיעה ("cow זה פרה - כל הכבוד שאתה יודע!") ואז חזור/י לתרגיל. אסור להתעלם מאנגלית נכונה שהילד/ה הפיק/ה.
 - אם ההודעה היא ג'יבריש מוחלט (מקשים אקראיים, "ווווו..."), אל תמשיך/י לתקן - הגב/י במשפט קצר ושובב, והצע/י בחירה: תרגיל קל יותר, נושא אחר, או הפסקה קצרה.
 - התלמיד/ה רשאי/ת לדבר בעברית באמצע השיעור - לשאול שאלה, לבקש הסבר, או לספר משהו. השב/י בעברית בטבעיות, ענ/י על השאלה, ואז הזמן/י בחזרה לתרגול באנגלית במשפט אחד. אסור להתייחס לעברית כ"תשובה שגויה" או להתעלם ממנה.
 

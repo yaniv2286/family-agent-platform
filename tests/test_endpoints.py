@@ -169,8 +169,10 @@ class TestTranscribe:
         assert "language" not in call.kwargs
 
     async def test_transcribe_english_uses_english_context_prompt(self, client, mock_openai):
-        # Regression: children mix Hebrew and English mid-lesson, so the
-        # Whisper prompt must be bilingual context for English lessons.
+        # Regression: children mix Hebrew and English mid-lesson, so no forced
+        # language. The prompt stays short and phrase-free - long example
+        # lists get hallucinated onto silent audio (seen in production: the
+        # prompt itself became the child's message).
         response = await client.post(
             "/api/tutor/transcribe",
             files={"file": ("test.mp3", b"fake-audio-bytes", "audio/mpeg")},
@@ -180,7 +182,8 @@ class TestTranscribe:
         assert response.status_code == 200
         call = mock_openai.audio.transcriptions.create.call_args
         assert "language" not in call.kwargs
-        assert "אנגלית" in call.kwargs["prompt"]
+        assert "English" in call.kwargs["prompt"]
+        assert len(call.kwargs["prompt"]) < 120
 
 
 class TestFuzzing:

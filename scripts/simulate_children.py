@@ -220,11 +220,17 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
     persona = kid["persona_en"] if subject == "english" else kid["persona_math"]
     url = "/api/tutor/english" if subject == "english" else "/api/tutor/chat"
 
+    probe_reply = None
     for i in range(turns):
         if i == 0:
             body_msgs = []
         else:
-            utt = await child_reply(persona, messages, replies[-1])
+            # Scripted probe: mid-session off-topic question in math must be
+            # answered briefly and steered back - never a fabricated lesson.
+            if subject == "math" and i == 2:
+                utt = "איך אומרים חתול באנגלית?"
+            else:
+                utt = await child_reply(persona, messages, replies[-1])
             messages.append({"role": "user", "content": utt})
             body_msgs = list(messages)
         body = {"user_id": user.id, "messages": body_msgs, "idempotency_key": str(uuid.uuid4())}
@@ -236,6 +242,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             fails.append(f"turn {i}: HTTP {r.status_code}: {r.text[:120]}")
             break
         reply = r.json()["reply"]
+        if subject == "math" and i == 2:
+            probe_reply = reply
         messages.append({"role": "assistant", "content": reply})
         replies.append(reply)
         if verbose:
@@ -272,6 +280,28 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
         ratios = [en_ratio(r) for r in replies]
         if sum(ratios) / len(ratios) > 0.30:
             fails.append("math replies contain too much English content")
+        # Off-topic probe must be brief and steer back to math, not a
+        # fabricated English lesson (production bug: "איך אומרים" -> made-up
+        # 'ציור=drawing' answer, twice verbatim).
+        if probe_reply is not None:
+            if re.search(r"'[a-zA-Z]+'\s*(זה|היא|zeh)", probe_reply) and not re.search(
+                r"(חשבון|תרגיל|מספר|כמה|בוא נחזור|חזור|נסה)", probe_reply
+            ):
+                fails.append(f"off-topic probe became a lesson instead of steering back: {probe_reply[:100]!r}")
+        # Praise-for-wrong-answer check: pure-number child reply that KOKO
+        # both praises and contradicts (production bug: child said 5, KOKO
+        # said 'כל הכבוד! התשובה היא אכן 4').
+        for m, nxt in zip(messages, messages[1:]):
+            if m["role"] == "user" and re.fullmatch(r"\s*\d+\s*", m.get("content", "")):
+                said = int(m["content"].strip())
+                if nxt["role"] == "assistant":
+                    r = nxt["content"]
+                    if re.search(r"התשובה היא (אכן |באמת )?(\d+)", r):
+                        stated = int(re.search(r"התשובה היא (?:אכן |באמת )?(\d+)", r).group(1))
+                        if stated != said and re.search(r"(כל הכבוד|נכון|מצוין|מעולה)", r):
+                            fails.append(
+                                f"praised wrong answer: child said {said}, KOKO praised but stated {stated}: {r[:100]!r}"
+                            )
 
     return fails
 
