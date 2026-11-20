@@ -1792,7 +1792,16 @@
         // Per-subject message buffers so switching between Math and English
         // restores the existing conversation instead of firing a brand-new
         // greeting (and spamming the child with a fresh lesson opener).
-        const subjectSession = { math: null, english: null };
+        // Per-child, per-subject conversation cache. Keyed by user_id so one
+        // child's open session can NEVER bleed into another child's screen
+        // (production bug: Libi's math chat restored inside Noya's session).
+        const subjectSession = {};
+        function childSession() {
+            if (!subjectSession[selectedUserId]) {
+                subjectSession[selectedUserId] = { math: null, english: null };
+            }
+            return subjectSession[selectedUserId];
+        }
         let currentDailySkill = null;
 
         // DOM Elements
@@ -2923,8 +2932,8 @@
             selectedUserProfile = null;
             selectedSubject = null;
             messages = [];
-            subjectSession.math = null;
-            subjectSession.english = null;
+            // Keep other children's cached sessions intact; just detach ours.
+            // Each child keeps their own isolated session keyed by their id.
             sessionStartTime = null;
             stopSessionTimer();
             if (historyBtn) historyBtn.style.display = 'none';
@@ -2946,7 +2955,7 @@
 
             // If this child already has an open conversation for this subject,
             // restore it instead of generating a fresh greeting.
-            const existing = subjectSession[selectedSubject];
+            const existing = childSession()[selectedSubject];
             if (existing && existing.length) {
                 messages = existing;
                 chatContainer.innerHTML = '';
@@ -2960,7 +2969,7 @@
 
             chatContainer.innerHTML = '<div class="loading">מכין את קוקו…</div>';
             messages = [];
-            subjectSession[selectedSubject] = messages;
+            childSession()[selectedSubject] = messages;
             sessionStartTime = Date.now();
             sessionDurationSeconds = 20 * 60;
             startSessionTimer();
@@ -5265,8 +5274,9 @@
                 document.getElementById('modal-summary').textContent = data.mistakes_summary;
                 sessionModal.classList.add('show');
 
-                subjectSession.math = null;
-                subjectSession.english = null;
+                const s = childSession();
+                s.math = null;
+                s.english = null;
                 messages = [];
                 sessionStartTime = null;
                 stopSessionTimer();

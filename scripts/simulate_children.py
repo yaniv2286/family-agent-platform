@@ -160,6 +160,9 @@ async def ensure_user(client, kid):
         return user
 
 
+ALL_NAMES = [k["name"] for k in KIDS]
+
+
 def shared_asserts(kid, replies, messages):
     """Checks common to both subjects. Returns failure strings."""
     fails = []
@@ -169,6 +172,11 @@ def shared_asserts(kid, replies, messages):
     bad = [i for i, r in enumerate(replies) if wrong.search(r)]
     if bad:
         fails.append(f"wrong-gender address in turns {bad}")
+    # Cross-child identity leak: KOKO must never address/reference another
+    # child (production bug: a child's session/memory bled into a sibling's).
+    leaked = [n for n in ALL_NAMES if n != kid["name"] and n in " ".join(replies)]
+    if leaked:
+        fails.append(f"other children's names leaked into replies: {leaked}")
     # Every turn should end with a task; tolerate a single LLM slip but flag
     # repeated passivity (the production bug: KOKO stalled after praise).
     no_task = [i for i, r in enumerate(replies[:-1]) if not TASK_RE.search(r.strip())]
@@ -446,6 +454,50 @@ async def section_lessons(client, kids, verbose) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Section: isolation — per-child history/identity separation
+# ---------------------------------------------------------------------------
+async def section_isolation(client, kids, verbose) -> list[str]:
+    """A message sent as child A must appear only in A's history for the same
+    subject - never in B's, never in A's other subject. Regression guard for
+    the session/memory mixing bug where one child's log appeared in a
+    sibling's session."""
+    fails = []
+    pin = os.environ.get("APP_PIN", "")
+    kid_a, kid_b = kids[0], kids[-1]
+    user_a = await ensure_user(client, kid_a)
+    marker = f"מילת-סוד-ייחודית-{uuid.uuid4().hex[:8]}"
+
+    r = await timed(client, "POST", "/api/tutor/chat", "chat",
+                    headers={"x-app-pin": pin}, timeout=60,
+                    json={"user_id": user_a.id, "subject": "math",
+                          "messages": [{"role": "user", "content": marker}],
+                          "idempotency_key": str(uuid.uuid4())})
+    if r.status_code != 200:
+        return [f"isolation probe turn failed: {r.status_code}"]
+
+    async def history(name, subject):
+        hr = await timed(client, "GET", f"/api/history/{name}?subject={subject}",
+                         headers={"x-app-pin": pin}, timeout=30)
+        if hr.status_code != 200:
+            return None
+        return " ".join(m.get("content") or "" for m in hr.json().get("messages", []))
+
+    hist_a_math = await history(kid_a["name"], "math")
+    hist_b_math = await history(kid_b["name"], "math")
+    hist_a_en = await history(kid_a["name"], "english")
+
+    if hist_a_math is None or marker not in hist_a_math:
+        fails.append("marker missing from child A's own math history")
+    if hist_b_math and marker in hist_b_math:
+        fails.append(f"child A's message leaked into {kid_b['name']}'s math history")
+    if hist_a_en and marker in hist_a_en:
+        fails.append("math message leaked into A's english history (subject mixing)")
+    if verbose and not fails:
+        print(f"  marker {marker!r} isolated to {kid_a['name']}/math only")
+    return fails
+
+
+# ---------------------------------------------------------------------------
 # Perf report
 # ---------------------------------------------------------------------------
 def perf_report() -> list[str]:
@@ -473,7 +525,7 @@ async def main() -> int:
         pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--section", default="all",
-                    choices=["all", "smoke", "chat", "math", "lessons"])
+                    choices=["all", "smoke", "chat", "math", "lessons", "isolation"])
     ap.add_argument("--kids", help="comma-separated names (default: all)")
     ap.add_argument("--turns", type=int, default=8)
     ap.add_argument("--verbose", action="store_true")
@@ -489,7 +541,7 @@ async def main() -> int:
                     k, v = line.strip().split("=", 1)
                     os.environ.setdefault(k, v)
 
-    need_llm = args.section in ("all", "chat", "math")
+    need_llm = args.section in ("all", "chat", "math", "isolation")
     if need_llm and not os.environ.get("OPENAI_API_KEY"):
         print("ERROR: OPENAI_API_KEY required for live sections.")
         return 2
@@ -511,6 +563,12 @@ async def main() -> int:
         if args.section in ("all", "lessons"):
             print("\n=== LESSONS: structured flow ===")
             fs = await section_lessons(client, kids, args.verbose)
+            total += len(fs); [print(f"  FAIL: {f}") for f in fs]
+            if not fs: print("  PASS")
+
+        if args.section in ("all", "isolation"):
+            print("\n=== ISOLATION: per-child history/identity ===")
+            fs = await section_isolation(client, kids, args.verbose)
             total += len(fs); [print(f"  FAIL: {f}") for f in fs]
             if not fs: print("  PASS")
 
