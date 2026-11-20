@@ -2782,8 +2782,6 @@
             stopKokoSpeech();
             stopListening();
             selectedSubject = subject;
-            const subjectName = subject === 'english' ? '🔤 שיעור אנגלית' : '📐 שיעור חשבון';
-            subjectLabel.textContent = `📚 ${subjectName}`;
             updateTutorToggleUI(subject);
 
             await loadDailyPractice();
@@ -2810,7 +2808,11 @@
             const isTrader = screenName === 'trader';
             const isAgentLogs = screenName === 'agent-logs';
             const isCourses = screenName === 'english-courses';
-            headerTitle.textContent = isTutor ? (selectedSubject === 'english' ? 'KOKO' : 'Koko') : isCourses ? 'קורסי אנגלית' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : isAgentLogs ? 'Live Agent Logs' : 'Family Agent Platform';
+            headerTitle.textContent = isTutor ? (selectedSubject === 'english' ? '🔤 שיעור אנגלית' : '📐 שיעור חשבון') : isCourses ? 'קורסי אנגלית' : isFitness ? 'סוכן הכושר' : isTrader ? 'NeuralTrader' : isAgentLogs ? 'Live Agent Logs' : 'Family Agent Platform';
+            const headerEl = headerTitle.closest('.header');
+            if (headerEl) headerEl.style.background = isTutor
+                ? (selectedSubject === 'english' ? '' : 'linear-gradient(135deg,#0f766e,#14b8a6)')
+                : '';
 
             if (screenName === 'profile') {
                 profileScreen.classList.remove('hidden');
