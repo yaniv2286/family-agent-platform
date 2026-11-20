@@ -13,17 +13,32 @@ APP_VERSION = "1.2.0"
 _PROCESS_START = time.time()
 
 
+_BUILD_INFO = Path(__file__).resolve().with_name("build_info.json")
+_DEPLOYED_AT_CACHE = {"mtime": None, "value": None}
+
+
 def _load_deployed_at():
+    """Deployed-at timestamp, re-read when build_info.json changes.
+
+    deploy.bat rewrites build_info.json on every deploy - but a long-running
+    local server used to report the timestamp it loaded at startup forever,
+    so the footer showed a stale deploy time until restart.
+    """
     if os.getenv("APP_DEPLOYED_AT"):
         return os.getenv("APP_DEPLOYED_AT")
-    build_info = Path(__file__).resolve().with_name("build_info.json")
     try:
-        return json.loads(build_info.read_text(encoding="utf-8")).get("deployed_at")
-    except (OSError, json.JSONDecodeError, AttributeError):
+        mtime = _BUILD_INFO.stat().st_mtime
+    except OSError:
         return None
-
-
-_DEPLOYED_AT = _load_deployed_at()
+    if _DEPLOYED_AT_CACHE["mtime"] != mtime:
+        try:
+            _DEPLOYED_AT_CACHE["value"] = json.loads(
+                _BUILD_INFO.read_text(encoding="utf-8")
+            ).get("deployed_at")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            _DEPLOYED_AT_CACHE["value"] = None
+        _DEPLOYED_AT_CACHE["mtime"] = mtime
+    return _DEPLOYED_AT_CACHE["value"]
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 import exceptions
@@ -288,7 +303,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         content={
             "status": "ok" if healthy else "degraded",
             "version": APP_VERSION,
-            "deployed_at": _DEPLOYED_AT,
+            "deployed_at": _load_deployed_at(),
             "uptime_seconds": round(time.time() - _PROCESS_START, 3),
             "checks": checks,
         },
