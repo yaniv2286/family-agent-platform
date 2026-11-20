@@ -584,6 +584,49 @@ class TestUserExpressionEval:
         ) is None
 
 
+class TestCorrectArithmeticExtraction:
+    """KOKO's question -> child's bare number answer must get deterministic
+    ground truth so the LLM never doubts a correct answer.
+
+    Regression for the live QA run where KOKO asked
+    '15 מכוניות צעצוע ומישהו לוקח 7 מכוניות, כמה נשארו?', the child answered
+    '8' (correct) - and KOKO replied 'בוא נבדוק שוב, נסה שוב'. The
+    sentence-segment scan read offsets against assistant_text while the
+    numbers came from a question substring, so no candidate was found and no
+    fact was injected.
+    """
+
+    def setup_method(self):
+        self.tutor = MathTutor.__new__(MathTutor)
+
+    def _history(self, assistant_q, user_a):
+        return [
+            {"role": "assistant", "content": assistant_q},
+            {"role": "user", "content": user_a},
+        ]
+
+    def test_worded_takeaway_question_inside_longer_reply(self):
+        # 'מישהו לוקח N' = subtraction; 'כמה נשארו' in the same sentence.
+        result = self.tutor._extract_correct_arithmetic_answer(
+            self._history(
+                "כל הכבוד! עכשיו, בוא ננסה חידה קטנה על מכוניות: "
+                "אם יש לך 15 מכוניות צעצוע ומישהו לוקח 7 מכוניות, כמה מכוניות נשארו לך?",
+                "8",
+            )
+        )
+        assert result is not None
+        assert result[1] == "8"
+
+    def test_wrong_answer_does_not_confirm(self):
+        result = self.tutor._extract_correct_arithmetic_answer(
+            self._history(
+                "אם יש לך 15 מכוניות צעצוע ומישהו לוקח 7 מכוניות, כמה מכוניות נשארו לך?",
+                "9",
+            )
+        )
+        assert result is None
+
+
 class TestTtsSanitize:
     """Markdown formatting must never reach the TTS engine.
 

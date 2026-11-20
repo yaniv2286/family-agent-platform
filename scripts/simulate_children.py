@@ -131,6 +131,68 @@ def en_ratio(t: str) -> float:
     return la / (he + la) if (he + la) else 0.0
 
 
+def _arith_candidates(text: str) -> list:
+    """All values a bare-number child reply could legitimately be answering.
+    Simplified mirror of tutors._extract_correct_arithmetic_answer: symbolic
+    expressions plus Hebrew worded operator pairs (sentence-scoped fallback).
+    Question sentences are preferred so a worked-example number inside the
+    reply does not mark a wrong answer as 'doubted'."""
+
+    def _scan(t: str, out: list) -> None:
+        for m in re.finditer(r"(\d+(?:\s*[\+\-\*/×x]\s*\d+)+)", t):
+            e = m.group(1).replace("×", "*").replace("x", "*").replace("−", "-").replace(" ", "")
+            if "**" in e:
+                continue
+            try:
+                out.append(eval(e, {"__builtins__": {}}, {}))
+            except Exception:
+                pass
+        nums = list(re.finditer(r"\d+", t))
+        for i in range(len(nums) - 1):
+            a, b = nums[i].group(), nums[i + 1].group()
+            between = t[nums[i].end():nums[i + 1].start()].lower()
+            if re.search(r"(\+|ועוד|פלוס|מוסיף|מצטרף|חיבור|סך)", between):
+                op = "+"
+            elif re.search(r"(-|פחות|מינוס|נשאר|הוריד|לוקח|מוריד|מחסיר|עוזב|איבד|אוכל)", between):
+                op = "-"
+            elif re.search(r"(\*|כפול|כפל|פעמים)", between):
+                op = "*"
+            elif re.search(r"(/|חלקי|חלק|לחלק)", between):
+                op = "/"
+            else:
+                seg_start = max(t.rfind(".", 0, nums[i].start()),
+                                t.rfind("?", 0, nums[i].start()),
+                                t.rfind("!", 0, nums[i].start())) + 1
+                seg_ends = [p for p in (t.find(".", nums[i + 1].end()),
+                                        t.find("?", nums[i + 1].end()),
+                                        t.find("!", nums[i + 1].end())) if p != -1]
+                seg_end = min(seg_ends) if seg_ends else len(t)
+                seg = t[seg_start:seg_end].lower()
+                if re.search(r"(פחות|מינוס|מחסיר|מוריד|לוקח|נשאר|עוזב|איבד|חיסור)", seg):
+                    op = "-"
+                elif re.search(r"(ועוד|פלוס|מוסיף|חיבור|מחבר)", seg):
+                    op = "+"
+                elif re.search(r"(כפל|כפול|פעמים)", seg):
+                    op = "*"
+                elif re.search(r"(חלק|לחלק|חילוק)", seg):
+                    op = "/"
+                else:
+                    continue
+            try:
+                out.append(eval(f"{a} {op} {b}", {"__builtins__": {}}, {}))
+            except Exception:
+                pass
+
+    question_vals = []
+    for m in re.finditer(r"[^.\n?!]*(?:כמה|\?)[^.\n?!]*[.?!]?", text):
+        _scan(m.group(), question_vals)
+    if question_vals:
+        return question_vals
+    vals = []
+    _scan(text, vals)
+    return vals
+
+
 async def timed(client, method, url, bucket="non_llm", **kw):
     t0 = time.monotonic()
     r = await client.request(method, url, **kw)
@@ -351,6 +413,28 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             corrected = re.search(r"(243|לא בדיוק|לא נכון|שגו|טעות|קרוב|בוא נבדוק|בואי נבדוק|נסה שוב|נסי שוב|כמעט)", wrong_probe_reply)
             if praised and not corrected:
                 fails.append(f"praised a wrong answer (456-213=250): {wrong_probe_reply[:100]!r}")
+        # Generic regression: a bare-number child reply that equals the
+        # computed answer to KOKO's own question must never be doubted
+        # (live QA catch: '15 מכוניות ומישהו לוקח 7' -> child '8' ->
+        # KOKO said 'נסה שוב!' on a correct answer).
+        for i in range(len(messages) - 2):
+            a_msg, u_msg, n_msg = messages[i], messages[i + 1], messages[i + 2]
+            if {a_msg.get("role"), u_msg.get("role"), n_msg.get("role")} != {"assistant", "user"} \
+                    or a_msg.get("role") != "assistant" or u_msg.get("role") != "user":
+                continue
+            u_text = str(u_msg.get("content") or "").strip()
+            if not re.fullmatch(r"\d{1,6}[.!]?", u_text):
+                continue
+            u_num = float(u_text.rstrip(".!"))
+            if not any(abs(v - u_num) <= 1e-6 for v in _arith_candidates(str(a_msg.get("content") or ""))):
+                continue
+            n_text = str(n_msg.get("content") or "")
+            if re.search(r"(נסה שוב|נסי שוב|בוא נבדוק|בואי נבדוק|לא בדיוק|לא נכון|שגוי|קרוב)", n_text):
+                fails.append(
+                    f"doubted a correct bare-number answer: {u_text!r} after {str(a_msg.get('content'))[:60]!r} "
+                    f"-> {n_text[:80]!r}"
+                )
+                break
         # Visual-method probe: a drawing request must get a text table,
         # never a refusal (נויה's real session: 'אני לא יכולה לצייר כאן').
         if visual_reply is not None:

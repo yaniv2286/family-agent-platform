@@ -1134,7 +1134,7 @@ class MathTutor(BaseAgent):
                 between = text[num_iter[i].end():num_iter[i + 1].start()].lower()
                 if any(k in between for k in ("+", "ועוד", "פלוס", "מוסיף", "חיבור", "סך")):
                     op = "+"
-                elif any(k in between for k in ("-", "פחות", "מינוס", "נשאר", "הפחת", "הוריד", "פחית", "מחסיר")):
+                elif any(k in between for k in ("-", "פחות", "מינוס", "נשאר", "הפחת", "הוריד", "פחית", "מחסיר", "לוקח", "עוזב", "סלק", "איבד")):
                     op = "-"
                 elif any(k in between for k in ("*", "כפול", "כפל", "פעמים")):
                     op = "*"
@@ -1143,10 +1143,15 @@ class MathTutor(BaseAgent):
                 else:
                     # No operator BETWEEN the numbers (e.g. "מורידים 3 מתוך 11")
                     # - check the surrounding sentence for the operation verb.
-                    seg_start = assistant_text.rfind(".", 0, num_iter[i].start()) + 1
-                    seg_end = assistant_text.find(".", num_iter[i + 1].end())
-                    seg = assistant_text[seg_start:seg_end if seg_end != -1 else None].lower()
-                    if any(k in seg for k in ("פחות", "מינוס", "מפחית", "מחסיר", "מוריד", "פחית", "חיסור", "להוריד", "נשאר")):
+                    # NOTE: segment positions must come from `text` itself -
+                    # when _scan runs on a question substring, num_iter offsets
+                    # are relative to it, not to assistant_text (bug that made
+                    # worded questions like "15 מכוניות ומישהו לוקח 7" miss
+                    # their operator and let the LLM doubt a correct answer).
+                    seg_start = text.rfind(".", 0, num_iter[i].start()) + 1
+                    seg_end = text.find(".", num_iter[i + 1].end())
+                    seg = text[seg_start:seg_end if seg_end != -1 else None].lower()
+                    if any(k in seg for k in ("פחות", "מינוס", "מפחית", "מחסיר", "מוריד", "פחית", "חיסור", "להוריד", "נשאר", "לוקח", "עוזב", "סלק", "איבד", "אוכל")):
                         op = "-"
                     elif any(k in seg for k in ("ועוד", "פלוס", "מוסיף", "מחבר", "חיבור")):
                         op = "+"
