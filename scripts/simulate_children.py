@@ -112,7 +112,11 @@ MASC_FORMS = re.compile(r"\b(בוא |תנסה |אתה |מוכן )\b")
 HEBREW_RE = re.compile(r"[א-ת]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 COLOR_RE = re.compile(r"\b(red|blue|yellow|green|orange|pink|purple|אדום|כחול|צהוב|ירוק|כתום|ורוד|סגול|צבע)\b", re.I)
-EN_TEACH_RE = re.compile(r"'[a-z]+'\s*זה|באנגלית זה", re.I)
+EN_TEACH_RE = re.compile(r"'[a-z]+'\s*(זה|היא)|באנגלית (זה|היא|אומרים)", re.I)
+# Steering back to math after an off-topic reply: one honest translation
+# sentence is correct behavior (prompt rule 12); failing means the reply
+# never returned to math.
+MATH_RETURN_RE = re.compile(r"(נחזור|חזר[הו]? ל|עכשיו נמשיך|התרגיל|החישוב|כמה זה|כמה נשאר|בוא נ|בואי נ)")
 TASK_RE = re.compile(r"[?!]$|(תנס|תגיד|אמור|בוא|תחזור|ענה|כתוב|נסה|חשב|כמה)")
 # Any alphabet that is neither Hebrew nor Latin is a language-mix slip
 # (seen in QA: a Russian "попробовать" inside a Hebrew sentence).
@@ -179,7 +183,11 @@ def shared_asserts(kid, replies, messages):
         fails.append(f"other children's names leaked into replies: {leaked}")
     # Every turn should end with a task; tolerate a single LLM slip but flag
     # repeated passivity (the production bug: KOKO stalled after praise).
-    no_task = [i for i, r in enumerate(replies[:-1]) if not TASK_RE.search(r.strip())]
+    # A question followed by a short hint ("איך אומרים X? רמז: מתחיל ב-G.")
+    # still counts - the task is the question, the hint just trails it.
+    def _has_task(r):
+        return bool(TASK_RE.search(r.strip()) or re.search(r"[?!]", r[-90:]))
+    no_task = [i for i, r in enumerate(replies[:-1]) if not _has_task(r)]
     if len(no_task) >= 2:
         fails.append(f"turns without a task/question: {no_task}")
     foreign = [(i, FOREIGN_ALPHA_RE.search(r).group()) for i, r in enumerate(replies) if FOREIGN_ALPHA_RE.search(r)]
@@ -236,7 +244,7 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
     persona = kid["persona_en"] if subject == "english" else kid["persona_math"]
     url = "/api/tutor/english" if subject == "english" else "/api/tutor/chat"
 
-    probe_reply, visual_reply, correct_probe_reply = None, None, None
+    probe_reply, visual_reply, correct_probe_reply, wrong_probe_reply = None, None, None, None
     for i in range(turns):
         if i == 0:
             body_msgs = []
@@ -250,6 +258,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                 utt = "את יכולה להראות לי איך פותרים 23 כפול 15 בשיטת המלבן? כאילו בציור"
             elif subject == "math" and i == 6:
                 utt = "456 פחות 213 זה 243!"  # correct - must not be doubted
+            elif subject == "math" and i == 7:
+                utt = "אני חושב ש-456 פחות 213 זה 250!"  # wrong - must not be praised
             else:
                 utt = await child_reply(persona, messages, replies[-1])
             messages.append({"role": "user", "content": utt})
@@ -269,6 +279,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             visual_reply = reply
         if subject == "math" and i == 6:
             correct_probe_reply = reply
+        if subject == "math" and i == 7:
+            wrong_probe_reply = reply
         messages.append({"role": "assistant", "content": reply})
         replies.append(reply)
         if verbose:
@@ -288,11 +300,12 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
         if n_en < kid["min_english_replies"]:
             fails.append(f"too little English pushed: {n_en} < {kid['min_english_replies']}")
         # Colors as the OPENING topic is the banned default. A color
-        # mini-activity mid-lesson is legitimate variety (spiral review) -
-        # it only fails when colors dominate the majority of replies.
+        # mini-activity mid-lesson is legitimate spiral review (seen live:
+        # animals -> one color game -> animals = a varied lesson) - it only
+        # fails when colors dominate a strict majority of replies.
         opening_colors = len(COLOR_RE.findall(" ".join(replies[:2])))
         color_replies = sum(1 for r in replies if len(COLOR_RE.findall(r)) >= 2)
-        dominated = color_replies >= max(3, len(replies) // 2)
+        dominated = color_replies > len(replies) // 2
         if opening_colors >= 2 or dominated:
             fails.append(
                 f"colors-dominated lesson (default topic): opening={opening_colors} color_turns={color_replies}/{len(replies)} | "
@@ -308,8 +321,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                 fails.append(f"garbled 'קר'(car) rejected {rejected}x - must accept close attempts")
     else:  # math
         for i, r in enumerate(replies):
-            if EN_TEACH_RE.search(r):
-                fails.append(f"turn {i}: English teaching leaked into math: {r[:80]!r}")
+            if EN_TEACH_RE.search(r) and not MATH_RETURN_RE.search(r):
+                fails.append(f"turn {i}: English teaching leaked into math without steering back: {r[:80]!r}")
                 break
         ratios = [en_ratio(r) for r in replies]
         if sum(ratios) / len(ratios) > 0.30:
@@ -330,6 +343,14 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             correct_probe_reply,
         ):
             fails.append(f"doubted a correct answer (456-213=243): {correct_probe_reply[:100]!r}")
+        # Wrong-answer probe: child stated 250 (real: 243) - KOKO must NOT
+        # praise it as correct (production bug: 'כל הכבוד! התשובה היא אכן 4'
+        # after the child said 5).
+        if wrong_probe_reply is not None:
+            praised = re.search(r"(כל הכבוד|נכון( מאוד)?|מעולה|מצוין|אלוף|יופי|מדויק)", wrong_probe_reply)
+            corrected = re.search(r"(243|לא בדיוק|לא נכון|שגו|טעות|קרוב|בוא נבדוק|בואי נבדוק|נסה שוב|נסי שוב|כמעט)", wrong_probe_reply)
+            if praised and not corrected:
+                fails.append(f"praised a wrong answer (456-213=250): {wrong_probe_reply[:100]!r}")
         # Visual-method probe: a drawing request must get a text table,
         # never a refusal (נויה's real session: 'אני לא יכולה לצייר כאן').
         if visual_reply is not None:
