@@ -787,6 +787,24 @@
             font-weight: 600;
         }
 
+        /* ASCII diagrams KOKO draws (rectangle method, place-value tables).
+           Must stay LTR/monospace or bidi flips the grid columns. */
+        .chat-ascii {
+            direction: ltr;
+            unicode-bidi: isolate;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin: 8px 0;
+            overflow-x: auto;
+            white-space: pre;
+            text-align: left;
+            line-height: 1.5;
+        }
+
         /* Animated visual math card - solves column arithmetic step by step
            like the "moving pencil" YouTube explainers kids know. */
         .visual-math {
@@ -3076,7 +3094,7 @@
                 row.style.borderRadius = '8px';
                 row.style.whiteSpace = 'pre-wrap';
                 const role = m.role === 'assistant' ? (selectedSubject === 'english' ? 'KOKO' : 'Koko') : 'תלמיד';
-                row.innerHTML = `<strong>${role}:</strong> ${m.content}`;
+                row.innerHTML = `<strong>${role}:</strong> ${formatTutorContent(m.content)}`;
                 historyList.appendChild(row);
             }
         }
@@ -3092,11 +3110,21 @@
             historyOverlay.classList.remove('show');
         }
 
+        // ASCII diagrams (rectangle method, place-value tables) arrive fenced
+        // in ``` blocks - render them as LTR monospace <pre> or bidi mangles
+        // the grid and the backticks show literally.
+        function formatTutorContent(content) {
+            return String(content).replace(/```([\s\S]*?)```/g, (_, code) => {
+                const safe = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<pre class="chat-ascii" dir="ltr">${safe}</pre>`;
+            });
+        }
+
         // Append a chat bubble to the DOM only (used when restoring a session).
         function renderBubble(role, content) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
-            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : (selectedSubject === 'english' ? 'KOKO' : 'Koko')}</div>${content}`;
+            messageDiv.innerHTML = `<div class="role">${role === 'user' ? 'תלמיד' : (selectedSubject === 'english' ? 'KOKO' : 'Koko')}</div>${formatTutorContent(content)}`;
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
             return messageDiv;
@@ -3123,6 +3151,15 @@
             // - hint/reply sentences like "מורידים 3 מתוך 11" must not spawn
             // one, otherwise the card shows the previous question again.
             if (!/[?？]/.test(text) && !/כמה זה|חשב את|פתור את/.test(text)) return null;
+            // Worked examples ("300+40+60+8 = 408"), ASCII diagrams and
+            // multi-term chains are teaching content - the solver only
+            // handles a single two-operand problem and would teach the
+            // wrong answer (it once rendered "300+40 = 340" for a sum
+            // whose real answer was 408).
+            if (/```|\|/.test(text)) return null;
+            if (/=\s*\d/.test(text)) return null;
+            if (/\d+\s*(?:\+|ועוד|פלוס)\s*\d+\s*(?:\+|ועוד|פלוס)\s*\d/.test(text)) return null;
+            if (/\d+\s*(?:פחות|מינוס|־|−|-)\s*\d+\s*(?:פחות|מינוס|־|−|-)\s*\d/.test(text)) return null;
             const nums = [...text.matchAll(/\d+/g)].map(m => ({ n: +m[0], i: m.index }));
             if (nums.length < 2) return null;
 
