@@ -1040,6 +1040,51 @@ async def get_chat_by_idempotency_key(
     return row
 
 
+# Skill curriculum shared by the API layer and the tutors' lesson prep.
+# Levels gate eligibility by grade (grade_level_cap); mastery data lives in
+# TutorSkillMastery rows per child.
+TUTOR_CURRICULUM = {
+    "math": [
+        {"skill_id": "math.addition.basic", "name": "חיבור", "level": 1},
+        {"skill_id": "math.subtraction.basic", "name": "חיסור", "level": 1},
+        {"skill_id": "math.multiplication.basic", "name": "כפל", "level": 2},
+        {"skill_id": "math.division.basic", "name": "חילוק", "level": 2},
+        {"skill_id": "math.fractions.basic", "name": "שברים", "level": 3},
+        {"skill_id": "math.word_problems.basic", "name": "בעיות מילוליות", "level": 3},
+    ],
+    "english": [
+        {"skill_id": "english.vocabulary.basic", "name": "אוצר מילים", "level": 1},
+        {"skill_id": "english.sentences.basic", "name": "בניית משפטים", "level": 1},
+        {"skill_id": "english.present_simple", "name": "Present Simple", "level": 2},
+        {"skill_id": "english.past_simple", "name": "Past Simple", "level": 2},
+        {"skill_id": "english.reading.basic", "name": "הבנת הנקרא", "level": 3},
+        {"skill_id": "english.writing.basic", "name": "כתיבה", "level": 3},
+    ],
+}
+
+
+def grade_level_cap(grade_level: Optional[str]) -> int:
+    """Highest curriculum level a child's grade may see (gan/א=1, ב-ג=2, ד+=3)."""
+    value = (grade_level or "").lower()
+    if any(token in value for token in ("גן", "kindergarten", "כיתה א", "1st", "grade 1")):
+        return 1
+    if any(token in value for token in ("כיתה ב", "כיתה ג", "2nd", "3rd", "grade 2", "grade 3")):
+        return 2
+    return 3
+
+
+async def get_skill_mastery(child_name: str, subject: str = DEFAULT_SUBJECT) -> dict:
+    """All mastery rows for a child+subject, keyed by skill_id."""
+    async with TutorHistorySessionLocal() as db:
+        rows = (await db.execute(
+            select(TutorSkillMastery).where(
+                TutorSkillMastery.child_name == child_name,
+                TutorSkillMastery.subject == subject,
+            )
+        )).scalars().all()
+    return {row.skill_id: row for row in rows}
+
+
 async def get_student_profile_summary(child_name: str, subject: str = DEFAULT_SUBJECT):
     """Return the persisted learning profile summary for a child within a
     specific subject, or None.

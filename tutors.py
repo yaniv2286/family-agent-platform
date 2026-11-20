@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 import httpx
 from typing import List, Dict, Optional, Tuple, Any
 from num2words import num2words
@@ -21,6 +22,9 @@ from database import (
     get_student_profile_summary,
     append_chat_messages,
     update_student_profile_summary,
+    get_skill_mastery,
+    TUTOR_CURRICULUM,
+    grade_level_cap,
 )
 from english_curriculum import get_course
 from english_progress import complete_next_course_lesson
@@ -1017,6 +1021,65 @@ def g(word: str, gender: str) -> str:
     return GENDERED_WORDS.get(word, {}).get(gender, word)
 
 
+def _lesson_prep_block(mastery_by_skill: Dict, subject: str, grade_level: Optional[str]) -> Tuple[str, Optional[str]]:
+    """Build the deterministic 'student file' a private tutor reviews before
+    class: real per-skill mastery, spaced-repetition due items, and the
+    suggested focus for this lesson.
+
+    Returns (hebrew_block, suggested_focus_skill_id). The block is data-driven
+    - it updates automatically after every graded answer via the mastery
+    endpoint, so it always reflects the child's demonstrated level, not a
+    guess. Works for any subject in TUTOR_CURRICULUM.
+    """
+    curriculum = TUTOR_CURRICULUM.get(subject) or []
+    if not curriculum:
+        return "", None
+    cap = grade_level_cap(grade_level)
+    eligible = [s for s in curriculum if s["level"] <= cap]
+    if not eligible:
+        return "", None
+    now = datetime.utcnow()
+
+    lines = []
+    for s in eligible:
+        m = mastery_by_skill.get(s["skill_id"])
+        if m is None:
+            lines.append(f"- {s['name']}: טרם נתרגל")
+            continue
+        acc = (m.correct_attempts / m.attempts) if m.attempts else 0.0
+        if m.mastery >= 0.8:
+            state = f"שולט/ת היטב (דיוק {acc:.0%}, רמת קושי {m.current_difficulty}) - חימום קצר בלבד, אין לתרגל שוב"
+        elif m.mastery >= 0.5:
+            state = f"בהתקדמות (דיוק {acc:.0%}, רמת קושי {m.current_difficulty}) - מוקד מתאים לשיעור"
+        else:
+            state = f"זקוק/ה לתמיכה (דיוק {acc:.0%}, רמת קושי {m.current_difficulty}) - צעדים קטנים, מספרים/מילים קלים"
+        if m.next_review_at and m.next_review_at <= now:
+            state += " | בשל לחזרה מתוזמנת - פתח/י בחזרה קצרה"
+        lines.append(f"- {s['name']}: {state}")
+
+    # Focus selection mirrors /api/tutor/daily-practice: a due-review skill
+    # wins, else the lowest-mastery eligible skill (never-practiced = 0).
+    ranked = sorted(
+        eligible,
+        key=lambda s: (
+            float(mastery_by_skill[s["skill_id"]].mastery) if s["skill_id"] in mastery_by_skill else 0.0,
+            s["level"],
+            s["skill_id"],
+        ),
+    )
+    focus = next(
+        (
+            s["skill_id"] for s in ranked
+            if s["skill_id"] in mastery_by_skill
+            and mastery_by_skill[s["skill_id"]].next_review_at
+            and mastery_by_skill[s["skill_id"]].next_review_at <= now
+        ),
+        ranked[0]["skill_id"],
+    )
+    block = "תיק התלמיד - שליטה אמיתית למיומנות (מתעדכן אחרי כל תשובה):\n" + "\n".join(lines)
+    return block, focus
+
+
 class MathTutor(BaseAgent):
     SUBJECT = "math"
 
@@ -1228,7 +1291,7 @@ class MathTutor(BaseAgent):
             return _finish(match.group(0), value, match.end())
         return None
 
-    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, correct_answer: Optional[Tuple[str, str, str]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None) -> str:
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, correct_answer: Optional[Tuple[str, str, str]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None, skill_context: str = "") -> str:
         """Generate system prompt based on user profile, dynamic long-term memory,
         and the most recent chat turns.
         """
@@ -1238,7 +1301,7 @@ class MathTutor(BaseAgent):
         gender = get_gender(name)
         gender_hebrew = "נקבה" if gender == "female" else "זכר"
         focus_skill_id = user_profile.get("focus_skill_id") or "בחר מיומנות מתאימה לכיתה"
-        
+
         interests_line = interests if interests else "לא ידוע - אין להניח שום תחום עניין!"
         
         summary_line = dynamic_summary if dynamic_summary else "אין עדיין סיכום לטווח ארוך."
@@ -1275,6 +1338,8 @@ class MathTutor(BaseAgent):
                 fact += ' הדרכ/י את התלמיד/ה לפי התוצאה הזו בלבד.'
             user_expression_line = fact
         
+        skill_line = f"\n{skill_context}\n" if skill_context else ""
+
         prompt = f"""אתה מנטור מתמטיקה מעורר השראה וחבר לכל החיים בשם המשפחה. אתה מדבר בעברית בלבד.
 
 פרטי התלמיד:
@@ -1283,7 +1348,7 @@ class MathTutor(BaseAgent):
 - כיתה/שכבה: {grade_level}
 - מיומנות המיקוד לשיעור הזה: {focus_skill_id}
 - תחומי עניין: {interests_line}
-
+{skill_line}
 זיכרון לטווח ארוך:
 {summary_line}
 
@@ -1305,6 +1370,7 @@ class MathTutor(BaseAgent):
 - אם הכיתה היא "5th Grade" (כיתה ה'): חשבון = סדר פעולות חשבון, מספרים גדולים (רבבות), כפל וחילוק של מספרים רב-ספרתיים, ושאלות מילה.
 
 השיעור מתמקד כברירת מחדל במיומנות {focus_skill_id}, אבל אם התלמיד/ה מבקש/ת במפורש לעבור לנושא אחר (למשל כפל, חילוק או שברים) - כבד/י את הבקשה מיד, לפחות למספר תרגילים, ועדכן/י את skill_id בתגובה בהתאם. הילד/ה הוא הבוס של נושא השיחה.
+חובה מוחלטת - קיובר קושי לפי תיק התלמיד: אם מופיע "תיק התלמיד" למעלה, זו הרמה האמיתית שנמדדה - לא ניחוש. מיומנות "שולט" = חימום קצר בלבד ואז להתקדם; "בהתקדמות" = המוקד העיקרי, בקושי הרשום; "זקוק לתמיכה" = צעד אחד בכל הודעה ומספרים קלים; "בשל לחזרה מתוזמנת" = פתח/י את השיעור בשאלת חזרה קצרה עליה. מורה פרטי פותח את התיק לפני השיעור - וכך גם את/ה.
 אתה חייב לפתוח את השיעור בשאלה אחת קונקרטית המתאימה בדיוק לכיתה {grade_level}, מבלי לשאול את התלמיד/ה שום פרט אישי או העדפה.
 
 חובה מוחלטת - התאמה מגדרית:
@@ -1387,7 +1453,14 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         correct_answer = self._extract_correct_arithmetic_answer(conversation_history)
         user_expression = self._extract_user_expression_eval(conversation_history)
-        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, correct_answer, user_expression)
+        # 'Lesson prep': the child's real measured level per skill. Also the
+        # server-side focus fallback when the client didn't pass one - the
+        # tutor adapts even for direct API calls.
+        mastery_by_skill = await get_skill_mastery(child_name, self.SUBJECT)
+        skill_context, auto_focus = _lesson_prep_block(mastery_by_skill, self.SUBJECT, user_profile.get("grade_level"))
+        if auto_focus and not user_profile.get("focus_skill_id"):
+            user_profile["focus_skill_id"] = auto_focus
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, correct_answer, user_expression, skill_context)
 
         # Inject cross-agent memory context so the tutor feels like a companion.
         if user_id:
@@ -1681,7 +1754,7 @@ class EnglishTutor(BaseAgent):
     SUBJECT = "english"
 
     
-    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, speech_assessment: Optional[Tuple[str, str, List[str], List[str]]] = None, course_context: str = "", course_cefr: Optional[str] = None) -> str:
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, speech_assessment: Optional[Tuple[str, str, List[str], List[str]]] = None, course_context: str = "", course_cefr: Optional[str] = None, skill_context: str = "") -> str:
         """Generate system prompt for the bilingual English tutor - mentor persona,
         enriched with the student's dynamic long-term memory and recent chat turns.
         """
@@ -1775,6 +1848,8 @@ class EnglishTutor(BaseAgent):
                 "- אם התלמיד/ה לא מבין/ה פעמיים ברצף - חזור/י להסבר בעברית לפני שממשיכים באנגלית."
             )
 
+        skill_line = f"\n{skill_context}\n" if skill_context else ""
+
         prompt = f"""אתה מורה אנגלית מחמיא אך מחמיר/ה לילדים בישראל. השיעור הוא אחד על אחד, חי, קצר ומלא עידוד. קוראים לך "קוקו" (KOKO).
 
 פרטי התלמיד:
@@ -1783,7 +1858,7 @@ class EnglishTutor(BaseAgent):
 - כיתה/שכבה: {grade_level}
 - מיומנות המיקוד לשיעור הזה: {focus_skill_id}
 - תחומי עניין: {interests_line}
-
+{skill_line}
 זיכרון לטווח ארוך:
 {summary_line}
 
@@ -1842,6 +1917,7 @@ class EnglishTutor(BaseAgent):
 
 חובה מוחלטת - פתיחת שיעור:
 - השיעור מתמקד כברירת מחדל במיומנות {focus_skill_id}, אבל אם התלמיד/ה מבקש/ת במפורש לעבור לנושא אחר - כבד/י את הבקשה מיד ועדכן/י את skill_id בתגובה בהתאם.
+- חובה מוחלטת - קיובר קושי לפי תיק התלמיד: אם מופיע "תיק התלמיד" למעלה, זו הרמה האמיתית שנמדדה - לא ניחוש. מיומנות "שולט" = חימום קצר בלבד; "בהתקדמות" = המוקד העיקרי; "זקוק לתמיכה" = צעד אחד בכל הודעה ומילים קלות; "בשל לחזרה מתוזמנת" = פתח/י בשאלת חזרה קצרה עליה. מורה פרטי פותח את התיק לפני השיעור - וכך גם את/ה.
 - פתח/י בברכה חמה בעברית ובשאלה אחת המתאימה לכיתה {grade_level} ולרמת הטבילה שהוגדרה למעלה - ברמות הנמוכות הברכה וההוראה בעברית, ורק מילת/משפט התרגול באנגלית. אם תחומי העניין ידועים - אל תשאל/י עליהם; אם לא ידועים, מותר לשלב שאלה אחת על מה שהילד/ה אוהב/ת.
 - אסור לפתוח או לבסס את השיעור על צבעים - זו ברירת מחדל נדחית, ללא יוצא מן הכלל: גם אם הזיכרון ארוך-הטווח ממליץ "לחזור על צבעים" וגם אם צבעים מופיעים בתחומי העניין - אל תפתח/י בהם ואל תבסס/י עליהם את השיעור, ואל תחזור/י אליהם באמצע השיעור כנושא מרכזי. מותר להזכיר צבע בודד כפריט אחד בתוך משחק מגוון (למשל "איזו חיה כתומה?"), אבל אסור לבנות רצף של שאלות/משחקים על צבעים. בחר/י את התוכן לפי מערך השיעור (אם מוגדר), תחומי העניין של הילד/ה, או נושא שמתאים ל-{focus_skill_id}.
 - רוטציית נושאים חובה: אם הזיכרון או ההיסטוריה האחרונה מראים שהשיעור הקודם עסק בנושא מסוים (למשל צבעים, חיות, מספרים) - פתח/י בנושא אחר לגמרי. המלצות "לחזור על X" מהזיכרון הן רק לחיזוק אגבי במהלך השיעור, לא נושא פתיחה.
@@ -1894,7 +1970,13 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
                 transcript=conversation_history[-1].get("content"),
             )
         course_context, course_cefr = await _english_course_context(child_name)
-        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, speech_assessment, course_context, course_cefr)
+        # 'Lesson prep': the child's real measured level per skill. Also the
+        # server-side focus fallback when the client didn't pass one.
+        mastery_by_skill = await get_skill_mastery(child_name, self.SUBJECT)
+        skill_context, auto_focus = _lesson_prep_block(mastery_by_skill, self.SUBJECT, user_profile.get("grade_level"))
+        if auto_focus and not user_profile.get("focus_skill_id"):
+            user_profile["focus_skill_id"] = auto_focus
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, speech_assessment, course_context, course_cefr, skill_context)
 
         # Inject cross-agent memory context so the tutor feels like a companion.
         if user_id:

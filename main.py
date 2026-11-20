@@ -46,6 +46,8 @@ from database import (
     add_student_points,
     get_student_points,
     get_chat_by_idempotency_key,
+    TUTOR_CURRICULUM,
+    grade_level_cap,
 )
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -140,24 +142,7 @@ class TutorAttemptRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-TUTOR_CURRICULUM = {
-    "math": [
-        {"skill_id": "math.addition.basic", "name": "חיבור", "level": 1},
-        {"skill_id": "math.subtraction.basic", "name": "חיסור", "level": 1},
-        {"skill_id": "math.multiplication.basic", "name": "כפל", "level": 2},
-        {"skill_id": "math.division.basic", "name": "חילוק", "level": 2},
-        {"skill_id": "math.fractions.basic", "name": "שברים", "level": 3},
-        {"skill_id": "math.word_problems.basic", "name": "בעיות מילוליות", "level": 3},
-    ],
-    "english": [
-        {"skill_id": "english.vocabulary.basic", "name": "אוצר מילים", "level": 1},
-        {"skill_id": "english.sentences.basic", "name": "בניית משפטים", "level": 1},
-        {"skill_id": "english.present_simple", "name": "Present Simple", "level": 2},
-        {"skill_id": "english.past_simple", "name": "Past Simple", "level": 2},
-        {"skill_id": "english.reading.basic", "name": "הבנת הנקרא", "level": 3},
-        {"skill_id": "english.writing.basic", "name": "כתיבה", "level": 3},
-    ],
-}
+
 
 
 @asynccontextmanager
@@ -580,13 +565,7 @@ def _curriculum(subject: str):
     return curriculum
 
 
-def _grade_level_cap(grade_level: Optional[str]) -> int:
-    value = (grade_level or "").lower()
-    if any(token in value for token in ("גן", "kindergarten", "כיתה א", "1st", "grade 1")):
-        return 1
-    if any(token in value for token in ("כיתה ב", "כיתה ג", "2nd", "3rd", "grade 2", "grade 3")):
-        return 2
-    return 3
+_grade_level_cap = grade_level_cap
 
 
 def _mastery_status(mastery: float, attempts: int, independent_correct: int) -> str:

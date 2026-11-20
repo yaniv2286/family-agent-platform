@@ -120,6 +120,53 @@ class TestChat:
         )
         assert response.status_code == 422
 
+    async def test_chat_injects_lesson_prep_from_mastery(
+        self, client, child_user, mock_openai
+    ):
+        """The 'student file' must reach the system prompt: real per-skill
+        mastery, due-review markers, and a server-side focus pick when the
+        client didn't pass focus_skill_id. This is what lets KOKO prepare
+        for the lesson like a private tutor instead of guessing the level."""
+        from database import TutorSkillMastery, TutorHistorySessionLocal
+        from datetime import datetime, timedelta
+        async with TutorHistorySessionLocal() as db:
+            db.add(TutorSkillMastery(
+                child_name=child_user.name, subject="math",
+                skill_id="math.addition.basic", mastery=0.9, attempts=5,
+                correct_attempts=5, independent_correct=4, current_difficulty=2,
+            ))
+            db.add(TutorSkillMastery(
+                child_name=child_user.name, subject="math",
+                skill_id="math.subtraction.basic", mastery=0.2, attempts=4,
+                correct_attempts=1, current_difficulty=1,
+                next_review_at=datetime.utcnow() - timedelta(days=1),
+            ))
+            await db.commit()
+        response = await client.post(
+            "/api/tutor/chat",
+            json={
+                "user_id": child_user.id,
+                "subject": "math",
+                "messages": [],
+                "idempotency_key": str(uuid.uuid4()),
+            },
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code == 200
+        # Several LLM calls happen per turn (reply, insight extraction, memory
+        # summary) - find the tutor's system prompt among them.
+        system_msgs = [
+            c.kwargs["messages"][0]["content"]
+            for c in mock_openai.chat.completions.create.call_args_list
+            if c.kwargs.get("messages")
+        ]
+        tutor_prompt = next(m for m in system_msgs if "מנטור מתמטיקה" in m)
+        assert "תיק התלמיד" in tutor_prompt
+        assert "חיבור" in tutor_prompt and "שולט" in tutor_prompt
+        assert "חיסור" in tutor_prompt and "זקוק" in tutor_prompt
+        # Due-review beats lowest-mastery for the auto focus pick.
+        assert "math.subtraction.basic" in tutor_prompt
+
     async def test_idempotency_replays_previous_response(
         self, client, child_user, mock_openai
     ):
