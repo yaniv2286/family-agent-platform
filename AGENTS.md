@@ -104,13 +104,20 @@ To add a new built-in agent:
 3. Register any mesh handlers with `agent_mesh.on_event(...)` or `agent_mesh.on_ask(...)`.
 4. Run the mock test suite to ensure no regressions.
 
-## Child Simulation (pre-deploy gate)
+## Full QA Bot (pre-deploy gate)
 
-`scripts/simulate_children.py` role-plays all 4 kids (ליבי/לביא/ינאי/נויה) against the REAL KOKO via `/api/tutor/english` — a second LLM generates age-appropriate child utterances, then deterministic checks run: Hebrew-first opening, gender-consistent address, immersion ratio vs. demonstrated level, no colors-by-default, task-ended turns, and Lavi's garbled-'קר'(car) acceptance. Requires OPENAI_API_KEY; costs a few cents.
+`scripts/simulate_children.py` is a complete QA bot: it role-plays all 4 kids (ליבי/לביא/ינאי/נויה, with age-appropriate LLM personas) against the REAL system and checks everything end-to-end. Sections:
+
+- `smoke` — endpoint health, PIN auth (positive+negative), latency budgets. No LLM cost, run it always.
+- `chat` — English free-chat per kid via /api/tutor/english: Hebrew-first opening, gender-consistent address, immersion ratio vs demonstrated level, no colors-by-default, task-ended turns, garbled kid-speech acceptance (Lavi's קר/car).
+- `math` — math chat per kid via /api/tutor/chat: same checks + no English leaking into math.
+- `lessons` — structured lesson flow: fetch slides, answer every slide (real answers from the lesson JSON), complete, verify stars/completion, rewards endpoint sanity.
+- `perf` — latency report (median/p95/max) for every request; budgets: 5s non-LLM, 45s chat.
 
 ```powershell
-python scripts/simulate_children.py            # all kids, 10 turns
+python scripts/simulate_children.py                  # full run (~2-4 min, a few cents)
+python scripts/simulate_children.py --section smoke  # fast pre-check, free
 python scripts/simulate_children.py --kids ליבי --turns 6 --verbose
 ```
 
-Run before every deploy alongside the mock suite. It exits non-zero on failures — do not deploy if it fails.
+Run before every deploy alongside the mock suite. Non-zero exit = do not deploy.

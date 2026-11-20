@@ -2666,7 +2666,7 @@
 
             if (slide.type === 'speak') {
                 options.innerHTML = '<button class="ec-assign">🎤 החזיקו רווח או לחצו כאן</button>';
-                const ask = () => speakResponse(slide.say || slide.prompt_en, 'listen');
+                const ask = () => speakResponse(slide.prompt_he || slide.say || slide.prompt_en, 'listen');
                 options.querySelector('button').onclick = ask;
                 // The next held-Space recording belongs to this slide, not the chat.
                 lessonSlideAnswer = (text) => answered(text);
@@ -2697,7 +2697,7 @@
                 });
                 if (slide.story_he) feedback.textContent = slide.story_he;
             }
-            if (slide.say) setTimeout(() => speakResponse(slide.say, 'listen'), 1200);
+            if (slide.say) setTimeout(() => speakResponse(slide.prompt_he || slide.say, 'listen'), 1200);
         }
 
         let lessonSlideAnswer = null;
