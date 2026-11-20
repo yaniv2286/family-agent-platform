@@ -103,3 +103,14 @@ To add a new built-in agent:
 2. Add it to `database.BUILTIN_AGENTS` with `is_builtin=1`, `module_path`, and `router_attr="router"`.
 3. Register any mesh handlers with `agent_mesh.on_event(...)` or `agent_mesh.on_ask(...)`.
 4. Run the mock test suite to ensure no regressions.
+
+## Child Simulation (pre-deploy gate)
+
+`scripts/simulate_children.py` role-plays all 4 kids (ליבי/לביא/ינאי/נויה) against the REAL KOKO via `/api/tutor/english` — a second LLM generates age-appropriate child utterances, then deterministic checks run: Hebrew-first opening, gender-consistent address, immersion ratio vs. demonstrated level, no colors-by-default, task-ended turns, and Lavi's garbled-'קר'(car) acceptance. Requires OPENAI_API_KEY; costs a few cents.
+
+```powershell
+python scripts/simulate_children.py            # all kids, 10 turns
+python scripts/simulate_children.py --kids ליבי --turns 6 --verbose
+```
+
+Run before every deploy alongside the mock suite. It exits non-zero on failures — do not deploy if it fails.
