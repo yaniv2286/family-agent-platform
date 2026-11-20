@@ -185,6 +185,24 @@ class TestTranscribe:
         assert "English" in call.kwargs["prompt"]
         assert len(call.kwargs["prompt"]) < 120
 
+    async def test_transcribe_discards_prompt_echo(self, client, mock_openai):
+        # Regression: on unclear audio Whisper echoes the context prompt
+        # verbatim and it was sent as the child's message (seen in Noya's
+        # session - the math prompt itself became a purple bubble). The
+        # filter must catch echoes even when the prompt wording changes.
+        from unittest.mock import MagicMock
+        mock_openai.audio.transcriptions.create.return_value = MagicMock(
+            text="ילד קטן עונה על שאלות חשבון בעברית, ממשפט במספרים."
+        )
+        response = await client.post(
+            "/api/tutor/transcribe",
+            files={"file": ("test.mp3", b"fake-audio-bytes", "audio/mpeg")},
+            data={"subject": "math"},
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code == 200
+        assert response.json()["text"] == ""
+
 
 class TestFuzzing:
     async def test_malformed_json_returns_400(self, client):

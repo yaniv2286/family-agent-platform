@@ -929,19 +929,30 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "recording.mp3", 
 
         # Whisper hallucination guard: on silent/unclear audio the model
         # sometimes echoes its own context prompt or meta-descriptions as the
-        # "transcript" (seen in production - the full prompt became the
+        # "transcript" (seen in production twice - the full prompt became the
         # child's message). Those are never real child speech.
-        if any(
-            marker in text
-            for marker in (
-                "שאלות נפוצות",
-                "ילד קטן שמדבר",
-                "שיחה בעברית, יכול לומר",
-                "practicing English",
-                "Israeli child",
-                "speech-recognition",
-                "תמלול",
+        def _word_set(s):
+            return set(re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE).lower().split())
+
+        text_words = _word_set(text)
+        if (
+            any(
+                marker in text
+                for marker in (
+                    "שאלות נפוצות",
+                    "ילד קטן שמדבר",
+                    "ילד קטן עונה",
+                    "שיחה בעברית, יכול לומר",
+                    "practicing English",
+                    "Israeli child",
+                    "speech-recognition",
+                    "תמלול",
+                )
             )
+            # Every word of the transcript comes from the context prompt -
+            # a verbatim (or partial) prompt echo, not a real utterance.
+            # This catches the echo even when the prompt text changes.
+            or (text_words and text_words <= _word_set(prompt))
         ):
             logger.warning("transcription echoed prompt/meta text, discarding", text=text[:120])
             return ""
