@@ -2577,6 +2577,46 @@
            server, so the page never knows the right answer in advance. */
         let activeLesson = null;
 
+        // Lessons are written in plural ("תגידו Hello") but address ONE child.
+        // Personalize to the child's grammatical gender so a 5-year-old hears
+        // "תגידי" (Libi) or "תגיד" (Lavi), matching Koko's chat persona.
+        const LESSON_GENDER = { 'נויה': 'f', 'ליבי': 'f', 'לביא': 'm', 'ינאי': 'm' };
+        function childGender() {
+            const n = ((selectedUserProfile && selectedUserProfile.name) || '').trim();
+            if (LESSON_GENDER[n]) return LESSON_GENDER[n];
+            return /[הת]$/.test(n) ? 'f' : 'm';
+        }
+        const HE_PLURAL_FORMS = {
+            'תגידו': ['תגידי', 'תגיד'], 'אמרו': ['אמרי', 'אמור'], 'נסו': ['נסי', 'נסה'],
+            'הקשיבו': ['הקשיבי', 'הקשב'], 'בחרו': ['בחרי', 'בחר'], 'ובחרו': ['ובחרי', 'ובחר'],
+            'חברו': ['חברי', 'חבר'], 'חלקו': ['חלקי', 'חלק'], 'סדרו': ['סדרי', 'סדר'],
+            'קראו': ['קראי', 'קרא'], 'שיחקו': ['שחקי', 'שחק'], 'תספרו': ['תספרי', 'תספר'],
+            'תענו': ['תעני', 'תענה'], 'תציגו': ['תציגי', 'תציג'], 'תשאלו': ['תשאלי', 'תשאל'],
+            'הציגו': ['הציגי', 'הציג'], 'נספרו': ['נספרי', 'נספר'], 'ומצאו': ['ומצאי', 'ומצא'],
+            'ושאלו': ['ושאלי', 'ושאל'], 'ספרו': ['ספרי', 'ספר'], 'לחצו': ['לחצי', 'לחץ'],
+            'החזיקו': ['החזיקי', 'החזיק'], 'לומדים': ['לומדת', 'לומד'], 'מחזיקים': ['מחזיקה', 'מחזיק'],
+            'אומרים': ['אומרת', 'אומר'], 'עוזבים': ['עוזבת', 'עוזב'], 'סיימתם': ['סיימת', 'סיימת'],
+            'קיבלתם': ['קיבלת', 'קיבלת'], 'אוהבים': ['אוהבת', 'אוהב'], 'סיימו': ['סיימי', 'סיים'],
+            'ועוזבים': ['ועוזבת', 'ועוזב'], 'ומחזיקים': ['ומחזיקה', 'ומחזיק'],
+            'ואומרים': ['ואומרת', 'ואומר'], 'ולומדים': ['ולומדת', 'ולומד'],
+        };
+        const HE_PLURAL_RE = new RegExp(
+            '(^|\\s)(' + Object.keys(HE_PLURAL_FORMS).join('|') + ')(?=\\s|$|:|,|!|\\?)', 'g');
+        function personalizeHe(text) {
+            if (!text) return text;
+            const f = childGender() === 'f' ? 0 : 1;
+            return text.replace(HE_PLURAL_RE, (m, pre, w) => pre + HE_PLURAL_FORMS[w][f]);
+        }
+        // What the child HEARS for a slide: speak slides get a "repeat after
+        // me" frame ("תגידי אחריי: Hello") which a kindergartener understands;
+        // other slides speak their personalized Hebrew instruction.
+        function slideSpokenText(slide) {
+            if (slide.type === 'speak' && slide.prompt_en) {
+                return (childGender() === 'f' ? 'תגידי אחריי: ' : 'תגיד אחריי: ') + slide.prompt_en;
+            }
+            return personalizeHe(slide.prompt_he || slide.say || '');
+        }
+
         async function startEnglishLesson(lessonId) {
             const response = await safeFetch(`/api/tutor/english/lesson/${lessonId}?user_id=${selectedUserId}`);
             if (!response.ok) {
@@ -2588,7 +2628,7 @@
             const lesson = await response.json();
             if (lesson.lessons_done_today >= lesson.daily_lesson_limit) {
                 document.getElementById('ec-placement').textContent =
-                    `כבר סיימתם ${lesson.daily_lesson_limit} שיעורים היום. נמשיך מחר.`;
+                    personalizeHe(`כבר סיימתם ${lesson.daily_lesson_limit} שיעורים היום. נמשיך מחר.`);
                 return;
             }
             activeLesson = lesson;
@@ -2596,11 +2636,17 @@
             showScreen('tutoring');
             studentName.textContent = `👤 ${selectedUserProfile.name}`;
 
-            renderLessonSlide(0, 0);
-            speakResponse(lesson.intro_he, 'wave');
+            renderLessonSlide(0, 0, true);
+            // One continuous utterance: greeting + lesson intro + the first
+            // slide's instruction. A separate speakResponse call would cut the
+            // intro mid-way when the slide auto-speaks 1.2s later.
+            const name = (selectedUserProfile && selectedUserProfile.name) || '';
+            const opening = personalizeHe(
+                `שלום ${name}! ${lesson.intro_he || ''} ${slideSpokenText(lesson.slides[0])}`);
+            speakResponse(opening, 'wave');
         }
 
-        function renderLessonSlide(index, stars) {
+        function renderLessonSlide(index, stars, deferSpeak = false) {
             const lesson = activeLesson;
             chatContainer.innerHTML = '';
             const slide = lesson.slides[index];
@@ -2608,7 +2654,7 @@
             box.className = 'lesson-slide';
             const starsHtml = '⭐'.repeat(stars) + '☆'.repeat(lesson.slides.length - stars);
             box.innerHTML = `<div class="ls-progress">${starsHtml} · ${index + 1}/${lesson.slides.length}</div>` +
-                `<div class="ls-he">${escapeFitnessHtml(slide.prompt_he || '')}</div>` +
+                `<div class="ls-he">${escapeFitnessHtml(personalizeHe(slide.prompt_he) || '')}</div>` +
                 `<div class="ls-en" dir="ltr">${escapeFitnessHtml(slide.prompt_en || '')}</div>` +
                 `<div class="ls-options" dir="ltr"></div>` +
                 `<div class="ls-feedback"></div>`;
@@ -2622,24 +2668,24 @@
                     { method: 'POST', headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ stars_earned: earned }) });
                 if (!done.ok) {
-                    box.innerHTML = `<div class="ls-he">השיעור נגמר, אבל הגעתם למכסת השיעורים היומית.</div>`;
-                    speakResponse('כל הכבוד! סיימתם את השיעור.', 'celebrate');
+                    box.innerHTML = `<div class="ls-he">השיעור נגמר, אבל הגעת למכסת השיעורים היומית.</div>`;
+                    speakResponse(personalizeHe('כל הכבוד! סיימתם את השיעור.'), 'celebrate');
                     return;
                 }
                 const data = await done.json();
                 const lines = [`<div class="ls-en">כל הכבוד!</div>`,
-                    `<div class="ls-he">סיימתם את "${escapeFitnessHtml(lesson.title_he)}" עם ${earned} ⭐ +1 ⭐ בונוס על השיעור — סה"כ ${data.total_stars} כוכבים!</div>`];
+                    `<div class="ls-he">${personalizeHe(`סיימתם את "${escapeFitnessHtml(lesson.title_he)}" עם ${earned} ⭐ +1 ⭐ בונוס על השיעור — סה"כ ${data.total_stars} כוכבים!`)}</div>`];
                 if (data.unit_completed)
                     lines.push(`<div class="ls-he ls-reward">🏆 הושלמה כל היחידה — +2 ⭐ בונוס!</div>`);
                 if (data.reward_earned)
-                    lines.push(`<div class="ls-he ls-reward">🎁 קיבלת מתנה${data.reward_text ? ` — ${escapeFitnessHtml(data.reward_text)}` : ''}! ספרו להורה.</div>`);
+                    lines.push(`<div class="ls-he ls-reward">🎁 קיבלת מתנה${data.reward_text ? ` — ${escapeFitnessHtml(data.reward_text)}` : ''}! ${childGender() === 'f' ? 'ספרי' : 'ספר'} להורה.</div>`);
                 box.innerHTML = lines.join('');
-                speakResponse(
+                speakResponse(personalizeHe(
                     data.reward_earned
-                        ? 'כל הכבוד! הרווחת מתנה! ספרי להורה!'
+                        ? 'כל הכבוד! הרווחת מתנה! ספרו להורה!'
                         : data.unit_completed
                             ? 'כל הכבוד! סיימתם את כל היחידה!'
-                            : 'כל הכבוד! סיימתם את השיעור.',
+                            : 'כל הכבוד! סיימתם את השיעור.'),
                     'celebrate');
             };
 
@@ -2658,15 +2704,15 @@
                     box.appendChild(pop);
                     setTimeout(() => pop.remove(), 1400);
                 }
-                feedback.textContent = result.praise_he || '';
-                speakResponse(result.praise_he || '', result.correct ? 'celebrate' : 'nod');
+                feedback.textContent = personalizeHe(result.praise_he || '');
+                speakResponse(personalizeHe(result.praise_he || ''), result.correct ? 'celebrate' : 'nod');
                 const last = index + 1 >= lesson.slides.length;
                 setTimeout(() => last ? finish(nextStars) : renderLessonSlide(index + 1, nextStars), 1600);
             };
 
             if (slide.type === 'speak') {
-                options.innerHTML = '<button class="ec-assign">🎤 החזיקו רווח או לחצו כאן</button>';
-                const ask = () => speakResponse(slide.prompt_he || slide.say || slide.prompt_en, 'listen');
+                options.innerHTML = `<button class="ec-assign">🎤 ${childGender() === 'f' ? 'לחצי כאן ואמרי את המילה' : 'לחץ כאן ואמור את המילה'}</button>`;
+                const ask = () => speakResponse(slideSpokenText(slide), 'listen');
                 options.querySelector('button').onclick = ask;
                 // The next held-Space recording belongs to this slide, not the chat.
                 lessonSlideAnswer = (text) => answered(text);
@@ -2697,7 +2743,9 @@
                 });
                 if (slide.story_he) feedback.textContent = slide.story_he;
             }
-            if (slide.say) setTimeout(() => speakResponse(slide.prompt_he || slide.say, 'listen'), 1200);
+            if (!deferSpeak && (slide.say || slide.prompt_he)) {
+                setTimeout(() => speakResponse(slideSpokenText(slide), 'listen'), 1200);
+            }
         }
 
         let lessonSlideAnswer = null;
