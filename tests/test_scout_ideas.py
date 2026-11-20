@@ -17,6 +17,29 @@ APP_PIN = "test-pin-1234"
 PIN_HEADERS = {"x-app-pin": APP_PIN}
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_scout_env(monkeypatch):
+    """Never let tests use the real SCOUT_* credentials from .env - the real
+    .env is loaded by the app, and without this a test would open a live
+    Telegram user session and collect real messages."""
+    for var in (
+        "SCOUT_TELEGRAM_API_ID",
+        "SCOUT_TELEGRAM_API_HASH",
+        "SCOUT_TELEGRAM_SESSION",
+        "SCOUT_TELEGRAM_CHANNELS",
+        "SCOUT_RSS_FEEDS",
+        "SCOUT_DISCORD_BOT_TOKEN",
+        "SCOUT_DISCORD_CHANNEL_IDS",
+        "GEMINI_API_KEY",
+        "SCOUT_GEMINI_MODEL",
+        "SCOUT_RESEARCH_MAX_IDEAS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _clean_scout_tables():
     async with SessionLocal() as db:
@@ -155,6 +178,116 @@ async def test_status_endpoint_reports_config_and_counts(client, monkeypatch):
     assert data["total_items"] == 1
     assert data["pending_items"] == 0
     assert isinstance(data["source_cursors"], list)
+
+
+async def test_research_pipeline_uses_gemini_verdict_and_channel(client, monkeypatch):
+    """With GEMINI_API_KEY set the digest switches to the research pipeline:
+    candidates are extracted, each top candidate is deep-researched, and the
+    message shows verdict + reasoning + the originating channel."""
+    import agents.scout_ideas_agent as scout
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("SCOUT_RESEARCH_MAX_IDEAS", "8")
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(scout, "_send_via_messenger", send)
+    monkeypatch.setattr(
+        scout,
+        "_COLLECTORS",
+        [_fake_collector([_fake_item()]), _fake_collector([]), _fake_collector([])],
+    )
+    monkeypatch.setattr(
+        scout,
+        "_extract_candidates",
+        AsyncMock(return_value=[
+            {
+                "asset": "מלם תים",
+                "direction": "long",
+                "reason": "צמיחה ברווח ודיבידנד",
+                "sources": ["@YKalphatrading"],
+            }
+        ]),
+    )
+    research = AsyncMock(return_value={
+        "verdict": "מומלץ",
+        "reasoning": "מכפיל רווח 12, צמיחת הכנסות 18%, יעד מחיר ממוצע גבוה ב-15% מהמחיר.",
+        "confidence": "גבוהה",
+        "citations": [],
+    })
+    monkeypatch.setattr(scout, "_research_candidate", research)
+
+    resp = await client.post("/api/scout/run-now", headers=PIN_HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["telegram_sent"] is True
+    text = data["summary_text"]
+    assert "מלם תים" in text
+    assert "מומלץ" in text
+    assert "מכפיל רווח 12" in text
+    assert "@YKalphatrading" in text
+    research.assert_awaited_once()
+
+
+async def test_research_pipeline_falls_back_without_gemini_key(client, monkeypatch):
+    """No GEMINI_API_KEY -> the plain digest path is used."""
+    import agents.scout_ideas_agent as scout
+
+    send, llm = _patch_pipeline(monkeypatch, scout, [_fake_item()])
+    resp = await client.post("/api/scout/run-now", headers=PIN_HEADERS)
+    data = resp.json()
+    assert data["telegram_sent"] is True
+    assert "💼 digest" in data["summary_text"]
+    assert llm.await_count == 1
+
+
+async def test_digest_skips_stale_and_samples_sources_fairly(client, monkeypatch):
+    """Regression for the first-backfill bug: one hyper-active channel filled
+    the whole 60-item digest because selection was strictly id-ordered.
+
+    - Items older than SCOUT_STALE_HOURS are marked digested=2 (skipped), not sent.
+    - Fresh items are picked round-robin per source so every channel is heard.
+    """
+    import agents.scout_ideas_agent as scout
+    from datetime import datetime, timedelta
+
+    async with SessionLocal() as db:
+        # One stale item (5 days old) - must be skipped.
+        db.add(ScoutItem(
+            source="telegram:@a", external_id="old1", author="@a",
+            content="OLD stock tip from last week",
+            published_at=datetime.utcnow() - timedelta(days=5),
+        ))
+        # 70 fresh items from channel A + 5 from channel B.
+        for i in range(70):
+            db.add(ScoutItem(
+                source="telegram:@a", external_id=f"a{i}", author="@a",
+                content=f"idea from A {i}",
+                published_at=datetime.utcnow(),
+            ))
+        for i in range(5):
+            db.add(ScoutItem(
+                source="telegram:@b", external_id=f"b{i}", author="@b",
+                content=f"idea from B {i}",
+                published_at=datetime.utcnow(),
+            ))
+        await db.commit()
+
+    send, llm = _patch_pipeline(monkeypatch, scout, [])
+    resp = await client.post("/api/scout/run-now", headers=PIN_HEADERS)
+    data = resp.json()
+    assert data["telegram_sent"] is True
+
+    # The LLM user message lists sources as "מקור: <source>" - both channels
+    # must appear, and the stale item must not.
+    llm_block = llm.await_args.args[1][0]["content"]
+    assert "telegram:@a" in llm_block
+    assert "telegram:@b" in llm_block
+    assert "OLD stock tip" not in llm_block
+
+    async with SessionLocal() as db:
+        stale = (await db.execute(
+            select(ScoutItem).where(ScoutItem.external_id == "old1")
+        )).scalar_one()
+        assert stale.digested == 2
 
 
 async def test_items_endpoint_lists_collected_items(client, monkeypatch):

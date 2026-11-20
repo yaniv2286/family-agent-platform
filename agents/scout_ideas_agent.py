@@ -22,10 +22,12 @@ Sources are configured purely through environment variables:
 """
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import httpx
+import json
+import re
 from fastapi import APIRouter
 from loguru import logger
 from sqlalchemy import func, select, update
@@ -42,6 +44,7 @@ MAX_ITEMS_PER_DIGEST = 60
 MAX_CONTENT_CHARS = 1500
 MAX_ENTRIES_PER_FEED = 30
 MAX_MESSAGES_PER_CHANNEL = 200
+MAX_TELEGRAM_MESSAGE_CHARS = 3900
 
 
 def _csv_env(name: str) -> List[str]:
@@ -94,13 +97,19 @@ async def _collect_telegram() -> Tuple[List[dict], Dict[str, str]]:
     items: List[dict] = []
     cursors: Dict[str, str] = {}
     async with TelegramClient(StringSession(session), int(api_id), api_hash) as client:
+        # Populate the entity cache so bare channel IDs (channels without a
+        # public @username) resolve through the user's dialogs.
+        await client.get_dialogs()
         for chan in channels:
             source = f"telegram:{chan}"
             last_seen = await _get_last_seen_id(source)
             min_id = int(last_seen) if last_seen else 0
             max_id = min_id
+            entity = int(chan) if chan.lstrip("-").isdigit() else chan
             try:
-                async for msg in client.iter_messages(chan, min_id=min_id, limit=MAX_MESSAGES_PER_CHANNEL):
+                resolved = await client.get_entity(entity)
+                channel_title = getattr(resolved, "title", None) or chan
+                async for msg in client.iter_messages(entity, min_id=min_id, limit=MAX_MESSAGES_PER_CHANNEL):
                     max_id = max(max_id, msg.id)
                     text = (msg.message or "").strip()
                     if not text:
@@ -108,7 +117,7 @@ async def _collect_telegram() -> Tuple[List[dict], Dict[str, str]]:
                     items.append({
                         "source": source,
                         "external_id": str(msg.id),
-                        "author": chan,
+                        "author": channel_title,
                         "title": None,
                         "content": text[:MAX_CONTENT_CHARS],
                         "url": None,
@@ -373,6 +382,240 @@ def _build_fallback_digest(items: List[dict]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Deep-research pipeline (Gemini + Google Search grounding)
+#
+# Stage 1: _extract_candidates  - cheap LLM pass turns raw items into a
+#           deduped candidate list: asset, direction, reason, source channels.
+# Stage 2: _research_candidate  - Gemini with google_search tool researches
+#           fundamentals, technicals, analyst ratings and recent reports,
+#           then returns a verdict + numeric reasoning in Hebrew.
+# Stage 3: _build_research_digest - formats verdict + source channel per idea.
+# ---------------------------------------------------------------------------
+
+_RESEARCH_VERDICTS = {"מומלץ": "✅", "זהירות": "⚠️", "לא מומלץ": "❌"}
+
+
+def _display_source(source: str, author: Optional[str] = None) -> str:
+    """'telegram:@chan' -> '@chan' (or the channel title when known)."""
+    short = source.split(":", 1)[-1]
+    return author or short
+
+
+async def _extract_candidates(items: List[dict]) -> List[dict]:
+    """LLM pass 1: extract concrete investment candidates from raw items.
+
+    Returns a deduped list of dicts:
+        {"asset", "direction", "reason", "sources": [channel names]}
+    Same asset mentioned in several channels is merged into one candidate
+    with all sources listed - repeated mentions are a signal, not a duplicate.
+    """
+    if not items:
+        return []
+
+    block_lines = []
+    for i, it in enumerate(items, start=1):
+        entry = f"[{i}] מקור: {_display_source(it['source'])}"
+        if it.get("author"):
+            entry += f" ({it['author']})"
+        if it.get("title"):
+            entry += f"\nכותרת: {it['title']}"
+        entry += f"\n{it['content']}"
+        block_lines.append(entry)
+    block = "\n\n".join(block_lines)
+
+    system_prompt = """אתה אנליסט השקעות. אתה מקבל אוסף הודעות ומאמרים ממקורות שהמשקיע מנוי אליהם.
+
+המשימה: חלץ רק רעיונות השקעה קונקרטיים - נכס/טיקר/מניה ספציפית עם כיוון מוצע.
+
+החזר JSON בלבד במבנה:
+{"candidates": [{"asset": "שם נכס או טיקר", "direction": "long|short|watch", "reason": "סיבה במשפט אחד", "item_ids": [1, 3]}]}
+
+חוקים:
+- item_ids = מספרי הפריטים [i] שמהם נלקח הרעיון. אם אותו נכס מופיע בכמה פריטים - ציין את כולם.
+- כלול רק נכסים ספציפיים (מניה/טיקר/ETF/קריפטו) - לא נושאים כלליים כמו "הנדל"ן" או "השקל".
+- התעלם מפרסומות, ספאם וקידום מכירות.
+- direction: long = המלצת קנייה, short = מכירה/שורט, watch = אזכור מעניין בלי המלצה ברורה.
+- מקסימום 15 מועמדים, בסדר יורד של חשיבות.
+- אם אין מועמדים - החזר {"candidates": []}."""
+
+    try:
+        from tutors import BaseAgent  # local import avoids circular imports
+        raw = await BaseAgent()._call_llm(
+            system_prompt,
+            [{"role": "user", "content": block}],
+            max_tokens=1200,
+            primary_model="gpt-4o-mini",
+            fallback_model="gpt-4o-mini",
+            json_response=True,
+        )
+        data = json.loads(raw)
+    except Exception:
+        logger.exception("Candidate extraction failed")
+        return []
+
+    by_asset: Dict[str, dict] = {}
+    for cand in (data.get("candidates") or []):
+        asset = (cand.get("asset") or "").strip()
+        if not asset:
+            continue
+        key = asset.lower()
+        sources = by_asset.setdefault(key, {}).setdefault("sources", set())
+        for iid in cand.get("item_ids") or []:
+            try:
+                it = items[int(iid) - 1]
+                sources.add(_display_source(it["source"], it.get("author")))
+            except (IndexError, ValueError):
+                continue
+        merged = by_asset.setdefault(
+            key, {"asset": asset, "direction": "watch", "reason": "", "sources": set()}
+        )
+        merged["asset"] = asset
+        merged["direction"] = cand.get("direction") or merged["direction"]
+        merged["reason"] = cand.get("reason") or merged["reason"]
+
+    candidates = list(by_asset.values())
+    for cand in candidates:
+        cand["sources"] = sorted(cand["sources"])
+    candidates.sort(key=lambda c: -len(c["sources"]))
+    return candidates
+
+
+async def _research_candidate(candidate: dict) -> Optional[dict]:
+    """Gemini + Google Search grounding: deep research on one candidate.
+
+    Returns {"verdict", "reasoning", "sources"} or None when Gemini is not
+    configured / fails (caller then falls back to the plain digest).
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("SCOUT_GEMINI_MODEL", "gemini-2.5-flash")
+
+    direction_he = {"long": "קנייה/לונג", "short": "מכירה/שורט", "watch": "מעקב"}[
+        candidate.get("direction", "watch")
+    ]
+    prompt = f"""חקור לעומק את הנכס "{candidate['asset']}" כהשקעה, ותן פסק דין.
+
+רקע: ערוץ/מקור המליץ עליו בכיוון {direction_he}. נימוק המקור: {candidate.get('reason', 'לא צוין')}.
+
+בצע חיפוש אינטרנטי אמיתי ובדוק:
+1. פונדומנטלס עדכניים - מכירות, רווח נקי, מכפיל רווח, מגמת תוצאות ותחזית הנהלה.
+2. תמונת טכני - מגמה, תמיכה/התנגדות, מומנטום.
+3. דירוגי אנליסטים ויעדי מחיר עדכניים.
+4. דוחות כספיים אחרונים וחדשות עדכניות שיכולות לשנות את התמונה.
+
+החזר JSON בלבד (בלי markdown, בלי ```):
+{{"verdict": "מומלץ|זהירות|לא מומלץ", "reasoning": "3-5 משפטים בעברית עם מספרים קונקרטיים (מכפיל, רווח, יעד מחיר, שינוי אחוזים) שמצדיקים את הפסיקה", "confidence": "גבוהה|בינונית|נמוכה"}}
+
+חוקים: אל תמציא נתונים; אם אין מידע מספיק על הנכס - verdict="זהירות" וציין זאת; זו סקירת מידע בלבד, לא ייעוץ השקעות."""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "tools": [{"google_search": {}}],
+        # Gemini 2.5 thinking tokens count against maxOutputTokens - keep the
+        # budget generous so the JSON answer is never truncated mid-object.
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(url, params={"key": api_key}, json=payload)
+            resp.raise_for_status()
+        data = resp.json()
+        parts = data["candidates"][0]["content"]["parts"]
+        # Thinking models emit {"thought": true, "text": ...} parts - skip them.
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+        # Grounding citations (search sources actually used)
+        grounding = data["candidates"][0].get("groundingMetadata") or {}
+        citations = [
+            (c.get("web") or {}).get("uri")
+            for c in grounding.get("groundingChunks", [])
+        ]
+    except Exception:
+        logger.exception("Gemini research failed", asset=candidate.get("asset"))
+        return None
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+    try:
+        # The model may prepend prose - take the outermost JSON object only.
+        obj = re.search(r"\{.*\}", cleaned, re.S)
+        research = json.loads(obj.group(0) if obj else cleaned)
+    except json.JSONDecodeError:
+        # Truncated or malformed JSON: salvage whatever fields did survive so
+        # the digest still shows a clean verdict/reasoning instead of raw JSON.
+        logger.warning("Gemini research not valid JSON; salvaging fields", asset=candidate.get("asset"))
+        def _field(name: str) -> Optional[str]:
+            m = re.search(rf'"{name}"\s*:\s*"((?:[^"\\]|\\.)*)', cleaned)
+            return m.group(1).replace('\\"', '"').replace("\\n", " ") if m else None
+        research = {
+            "verdict": _field("verdict") or "זהירות",
+            "reasoning": _field("reasoning") or cleaned[:600],
+            "confidence": _field("confidence") or "נמוכה",
+        }
+
+    verdict = research.get("verdict") or "זהירות"
+    if verdict not in _RESEARCH_VERDICTS:
+        verdict = "זהירות"
+    return {
+        "verdict": verdict,
+        "reasoning": (research.get("reasoning") or "")[:600],
+        "confidence": research.get("confidence") or "",
+        "citations": [u for u in citations if u][:3],
+    }
+
+
+def _build_research_digest(candidates: List[dict], max_ideas: int) -> str:
+    """Format the final digest: verdict + numeric reasoning + source channel."""
+    lines = ["💼 מחקר השקעות מעמיק - מבוסס מחקר אינטרנטי חי\n"]
+    direction_he = {"long": "לונג", "short": "שורט", "watch": "מעקב"}
+
+    for i, cand in enumerate(candidates[:max_ideas], start=1):
+        research = cand.get("research") or {}
+        verdict = research.get("verdict", "זהירות")
+        emoji = _RESEARCH_VERDICTS.get(verdict, "⚠️")
+        direction = direction_he.get(cand.get("direction", "watch"), "מעקב")
+        lines.append(f"{i}. **{cand['asset']}** — {emoji} {verdict} (המקור: {direction})")
+        if cand.get("reason"):
+            lines.append(f"   מהמקור: {cand['reason']}")
+        if research.get("reasoning"):
+            lines.append(f"   ניתוח: {research['reasoning']}")
+        if research.get("confidence"):
+            lines.append(f"   רמת ביטחון: {research['confidence']}")
+        if cand.get("sources"):
+            lines.append(f"   📌 ערוץ: {', '.join(cand['sources'])}")
+        lines.append("")
+
+    lines.append("⚖️ מידע בלבד - לא ייעוץ השקעות. בדוק בעצמך לפני פעולה.")
+    text = "\n".join(lines)
+    if len(text) > MAX_TELEGRAM_MESSAGE_CHARS:
+        text = text[: MAX_TELEGRAM_MESSAGE_CHARS - 60] + "\n…(קוצר)"
+    return text
+
+
+async def _researched_summarize(items: List[dict]) -> Optional[str]:
+    """Full pipeline: extract candidates, deep-research top N, format digest.
+
+    Returns None when the research path is unavailable (no GEMINI_API_KEY or
+    extraction produced nothing) so the caller falls back to the plain digest.
+    """
+    if not os.getenv("GEMINI_API_KEY"):
+        return None
+    max_ideas = int(os.getenv("SCOUT_RESEARCH_MAX_IDEAS", "8"))
+
+    candidates = await _extract_candidates(items)
+    if not candidates:
+        return None
+
+    for cand in candidates[:max_ideas]:
+        cand["research"] = await _research_candidate(cand)
+
+    return _build_research_digest(candidates, max_ideas)
+
+
 async def _send_via_messenger(text: str, channel: str = "telegram") -> bool:
     """Ask the messenger agent to deliver text to a channel."""
     try:
@@ -406,15 +649,45 @@ async def run_scout_digest() -> dict:
         pending_ids: List[int] = []
         pending_items: List[dict] = []
         async with SessionLocal() as db:
+            # Stale gate: a "buy" call from days ago is not an idea anymore.
+            # Mark old backlog as digested=2 (skipped-stale) so it never
+            # reaches the digest; only fresh items continue.
+            stale_hours = int(os.getenv("SCOUT_STALE_HOURS", "48"))
+            cutoff = datetime.utcnow() - timedelta(hours=stale_hours)
+            stale = await db.execute(
+                update(ScoutItem)
+                .where(
+                    ScoutItem.digested == 0,
+                    func.coalesce(ScoutItem.published_at, ScoutItem.collected_at) < cutoff,
+                )
+                .values(digested=2)
+            )
+            if stale.rowcount:
+                logger.info("Marked stale scout items as skipped", count=stale.rowcount)
+
+            # Fair sampling: fetch a window of fresh pending items and pick
+            # round-robin per source so one hyper-active channel cannot
+            # dominate the whole digest (first backfill bug).
             rows = (await db.execute(
                 select(ScoutItem)
                 .where(ScoutItem.digested == 0)
                 .order_by(ScoutItem.id)
-                .limit(MAX_ITEMS_PER_DIGEST)
+                .limit(MAX_ITEMS_PER_DIGEST * 10)
             )).scalars().all()
+            by_source: Dict[str, list] = {}
+            for row in rows:
+                by_source.setdefault(row.source, []).append(row)
+            picked = []
+            while len(picked) < MAX_ITEMS_PER_DIGEST and any(by_source.values()):
+                for src in list(by_source):
+                    if by_source[src]:
+                        picked.append(by_source[src].pop(0))
+                        if len(picked) >= MAX_ITEMS_PER_DIGEST:
+                            break
+
             # Capture plain dicts inside the session - reading ORM attributes
             # after commit triggers MissingGreenlet (see AGENTS.md).
-            for row in rows:
+            for row in picked:
                 pending_ids.append(row.id)
                 pending_items.append({
                     "source": row.source,
@@ -423,6 +696,7 @@ async def run_scout_digest() -> dict:
                     "content": row.content,
                     "url": row.url,
                 })
+            await db.commit()
 
         if not pending_items:
             logger.info("Scout digest: no pending items; skipping send")
@@ -435,7 +709,11 @@ async def run_scout_digest() -> dict:
                 "summary_text": None,
             }
 
-        summary = await _summarize_items(pending_items)
+        # Prefer the deep-research pipeline (Gemini + live web search) when
+        # configured; otherwise keep the plain LLM digest.
+        summary = await _researched_summarize(pending_items)
+        if summary is None:
+            summary = await _summarize_items(pending_items)
         stamp = datetime.utcnow().strftime("%d/%m/%Y %H:%M")
         digest_text = f"📈 Scout Ideas - {stamp} UTC\n{summary}"
         sent = await _send_via_messenger(digest_text)

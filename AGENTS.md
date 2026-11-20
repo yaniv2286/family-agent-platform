@@ -138,10 +138,27 @@ $env:SCOUT_DISCORD_CHANNEL_IDS = "123456789012345678,234567890123456789"
 $env:SCOUT_DIGEST_ENABLED = "1"
 $env:SCOUT_DIGEST_HOURS = "8,20"
 $env:SCOUT_DIGEST_MINUTE = "15"
+
+# Deep-research pipeline (optional but recommended). When GEMINI_API_KEY is
+# set, the digest switches from a plain summary to a 2-stage pipeline:
+# (1) a cheap LLM extracts concrete asset candidates + their source channels;
+# (2) each top candidate (default 8, SCOUT_RESEARCH_MAX_IDEAS) is researched by
+# Gemini with Google Search grounding - fundamentals, technicals, analyst
+# ratings, recent reports - and the digest shows a verdict (מומלץ/זהירות/לא
+# מומלץ) + numeric reasoning + the originating Telegram channel.
+# Get a key at https://aistudio.google.com (free tier is enough).
+$env:GEMINI_API_KEY = "..."
+$env:SCOUT_GEMINI_MODEL = "gemini-2.5-flash"
+$env:SCOUT_RESEARCH_MAX_IDEAS = "8"
 ```
 
 Items stay `digested=0` when the Telegram send fails, so the next run retries
 them instead of losing them silently.
+
+The digest format is Hebrew and includes per idea: asset name, verdict with
+emoji, the source's direction, the research reasoning with concrete numbers,
+confidence level, and `📌 ערוץ:` with every channel that mentioned the asset.
+It is informational only, not investment advice.
 
 ## Full QA Bot (pre-deploy gate)
 
