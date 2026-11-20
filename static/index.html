@@ -805,6 +805,46 @@
             line-height: 1.5;
         }
 
+        /* Kid-friendly grid for drawn tables (rectangle method, place
+           value): rounded chunky cells instead of ASCII pipes. Axis cells
+           (the broken-down factors) are pink, answer cells blue, "?" cells
+           pulse yellow - "fill me in!". */
+        .chat-grid {
+            direction: ltr;
+            unicode-bidi: isolate;
+            border-collapse: separate;
+            border-spacing: 5px;
+            margin: 10px auto;
+        }
+        .chat-grid td {
+            min-width: 48px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: #e3ecff;
+            color: #3450c8;
+            font-size: 20px;
+            font-weight: 800;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(52, 80, 200, 0.12);
+        }
+        .chat-grid td.axis {
+            background: #ffe3ec;
+            color: #c23a7a;
+        }
+        .chat-grid td.blank {
+            background: transparent;
+            box-shadow: none;
+        }
+        .chat-grid td.q {
+            background: #fff3c4;
+            color: #b8860b;
+            animation: gridPulse 1.4s ease-in-out infinite;
+        }
+        @keyframes gridPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 215, 94, 0.9); }
+            50% { box-shadow: 0 0 0 6px rgba(255, 215, 94, 0); }
+        }
+
         /* Animated visual math card - solves column arithmetic step by step
            like the "moving pencil" YouTube explainers kids know. */
         .visual-math {
@@ -2626,6 +2666,7 @@
             'קיבלתם': ['קיבלת', 'קיבלת'], 'אוהבים': ['אוהבת', 'אוהב'], 'סיימו': ['סיימי', 'סיים'],
             'ועוזבים': ['ועוזבת', 'ועוזב'], 'ומחזיקים': ['ומחזיקה', 'ומחזיק'],
             'ואומרים': ['ואומרת', 'ואומר'], 'ולומדים': ['ולומדת', 'ולומד'],
+            'הסתכלו': ['הסתכלי', 'הסתכל'],
         };
         const HE_PLURAL_RE = new RegExp(
             '(^|\\s)(' + Object.keys(HE_PLURAL_FORMS).join('|') + ')(?=\\s|$|:|,|!|\\?)', 'g');
@@ -3004,7 +3045,7 @@
                 chatContainer.innerHTML = '';
                 addMessage('assistant', data.reply);
                 updatePointsDisplay(data.total_points || 0, data.points_earned || 0);
-                await speakResponse(data.reply, data.gesture);
+                await speakResponse(spokenText(data.reply), data.gesture);
             } catch (error) {
                 console.error('Error initializing chat:', error);
                 chatContainer.innerHTML = '';
@@ -3111,13 +3152,51 @@
         }
 
         // ASCII diagrams (rectangle method, place-value tables) arrive fenced
-        // in ``` blocks - render them as LTR monospace <pre> or bidi mangles
-        // the grid and the backticks show literally.
+        // in ``` blocks. Pipe-grids become a real kid-friendly table; other
+        // blocks render as LTR monospace <pre> so bidi can't mangle them.
+        function escapeDiagramHtml(s) {
+            return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // "|"-separated rows (skipping ---+--- separator lines) -> HTML grid.
+        // First row and first column are the factor/place axes and get a
+        // different tint; "?" cells pulse as fill-me spots.
+        function tryRenderAsciiGrid(code) {
+            const rows = [];
+            for (const line of code.split('\n')) {
+                const t = line.trim();
+                if (!t || /^[-+|=\s]+$/.test(t)) continue;   // blank / separator
+                if (!t.includes('|')) continue;              // e.g. "200+30=230" sum line
+                rows.push(line.split('|').map(c => c.trim()));
+            }
+            if (rows.length < 2) return null;
+            const cols = Math.max(...rows.map(r => r.length));
+            if (cols < 2) return null;
+            const cellHtml = (txt, axis) => {
+                const cls = txt === '' ? 'blank' : (txt === '?' ? 'q' : (axis ? 'axis' : ''));
+                return `<td class="${cls}">${escapeDiagramHtml(txt)}</td>`;
+            };
+            const body = rows.map((r, ri) =>
+                '<tr>' + Array.from({ length: cols }, (_, ci) => {
+                    const txt = r[ci] || '';
+                    return cellHtml(txt, ri === 0 || ci === 0);
+                }).join('') + '</tr>').join('');
+            return `<table class="chat-grid" dir="ltr"><tbody>${body}</tbody></table>`;
+        }
+
         function formatTutorContent(content) {
             return String(content).replace(/```([\s\S]*?)```/g, (_, code) => {
-                const safe = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return `<pre class="chat-ascii" dir="ltr">${safe}</pre>`;
+                return tryRenderAsciiGrid(code)
+                    || `<pre class="chat-ascii" dir="ltr">${escapeDiagramHtml(code)}</pre>`;
             });
+        }
+
+        // What TTS should say: the spoken text never includes the diagram
+        // itself (pipes and dashes read aloud sound awful) - it points the
+        // child at the picture instead.
+        function spokenText(text) {
+            const replaced = String(text).replace(/```[\s\S]*?```/g, ' הסתכלו על הציור. ');
+            return personalizeHe(replaced);
         }
 
         // Append a chat bubble to the DOM only (used when restoring a session).
@@ -4616,7 +4695,7 @@
                           .catch(e => console.error('Mastery update failed', e));
                     }
                 }
-                await speakResponse(data.reply, data.gesture);
+                await speakResponse(spokenText(data.reply), data.gesture);
                 if (tutorStatusState === 'thinking') setTutorStatus('idle');
             } catch (error) {
                 console.error('Error sending message:', error);
