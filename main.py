@@ -62,6 +62,7 @@ from fitness_agent import router as fitness_router
 from agents.messenger_agent import router as messenger_router
 from agents.data_agent import router as data_router
 from agents.nutrition_agent import router as nutrition_router
+from agents.scout_ideas_agent import router as scout_router
 from rbac import resolve_role, Role
 from english_curriculum import (
     COURSES,
@@ -199,6 +200,7 @@ for _router in (
     messenger_router,
     data_router,
     nutrition_router,
+    scout_router,
 ):
     app.include_router(_router)
 

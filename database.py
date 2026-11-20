@@ -429,6 +429,33 @@ class AgentTelemetryCache(Base):
     expires_at = Column(DateTime, nullable=True)
 
 
+class ScoutItem(Base):
+    __tablename__ = "scout_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # e.g. "telegram:@channel", "rss:https://feed", "discord:123456789"
+    source = Column(String, nullable=False, index=True)
+    external_id = Column(String, nullable=False)
+    author = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    content = Column(Text, nullable=False, default="")
+    url = Column(String, nullable=True)
+    published_at = Column(DateTime, nullable=True)
+    collected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Flipped to 1 once the item has been included in a digest that was sent.
+    digested = Column(Integer, nullable=False, default=0, index=True)
+
+    __table_args__ = (Index("uq_scout_item_source_ext", "source", "external_id", unique=True),)
+
+
+class ScoutSourceState(Base):
+    __tablename__ = "scout_source_state"
+
+    source = Column(String, primary_key=True)
+    last_seen_id = Column(String, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+
+
 BUILTIN_AGENTS = [
     {
         "agent_id": "koko_math",
@@ -511,6 +538,18 @@ BUILTIN_AGENTS = [
         "capabilities": ["query", "summarize_data"],
         "is_builtin": 1,
         "module_path": "agents.data_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
+    },
+    {
+        "agent_id": "scout_ideas",
+        "name": "Scout Ideas",
+        "description": "Scans subscribed Telegram channels, RSS feeds, and Discord channels for investment ideas and sends periodic digests.",
+        "kind": "platform",
+        "capabilities": ["collect", "digest", "alert"],
+        "is_builtin": 1,
+        "module_path": "agents.scout_ideas_agent",
         "router_attr": "router",
         "remote_url": None,
         "secret_env": None,
