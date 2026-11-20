@@ -530,8 +530,9 @@ class TestUserExpressionEval:
             self._history("(5+5:5)*5")
         )
         assert result is not None
-        expr, value = result
+        expr, value, claim_correct = result
         assert value == "30"
+        assert claim_correct is None
 
     def test_no_expression_returns_none(self):
         assert self.tutor._extract_user_expression_eval(
@@ -549,6 +550,38 @@ class TestUserExpressionEval:
         )
         assert result is not None
         assert result[1] == "12"
+
+    def test_spoken_hebrew_expression_with_correct_claim(self):
+        # Whisper transcript style: digits + operator words + "זה N".
+        # Production bug: Koko said "קרוב" to 456-213=243 and re-checked twice.
+        result = self.tutor._extract_user_expression_eval(
+            self._history("456 פחות 213 זה 243!")
+        )
+        assert result is not None
+        expr, value, claim_correct = result
+        assert value == "243"
+        assert claim_correct is True
+
+    def test_spoken_hebrew_expression_with_wrong_claim(self):
+        result = self.tutor._extract_user_expression_eval(
+            self._history("456 פחות 213 זה 240")
+        )
+        assert result is not None
+        assert result[1] == "243"
+        assert result[2] is False
+
+    def test_spoken_hebrew_expression_no_claim(self):
+        result = self.tutor._extract_user_expression_eval(
+            self._history("כמה זה 20 חלקי 5?")
+        )
+        assert result is not None
+        assert result[1] == "4"
+        assert result[2] is None
+
+    def test_non_math_hebrew_text_returns_none(self):
+        assert self.tutor._extract_user_expression_eval(
+            self._history("איך אומרים חתול באנגלית?")
+        ) is None
 
 
 class TestTtsSanitize:

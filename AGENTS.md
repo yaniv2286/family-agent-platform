@@ -93,6 +93,7 @@ Built-in platform agents are registered in `registered_agents` on startup and lo
 - `orchestrator` — meta-agent that runs scheduled intents (`daily_summary`) and coordinates other agents.
 - `messenger` — cross-channel messaging (Telegram today, email/WhatsApp stubs for the future).
 - `data` — read-only data/memory query agent for other agents to ask questions about family data.
+- `scout_ideas` — collects investment ideas from subscribed Telegram channels, RSS feeds, and Discord, then sends scheduled digests via the messenger agent.
 - `nutrition` — full agent with its own endpoints and mesh handlers.
 - `fitness` — existing Coach agent.
 - `koko_math` / `koko_english` — existing tutors.
@@ -103,6 +104,44 @@ To add a new built-in agent:
 2. Add it to `database.BUILTIN_AGENTS` with `is_builtin=1`, `module_path`, and `router_attr="router"`.
 3. Register any mesh handlers with `agent_mesh.on_event(...)` or `agent_mesh.on_ask(...)`.
 4. Run the mock test suite to ensure no regressions.
+
+## Scout Ideas (social collection agent)
+
+`agents/scout_ideas_agent.py` collects investment-related posts/articles on a
+schedule (default twice daily, `SCOUT_DIGEST_HOURS`), dedupes them in
+`scout_items`/`scout_source_state`, summarizes with the LLM, and delivers the
+digest through the messenger agent. Endpoints: `POST /api/scout/run-now`,
+`GET /api/scout/items`, `GET /api/scout/status`.
+
+Configuration is entirely env-driven; a source that is not configured is
+skipped silently:
+
+```powershell
+# Telegram user client - a bot cannot read the user's subscriptions, so this
+# requires api_id/api_hash from https://my.telegram.org plus a StringSession
+# generated once via: python scripts/scout_telegram_auth.py
+$env:SCOUT_TELEGRAM_API_ID = "..."
+$env:SCOUT_TELEGRAM_API_HASH = "..."
+$env:SCOUT_TELEGRAM_SESSION = "..."   # keep secret - it is a login credential
+$env:SCOUT_TELEGRAM_CHANNELS = "@somechannel,@anotherchannel"
+
+# RSS / newsletters (no auth needed)
+$env:SCOUT_RSS_FEEDS = "https://feed1.example.com/rss,https://feed2.example.com/atom"
+
+# Discord - only works with a regular guild bot invited by a server admin.
+# There is no ToS-compliant way to read a personal Discord account (self-bots
+# get accounts banned).
+$env:SCOUT_DISCORD_BOT_TOKEN = "..."
+$env:SCOUT_DISCORD_CHANNEL_IDS = "123456789012345678,234567890123456789"
+
+# Schedule (defaults shown)
+$env:SCOUT_DIGEST_ENABLED = "1"
+$env:SCOUT_DIGEST_HOURS = "8,20"
+$env:SCOUT_DIGEST_MINUTE = "15"
+```
+
+Items stay `digested=0` when the Telegram send fails, so the next run retries
+them instead of losing them silently.
 
 ## Full QA Bot (pre-deploy gate)
 

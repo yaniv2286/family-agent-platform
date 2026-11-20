@@ -1120,13 +1120,19 @@ class MathTutor(BaseAgent):
 
     def _extract_user_expression_eval(
         self, conversation_history: List[Dict]
-    ) -> Optional[Tuple[str, str]]:
+    ) -> Optional[Tuple[str, str, Optional[bool]]]:
         """If the child's last message contains an arithmetic expression
-        (e.g. homework they pasted: "(5+5:5)*5"), evaluate it deterministically
-        and return (expression, correct_value). Returns None otherwise.
+        (e.g. homework they pasted: "(5+5:5)*5", or spoken math the way
+        Whisper transcribes it: "456 פחות 213 זה 243"), evaluate it
+        deterministically and return (expression, correct_value,
+        claim_correct).
+
+        claim_correct is True/False when the child also stated a result
+        ("זה 243"), otherwise None.
 
         This is the ground truth for exercises the CHILD brings - without it
-        the LLM free-associates and gets order-of-operations wrong.
+        the LLM free-associates and gets order-of-operations wrong, or
+        doubts a demonstrably correct answer.
         """
         if not conversation_history:
             return None
@@ -1134,12 +1140,30 @@ class MathTutor(BaseAgent):
         if last.get("role") != "user":
             return None
         text = str(last.get("content") or "")
+
+        def _claim(after_pos: int) -> Optional[float]:
+            # A stated result right after the expression: "זה 243",
+            # "שווה 243", "יוצא 243".
+            m = re.search(
+                r"(?:זה|שווה(?:\s*ל)?|יוצא|יצא)\s*(-?\d+(?:\.\d+)?)",
+                text[after_pos:after_pos + 25],
+            )
+            return float(m.group(1)) if m else None
+
+        def _finish(expr_text: str, value: float, after_pos: int):
+            if isinstance(value, float) and abs(value) > 1e15:
+                return None
+            value_str = str(int(value)) if float(value).is_integer() else f"{value:g}"
+            claim = _claim(after_pos)
+            claim_correct = None if claim is None else abs(claim - value) <= 1e-6
+            return (expr_text, value_str, claim_correct)
+
         # Find the longest run of math characters (digits, operators, parens,
         # and Israeli : / ÷ / × notation).
-        candidates = re.findall(r"[\d().\s+\-*/:×÷xX]+", text)
+        candidates = re.finditer(r"[\d().\s+\-*/:×÷xX]+", text)
         best = None
-        for cand in candidates:
-            cand = cand.strip()
+        for match in candidates:
+            cand = match.group().strip()
             # Skip clock times like "18:30" (or "-18:30" captured with a
             # leading dash) - a timestamp is not a division exercise. A bare
             # "5:5" with a single-digit divisor is still evaluated.
@@ -1164,16 +1188,36 @@ class MathTutor(BaseAgent):
                 continue
             if not isinstance(value, (int, float)):
                 continue
-            if isinstance(value, float) and abs(value) > 1e15:
-                continue
-            best = (cand, value)
-        if best is None:
-            return None
-        expr, value = best
-        value_str = str(int(value)) if float(value).is_integer() else f"{value:g}"
-        return (expr, value_str)
+            best = (cand, value, match.end())
+        if best is not None:
+            return _finish(best[0], best[1], best[2])
 
-    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, correct_answer: Optional[Tuple[str, str, str]] = None, user_expression: Optional[Tuple[str, str]] = None) -> str:
+        # Spoken arithmetic (Whisper transcript): number + Hebrew operator
+        # word + number, e.g. "456 פחות 213 זה 243" or "שבע כפול שמונה".
+        heb_op = re.compile(
+            r"(\d+(?:\.\d+)?)\s*(פחות|מינוס|ועוד|פלוס|כפול|פעמים|חלקי|לחלק)\s*(\d+(?:\.\d+)?)"
+        )
+        for match in heb_op.finditer(text):
+            a = float(match.group(1))
+            b = float(match.group(3))
+            word = match.group(2)
+            try:
+                if word in ("פחות", "מינוס"):
+                    value = a - b
+                elif word in ("ועוד", "פלוס"):
+                    value = a + b
+                elif word in ("כפול", "פעמים"):
+                    value = a * b
+                else:
+                    if b == 0:
+                        continue
+                    value = a / b
+            except Exception:
+                continue
+            return _finish(match.group(0), value, match.end())
+        return None
+
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, correct_answer: Optional[Tuple[str, str, str]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None) -> str:
         """Generate system prompt based on user profile, dynamic long-term memory,
         and the most recent chat turns.
         """
@@ -1206,12 +1250,19 @@ class MathTutor(BaseAgent):
 
         user_expression_line = ""
         if user_expression:
-            expr, correct_value = user_expression
-            user_expression_line = (
+            expr, correct_value, claim_correct = user_expression
+            fact = (
                 f'התלמיד/ה שלח/ה את הביטוי {expr}. התוצאה הנכונה היא {correct_value} — חושבה לפי סדר פעולות חשבון '
                 f'(קודם סוגריים, בתוכם קודם כפל וחילוק משמאל לימין, ואז חיבור וחיסור). '
-                f'אין לחשב מחדש בעצמך — התוצאה הזו היא עובדה מוגמרת. הדרכ/י את התלמיד/ה לפי התוצאה הזו בלבד.'
+                f'אין לחשב מחדש בעצמך — התוצאה הזו היא עובדה מוגמרת.'
             )
+            if claim_correct is True:
+                fact += f' התלמיד/ה גם כתב/ה את התוצאה הנכונה {correct_value} — אשר/י מיד ושבח/י. אסור בשום אופן להטיל ספק בתשובה הזו ("קרוב", "בוא נבדוק") — היא נכונה לחלוטין.'
+            elif claim_correct is False:
+                fact += ' התלמיד/ה כתב/ה תוצאה שגויה — הדרכ/י בעדינות לתיקון לפי התוצאה הנכונה.'
+            else:
+                fact += ' הדרכ/י את התלמיד/ה לפי התוצאה הזו בלבד.'
+            user_expression_line = fact
         
         prompt = f"""אתה מנטור מתמטיקה מעורר השראה וחבר לכל החיים בשם המשפחה. אתה מדבר בעברית בלבד.
 
@@ -1275,7 +1326,7 @@ class MathTutor(BaseAgent):
 10. חובה מוחלטת - סדר פעולות חשבון: בתוך סוגריים ובכל ביטוי, קודם כפל וחילוק (משמאל לימין) ואז חיבור וחיסור. דוגמה: (5+5:5)*5 = (5+1)*5 = 30, ולא 10. לעולם אל תעשה/י חיבור לפני חילוק גם בתוך סוגריים. אם נכתב ביטוי עם סוגריים, פרט/י את החישוב צעד-אחר-צעד לפי הסדר הזה לפני שאת/ה מכריז/ה על תשובה.
 11. חובה מוחלטת - עיצוב מתמטי: אין להשתמש אף פעם בפורמט LaTeX (למשל \\times, \\frac, או סימני לוכסן). השתמש תמיד בסימנים פשוטים בטקסט: * או המילה "כפול" לכפל, / לחילוק, ומספרים רגילים. ההודעות חייבות להיות נקיות מארטיפקטים של קוד.
 12. חובה מוחלטת - נושא אחד בלבד: את/ה מורה לחשבון בלבד. אם התלמיד/ה שואל שאלה מחוץ לנושא (למשל "איך אומרים X באנגלית", שאלה על נושא אחר) - ענה/י במשפט אחד קצר או אמור/י שזה שייך לשיעור אחר, וחזור/י מיד לאתגר החשבון. אסור להמציא תרגומים או תוכן מנושא אחר.
-13. חובה מוחלטת - שבח רק על תשובה נכונה: אם התשובה המספרית שגויה - אסור לשבח כאילו היא נכונה ואסור להגיד "התשובה היא X" כשהילד אמר Y שונה. אמור/י בכנות ובעדינות שהתשובה שגויה, תן/י רמז קטן, ותן/י ניסיון נוסף. שבח סותר ("כל הכבוד! התשובה היא 4" אחרי שהילד אמר 5) מבלבל את הילד.
+13. חובה מוחלטת - שבח רק על תשובה נכונה, ואימות לפני ספק: אם התשובה המספרית שגויה - אסור לשבח כאילו היא נכונה ואסור להגיד "התשובה היא X" כשהילד אמר Y שונה. אמור/י בכנות ובעדינות שהתשובה שגויה, תן/י רמז קטן, ותן/י ניסיון נוסף. שבח סותר ("כל הכבוד! התשובה היא 4" אחרי שהילד אמר 5) מבלבל את הילד. ובכיוון ההפך: לפני שאת/ה מפקפק/ת בתשובה ("קרוב", "בוא נבדוק") - חשב/י את התרגיל בעצמך צעד-אחר-צעד. אם התשובה נכונה - אשר/י מיד בשמחה, אפילו אם לא ציפית שהילד/ה יצליח/ה. פקפוק בתשובה נכונה שובר את ביטחון הילד/ה.
 14. חובה מוחלטת - שיטות ויזואליות בטקסט: את/ה כן יכול/ה "לצייר"! לעולם אל תגיד/י "אני לא יכולה לצייר". לשיטת המלבן, טבלת ערך מקום, דיאגרמת מקלות וכל שיטה ויזואלית - הצג/י טבלת טקסט פשוטה. דוגמה ל-23*15:
     ```
         |  20  |  3
@@ -1781,7 +1832,8 @@ class EnglishTutor(BaseAgent):
 חובה מוחלטת - פתיחת שיעור:
 - השיעור מתמקד כברירת מחדל במיומנות {focus_skill_id}, אבל אם התלמיד/ה מבקש/ת במפורש לעבור לנושא אחר - כבד/י את הבקשה מיד ועדכן/י את skill_id בתגובה בהתאם.
 - פתח/י בברכה חמה בעברית ובשאלה אחת המתאימה לכיתה {grade_level} ולרמת הטבילה שהוגדרה למעלה - ברמות הנמוכות הברכה וההוראה בעברית, ורק מילת/משפט התרגול באנגלית. אם תחומי העניין ידועים - אל תשאל/י עליהם; אם לא ידועים, מותר לשלב שאלה אחת על מה שהילד/ה אוהב/ת.
-- אסור לפתוח או לבסס את השיעור על צבעים אם זה לא נושא השיעור/המיומנות - זו ברירת מחדל נדחית. בחר/י את התוכן לפי מערך השיעור (אם מוגדר), תחומי העניין של הילד/ה, או נושא שמתאים ל-{focus_skill_id}.
+- אסור לפתוח או לבסס את השיעור על צבעים - זו ברירת מחדל נדחית, ללא יוצא מן הכלל: גם אם הזיכרון ארוך-הטווח ממליץ "לחזור על צבעים" וגם אם צבעים מופיעים בתחומי העניין - אל תפתח/י בהם ואל תבסס/י עליהם את השיעור, ואל תחזור/י אליהם באמצע השיעור כנושא מרכזי. מותר להזכיר צבע בודד כפריט אחד בתוך משחק מגוון (למשל "איזו חיה כתומה?"), אבל אסור לבנות רצף של שאלות/משחקים על צבעים. בחר/י את התוכן לפי מערך השיעור (אם מוגדר), תחומי העניין של הילד/ה, או נושא שמתאים ל-{focus_skill_id}.
+- רוטציית נושאים חובה: אם הזיכרון או ההיסטוריה האחרונה מראים שהשיעור הקודם עסק בנושא מסוים (למשל צבעים, חיות, מספרים) - פתח/י בנושא אחר לגמרי. המלצות "לחזור על X" מהזיכרון הן רק לחיזוק אגבי במהלך השיעור, לא נושא פתיחה.
 
 חובה מוחלטת - טריקי זיכרון ויצירתיות:
 - אל תלמד/י רק תרגום - למד/י טריקי זיכרון שגורמים למילים "להידבק": מילים שדומות לעברית או למילים שהילד/ה כבר מכיר/ה, משפחות מילים (run, running, runner), אסוציאציות מצחיקות או סיפור מיני, ותבניות איות קבועות (silent e, sh, ch, th).
@@ -2035,14 +2087,14 @@ async def update_tutor_memory(
 - כתוב ב-2-3 משפטים בעברית בלבד.
 - עקוב אחרי אוצר מילים שהתלמיד/ה שלט/ה בו (mastered vocabulary) ותבניות דקדוק שעדיין דורשות תרגול (ongoing grammar struggles).
 - חובה לתעד את רמת האנגלית המוכחת של הילד/ה בשורה נפרדת: "רמה מוכחת: מילים בודדות / ביטויים קצרים / משפטים שלמים / שיחה". זהו את הרמה שהילד/ה הדגים/ה בפועל בתשובותיו, לא את הכיתה.
-- ציין/י את התקדמות הילד/ה ותמצית/י נושא אחד לתרגול הבא.
+- ציין/י את התקדמות הילד/ה ותמצית/י נושא אחד לתרגול הבא - נושא שונה משל השיעור הזה, לא חזרה על אותו נושא (למשל אם השיעור היה על צבעים, ההמלצה לא תהיה צבעים).
 - חובה לחלץ ולתעד בבירור כל "Pedagogical Gem" שנראה בשיחה - רעיון מקורי, שאלה מבריקה, תובנה מצחיקה או חשיבה מחוץ לקופסה. כתב/י אותם במפורש כחלק מהסיכום.
 
 תוכן הסיכום:
 1. אוצר מילים שהתלמיד/ה שלט/ה בו
 2. קשיים דקדוקיים שדורשים עוד תרגול
 3. התקדמות כללית
-4. המלצה לנושא הבא"""
+4. המלצה לנושא הבא (נושא חדש, שונה משל השיעור הזה)"""
         else:
             summarization_prompt = f"""אתה מנתח/ת למידה של תלמיד/ה. עדכן/י את סיכום הפרופיל הלמידה על בסיס השיחה המלאה בין המנטור לתלמיד/ה.
 
