@@ -220,15 +220,18 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
     persona = kid["persona_en"] if subject == "english" else kid["persona_math"]
     url = "/api/tutor/english" if subject == "english" else "/api/tutor/chat"
 
-    probe_reply = None
+    probe_reply, visual_reply = None, None
     for i in range(turns):
         if i == 0:
             body_msgs = []
         else:
-            # Scripted probe: mid-session off-topic question in math must be
-            # answered briefly and steered back - never a fabricated lesson.
+            # Scripted probes: off-topic question in math must steer back
+            # (never a fabricated lesson); visual-method question must get a
+            # text diagram, never "אני לא יכולה לצייר" (נויה's real session).
             if subject == "math" and i == 2:
                 utt = "איך אומרים חתול באנגלית?"
+            elif subject == "math" and i == 4 and kid["name"] == "נויה":
+                utt = "את יכולה להראות לי איך פותרים 23 כפול 15 בשיטת המלבן? כאילו בציור"
             else:
                 utt = await child_reply(persona, messages, replies[-1])
             messages.append({"role": "user", "content": utt})
@@ -244,6 +247,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
         reply = r.json()["reply"]
         if subject == "math" and i == 2:
             probe_reply = reply
+        if subject == "math" and i == 4 and kid["name"] == "נויה":
+            visual_reply = reply
         messages.append({"role": "assistant", "content": reply})
         replies.append(reply)
         if verbose:
@@ -288,6 +293,13 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                 r"(חשבון|תרגיל|מספר|כמה|בוא נחזור|חזור|נסה)", probe_reply
             ):
                 fails.append(f"off-topic probe became a lesson instead of steering back: {probe_reply[:100]!r}")
+        # Visual-method probe: a drawing request must get a text table,
+        # never a refusal (נויה's real session: 'אני לא יכולה לצייר כאן').
+        if visual_reply is not None:
+            if re.search(r"לא (יכולה|יכול|מסוגלת) ל(צייר|הראות|הציג)", visual_reply):
+                fails.append(f"refused to draw: {visual_reply[:100]!r}")
+            elif sum(1 for line in visual_reply.split("\n") if len(re.findall(r"\d", line)) >= 2) < 2:
+                fails.append(f"no text diagram for visual method: {visual_reply[:120]!r}")
         # Praise-for-wrong-answer check: pure-number child reply that KOKO
         # both praises and contradicts (production bug: child said 5, KOKO
         # said 'כל הכבוד! התשובה היא אכן 4').
