@@ -1212,6 +1212,19 @@ class MathTutor(BaseAgent):
         # a worked trick like "5*10=50, 50-5=45"). Collect every candidate and
         # confirm if ANY of them evaluates to the child's answer - otherwise a
         # correct answer gets judged "almost" by the LLM.
+        candidates = self._arith_question_candidates(assistant_text)
+        if not candidates:
+            return None
+        for question, computed, _pos in candidates:
+            if abs(computed - user_num) <= 1e-6:
+                computed_str = str(int(computed)) if float(computed).is_integer() else str(computed)
+                return (question, computed_str, user_answer_str)
+        return None
+
+    def _arith_question_candidates(self, assistant_text: str) -> list:
+        """All (question_text, computed_value, pos) a bare-number reply could
+        be answering. Question sentences ("כמה ...?") are preferred so a
+        worked-example number inside the reply does not become the truth."""
         candidates = []  # (question_text, computed_value, start_pos)
 
         def _scan(text: str, pos_offset: int = 0) -> None:
@@ -1279,12 +1292,64 @@ class MathTutor(BaseAgent):
             candidates = question_candidates
         else:
             _scan(assistant_text)
+        return candidates
 
-        for question, computed, _pos in candidates:
-            if abs(computed - user_num) <= 1e-6:
-                computed_str = str(int(computed)) if float(computed).is_integer() else str(computed)
-                return (question, computed_str, user_answer_str)
-        return None
+    @staticmethod
+    def _looks_like_answer(user_text: str) -> bool:
+        """Is this message plausibly an answer to the tutor's question?
+        A bare number (digits or Hebrew words) or an explicit 'התשובה היא...'
+        marker - not free chat like 'יש לי 5 בובות היום' which merely
+        contains a number and must never earn a 'wrong' verdict."""
+        t = user_text.strip()
+        if re.search(r"(התשובה|שווה|יוצא|יצא|אני חושב|נראה לי)", t):
+            return True
+        if re.fullmatch(r"-?\d+(?:\.\d+)?[.!]?", t):
+            return True
+        m = _HEB_NUM_SEQ_RE.search(t)
+        if m:
+            remainder = (t[:m.start()] + t[m.end():]).strip(" ,!.?\"'״")
+            return len(remainder) <= 3  # essentially a bare spoken number
+        return False
+
+    def _extract_answer_verdict(
+        self, conversation_history: List[Dict]
+    ) -> Optional[Tuple[str, str, str, bool]]:
+        """Deterministic verdict on the child's last numeric reply:
+        (question, correct_value, user_answer, is_correct).
+
+        is_correct=False is only returned when (a) the reply clearly IS an
+        answer and (b) the question's value is unambiguous - every candidate
+        in the tutor's message agrees. Ambiguous questions and free chat get
+        no fact at all, so the LLM never receives a false 'wrong' verdict.
+        """
+        verdict = self._extract_correct_arithmetic_answer(conversation_history)
+        if verdict is not None:
+            q, computed, ua = verdict
+            return (q, computed, ua, True)
+        if not conversation_history or len(conversation_history) < 2:
+            return None
+        last_user = conversation_history[-1]
+        last_assistant = conversation_history[-2]
+        if last_user.get("role") != "user" or last_assistant.get("role") != "assistant":
+            return None
+        user_text = str(last_user.get("content") or "")
+        assistant_text = str(last_assistant.get("content") or "")
+        if not self._looks_like_answer(user_text):
+            return None
+        num_match = re.search(r"\d+(?:\.\d+)?", user_text)
+        hebrew_num = None if num_match else _last_hebrew_number(user_text)
+        if num_match is None and hebrew_num is None:
+            return None
+        user_answer_str = num_match.group() if num_match else (
+            str(int(hebrew_num)) if float(hebrew_num).is_integer() else str(hebrew_num))
+        candidates = self._arith_question_candidates(assistant_text)
+        values = {round(c[1], 6) for c in candidates}
+        if len(values) != 1:
+            return None  # ambiguous - several different possible answers
+        computed = values.pop()
+        question = candidates[-1][0]
+        computed_str = str(int(computed)) if float(computed).is_integer() else str(computed)
+        return (question, computed_str, user_answer_str, False)
 
     @staticmethod
     def _normalize_math_expression(text: str) -> str:
@@ -1414,7 +1479,37 @@ class MathTutor(BaseAgent):
             return _finish(match.group(0), value, match.end())
         return None
 
-    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, correct_answer: Optional[Tuple[str, str, str]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None, skill_context: str = "") -> str:
+    _REPLY_EQ_RE = re.compile(
+        r"(?<![\d.])(\d+(?:\.\d+)?)\s*"
+        r"([-+*/×x:÷−]|פחות|מינוס|ועוד|פלוס|כפול|פעמים|חלקי|לחלק)\s*"
+        r"(\d+(?:\.\d+)?)\s*(?:=|שווה|זה|יוצא)\s*(\d+(?:\.\d+)?)(?!\d)")
+
+    def _sanitize_reply_arithmetic(self, text: str) -> str:
+        """Verify every explicit 'A op B = C' KOKO writes and fix the result
+        when she slipped - a wrong equation like '6 - 2 = 3' must never
+        reach the child. Multi-term chains are left untouched."""
+        def _fix(m):
+            if re.search(r"[+\-*/×x:÷−]\s*$", text[:m.start()]):
+                return m.group(0)  # middle term of a chained expression
+            a, op, b, res = m.groups()
+            sym = {
+                "פחות": "-", "מינוס": "-", "ועוד": "+", "פלוס": "+",
+                "כפול": "*", "פעמים": "*", "חלקי": "/", "לחלק": "/",
+                "×": "*", "x": "*", "÷": "/", ":": "/", "−": "-",
+            }.get(op, op)
+            try:
+                val = eval(f"{a} {sym} {b}", {"__builtins__": {}}, {})
+            except Exception:
+                return m.group(0)
+            if not isinstance(val, (int, float)) or abs(val - float(res)) <= 1e-9:
+                return m.group(0)
+            fixed = str(int(val)) if float(val).is_integer() else f"{val:g}"
+            logger.warning("Corrected arithmetic slip in tutor reply",
+                           original=m.group(0), fixed_result=fixed)
+            return text[m.start():m.start(4)] + fixed + text[m.end(4):m.end()]
+        return self._REPLY_EQ_RE.sub(_fix, text)
+
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, answer_verdict: Optional[Tuple[str, str, str, bool]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None, skill_context: str = "") -> str:
         """Generate system prompt based on user profile, dynamic long-term memory,
         and the most recent chat turns.
         """
@@ -1441,9 +1536,16 @@ class MathTutor(BaseAgent):
             directives_line = "\n".join(f"- {d}" for d in parent_directives)
         
         correct_answer_line = ""
-        if correct_answer:
-            question, correct_value, _ = correct_answer
-            correct_answer_line = f'התלמיד/ה ענה/ענתה נכון לשאלה {question}: התשובה היא {correct_value}. אשר/י זאת מיד, שבח/י בקצרה, ושאל/י שאלה חדשה קשה יותר. אין לומר שהתשובה שגויה.'
+        if answer_verdict:
+            question, correct_value, user_answer, is_correct = answer_verdict
+            if is_correct:
+                correct_answer_line = f'התלמיד/ה ענה/ענתה נכון לשאלה {question}: התשובה היא {correct_value}. אשר/י זאת מיד, שבח/י בקצרה, ושאל/י שאלה חדשה קשה יותר. אין לומר שהתשובה שגויה.'
+            else:
+                correct_answer_line = (
+                    f'התלמיד/ה ענה/ה {user_answer} על השאלה {question} — אבל התשובה הנכונה היא {correct_value}. '
+                    f'התשובה של התלמיד/ה שגויה: אסור לשבח אותה ואסור לומר שהיא נכונה. '
+                    f'הדרכ/י בעדינות צעד-צעד לחישוב הנכון ותן/י לילד/ה לנסות שוב.')
+
 
         user_expression_line = ""
         if user_expression:
@@ -1574,7 +1676,7 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
-        correct_answer = self._extract_correct_arithmetic_answer(conversation_history)
+        answer_verdict = self._extract_answer_verdict(conversation_history)
         user_expression = self._extract_user_expression_eval(conversation_history)
         # 'Lesson prep': the child's real measured level per skill. Also the
         # server-side focus fallback when the client didn't pass one - the
@@ -1583,7 +1685,7 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         skill_context, auto_focus = _lesson_prep_block(mastery_by_skill, self.SUBJECT, user_profile.get("grade_level"))
         if auto_focus and not user_profile.get("focus_skill_id"):
             user_profile["focus_skill_id"] = auto_focus
-        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, correct_answer, user_expression, skill_context)
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, answer_verdict, user_expression, skill_context)
 
         # Inject cross-agent memory context so the tutor feels like a companion.
         if user_id:
@@ -1600,6 +1702,7 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
             json_response=True,
         )
         reply_text, points_earned, skill_id, answer_correct, hints_used = _parse_json_reply(raw)
+        reply_text = self._sanitize_reply_arithmetic(reply_text)
         gesture = _parse_gesture(raw)
 
         # Extract and store insights in the background so the tutor keeps learning.

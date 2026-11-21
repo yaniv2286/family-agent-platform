@@ -148,6 +148,20 @@ class TestMathChildAudit:
         ])
         assert "ענה/ענתה נכון" not in _last_system_prompt(mock_openai)
 
+    async def test_wrong_answer_gets_wrong_verdict_in_prompt(
+        self, client, child_user, mock_openai
+    ):
+        # Production bug: child answered "3" to 6-2 and KOKO confirmed it.
+        # A wrong answer must inject the true result + an explicit "do not
+        # praise" fact, not leave grading to the LLM.
+        await _chat(client, child_user.id, [
+            {"role": "assistant", "content": "כמה זה 6 - 2?"},
+            {"role": "user", "content": "3"},
+        ])
+        prompt = _last_system_prompt(mock_openai)
+        assert "התשובה הנכונה היא 4" in prompt
+        assert "שגויה" in prompt
+
     async def test_tutor_gets_larger_token_budget(
         self, client, child_user, mock_openai
     ):

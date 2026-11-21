@@ -688,6 +688,69 @@ class TestCorrectArithmeticExtraction:
         assert result is None
 
 
+class TestAnswerVerdict:
+    """Wrong answers get deterministic ground truth too - the LLM must never
+    praise '3' for 6-2 (production bug: KOKO confirmed a wrong answer).
+    The verdict only fires for answer-shaped replies and unambiguous
+    questions, so free chat is never falsely graded."""
+
+    def setup_method(self):
+        self.tutor = MathTutor.__new__(MathTutor)
+
+    def _history(self, assistant_q, user_a):
+        return [
+            {"role": "assistant", "content": assistant_q},
+            {"role": "user", "content": user_a},
+        ]
+
+    def test_wrong_bare_answer_gets_wrong_verdict(self):
+        result = self.tutor._extract_answer_verdict(
+            self._history("כמה זה 6 - 2?", "3")
+        )
+        assert result is not None
+        q, correct, ua, ok = result
+        assert correct == "4" and ua == "3" and ok is False
+
+    def test_correct_answer_gets_correct_verdict(self):
+        result = self.tutor._extract_answer_verdict(
+            self._history("כמה זה 6 - 2?", "4")
+        )
+        assert result is not None and result[3] is True
+
+    def test_free_chat_number_is_not_graded(self):
+        assert self.tutor._extract_answer_verdict(
+            self._history("כמה זה 6 - 2?", "יש לי 5 בובות היום")
+        ) is None
+
+    def test_ambiguous_question_gets_no_verdict(self):
+        assert self.tutor._extract_answer_verdict(
+            self._history("כמה זה 6 - 2? וגם כמה זה 9 - 4?", "3")
+        ) is None
+
+
+class TestReplyArithmeticSanitizer:
+    """KOKO's own equations are verified before reaching the child."""
+
+    def setup_method(self):
+        self.tutor = MathTutor.__new__(MathTutor)
+
+    def test_wrong_equation_is_fixed(self):
+        out = self.tutor._sanitize_reply_arithmetic("כל הכבוד! 6 - 2 = 3. נכון!")
+        assert "6 - 2 = 4" in out
+
+    def test_worded_equation_is_fixed(self):
+        out = self.tutor._sanitize_reply_arithmetic("20 חלקי 5 זה 3")
+        assert "זה 4" in out
+
+    def test_correct_equation_untouched(self):
+        text = "456 פחות 213 זה 243"
+        assert self.tutor._sanitize_reply_arithmetic(text) == text
+
+    def test_chained_expression_untouched(self):
+        text = "החישוב 2+3+4=9 נכון"
+        assert self.tutor._sanitize_reply_arithmetic(text) == text
+
+
 class TestTtsSanitize:
     """Markdown formatting must never reach the TTS engine.
 
