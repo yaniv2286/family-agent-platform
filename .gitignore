@@ -30,3 +30,4 @@ key.pem
 logs/
 build_info.json
 nul
+temp/
