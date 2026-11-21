@@ -1080,10 +1080,105 @@ def _lesson_prep_block(mastery_by_skill: Dict, subject: str, grade_level: Option
     return block, focus
 
 
+# Hebrew number words - Whisper often transcribes a child's spoken answer
+# as words ("התשובה היא עשרים וארבע") instead of digits. Without parsing
+# them, spoken answers bypass deterministic verification entirely and the
+# LLM has to guess whether "שלושים וחמש" is right (production miss: Noya
+# finally answered 35 to 64-29 and got generic encouragement, not "נכון!").
+_HEB_NUM_UNITS = {
+    "אפס": 0, "אחד": 1, "אחת": 1, "שני": 2, "שניים": 2, "שנים": 2,
+    "שתי": 2, "שתיים": 2, "שתים": 2,
+    "שלוש": 3, "שלושה": 3, "שלושת": 3, "ארבע": 4, "ארבעה": 4, "ארבעת": 4,
+    "חמש": 5, "חמשה": 5, "חמשת": 5, "שש": 6, "שישה": 6, "ששת": 6,
+    "שבע": 7, "שבעה": 7, "שבעת": 7, "שמונה": 8, "שמונת": 8,
+    "תשע": 9, "תשעה": 9, "תשעת": 9,
+}
+_HEB_NUM_TEENS = {
+    "עשר": 10, "עשרה": 10, "עשרת": 10,
+    "אחדעשר": 11, "אחתעשרה": 11, "שניםעשר": 12, "שתיםעשרה": 12,
+    "שלושעשרה": 13, "ארבעעשרה": 14, "חמשעשרה": 15, "ששעשרה": 16,
+    "שבעעשרה": 17, "שמונהעשרה": 18, "תשעעשרה": 19,
+}
+_HEB_NUM_TENS = {
+    "עשרים": 20, "שלושים": 30, "ארבעים": 40, "חמישים": 50,
+    "שישים": 60, "שבעים": 70, "שמונים": 80, "תשעים": 90,
+}
+_HEB_NUM_WORD = "|".join(sorted(
+    list(_HEB_NUM_UNITS) + list(_HEB_NUM_TEENS) + list(_HEB_NUM_TENS)
+    + ["מאתיים", "מאות", "מאה", "אלפיים", "אלפים", "אלף"],
+    key=len, reverse=True))
+# A run of number words (vav prefix allowed): "עשרים וארבע", "מאתיים ארבעים ושלוש".
+_HEB_NUM_SEQ_RE = re.compile(
+    rf"(?<![א-ת])ו?(?:{_HEB_NUM_WORD})(?:[ \-]+ו?(?:{_HEB_NUM_WORD}))*(?![א-ת])")
+
+
+def _eval_hebrew_number(seq: str) -> Optional[float]:
+    """Evaluate a Hebrew number phrase: 'עשרים וארבע' -> 24,
+    'מאתיים ארבעים ושלוש' -> 243, 'מאה אלף' -> 100000. Returns None if the
+    sequence has no number words."""
+    num_words = (
+        _HEB_NUM_UNITS.keys() | _HEB_NUM_TEENS.keys() | _HEB_NUM_TENS.keys()
+        | {"מאתיים", "מאות", "מאה", "אלפיים", "אלפים", "אלף"}
+    )
+    tokens = []
+    for tok in re.split(r"[ \-]+", seq.strip()):
+        if tok.startswith("ו") and len(tok) > 1 and tok[1:] in num_words:
+            tok = tok[1:]
+        tokens.append(tok)
+    total, cur = 0.0, 0.0
+    seen = False
+    i = 0
+    while i < len(tokens):
+        w = tokens[i]
+        if w in _HEB_NUM_UNITS:
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+            if nxt in ("עשרה", "עשר"):
+                cur += 10 + _HEB_NUM_UNITS[w]  # "אחת עשרה" = 11
+                seen = True
+                i += 2
+                continue
+            if nxt == "מאות":
+                cur += _HEB_NUM_UNITS[w] * 100  # "שלוש מאות" = 300
+                seen = True
+                i += 2
+                continue
+            cur += _HEB_NUM_UNITS[w]
+        elif w in _HEB_NUM_TEENS:
+            cur += _HEB_NUM_TEENS[w]
+        elif w in _HEB_NUM_TENS:
+            cur += _HEB_NUM_TENS[w]
+        elif w == "מאתיים":
+            cur += 200
+        elif w in ("מאה", "מאות"):
+            cur += 100
+        elif w == "אלפיים":
+            total += (cur if cur else 2) * 1000
+            cur = 0
+        elif w in ("אלף", "אלפים"):
+            total += (cur if cur else 1) * 1000  # "אלף" / "מאה אלף" / "שלוש מאות אלף"
+            cur = 0
+        else:
+            return None
+        seen = True
+        i += 1
+    return (total + cur) if seen else None
+
+
+def _last_hebrew_number(text: str) -> Optional[float]:
+    """Value of the LAST number phrase in the text - a child's stated answer
+    is almost always the final number ('התשובה היא עשרים וארבע')."""
+    result = None
+    for m in _HEB_NUM_SEQ_RE.finditer(text):
+        v = _eval_hebrew_number(m.group())
+        if v is not None:
+            result = v
+    return result
+
+
 class MathTutor(BaseAgent):
     SUBJECT = "math"
 
-    
+
     def _extract_correct_arithmetic_answer(
         self, conversation_history: List[Dict]
     ) -> Optional[Tuple[str, str, str]]:
@@ -1100,13 +1195,18 @@ class MathTutor(BaseAgent):
         assistant_text = str(last_assistant.get("content") or "")
         user_text = str(last_user.get("content") or "")
 
+        # Spoken answers arrive as digits OR Hebrew words ("שלושים וחמש") -
+        # Whisper keeps both forms, and a words-only answer still needs
+        # deterministic verification.
         user_num_match = re.search(r"\d+(?:\.\d+)?", user_text)
-        if not user_num_match:
-            return None
-        try:
+        if user_num_match:
             user_num = float(user_num_match.group())
-        except ValueError:
-            return None
+            user_answer_str = user_num_match.group()
+        else:
+            user_num = _last_hebrew_number(user_text)
+            if user_num is None:
+                return None
+            user_answer_str = str(int(user_num)) if float(user_num).is_integer() else str(user_num)
 
         # The tutor's message can contain several calculations (a question plus
         # a worked trick like "5*10=50, 50-5=45"). Collect every candidate and
@@ -1183,7 +1283,7 @@ class MathTutor(BaseAgent):
         for question, computed, _pos in candidates:
             if abs(computed - user_num) <= 1e-6:
                 computed_str = str(int(computed)) if float(computed).is_integer() else str(computed)
-                return (question, computed_str, user_num_match.group())
+                return (question, computed_str, user_answer_str)
         return None
 
     @staticmethod
@@ -1222,12 +1322,20 @@ class MathTutor(BaseAgent):
 
         def _claim(after_pos: int) -> Optional[float]:
             # A stated result right after the expression: "זה 243",
-            # "שווה 243", "יוצא 243".
+            # "שווה 243", "יוצא 243" - or the same in Hebrew words when
+            # Whisper transcribes speech: "זה מאתיים ארבעים ושלוש".
+            seg = text[after_pos:after_pos + 45]
             m = re.search(
                 r"(?:זה|שווה(?:\s*ל)?|יוצא|יצא)\s*(-?\d+(?:\.\d+)?)",
-                text[after_pos:after_pos + 25],
+                seg,
             )
-            return float(m.group(1)) if m else None
+            if m:
+                return float(m.group(1))
+            m = re.search(
+                rf"(?:זה|שווה(?:\s*ל)?|יוצא|יצא)\s*(ו?(?:{_HEB_NUM_WORD})(?:[ \-]+ו?(?:{_HEB_NUM_WORD}))*)",
+                seg,
+            )
+            return _eval_hebrew_number(m.group(1)) if m else None
 
         def _finish(expr_text: str, value: float, after_pos: int):
             if isinstance(value, float) and abs(value) > 1e15:
@@ -1272,13 +1380,23 @@ class MathTutor(BaseAgent):
             return _finish(best[0], best[1], best[2])
 
         # Spoken arithmetic (Whisper transcript): number + Hebrew operator
-        # word + number, e.g. "456 פחות 213 זה 243" or "שבע כפול שמונה".
+        # word + number, e.g. "456 פחות 213 זה 243" or "מאה פחות חמישים זה
+        # חמישים" - operands may be digits or Hebrew number phrases.
+        num = rf"(-?\d+(?:\.\d+)?|ו?(?:{_HEB_NUM_WORD})(?:[ \-]+ו?(?:{_HEB_NUM_WORD}))*)"
         heb_op = re.compile(
-            r"(\d+(?:\.\d+)?)\s*(פחות|מינוס|ועוד|פלוס|כפול|פעמים|חלקי|לחלק)\s*(\d+(?:\.\d+)?)"
+            rf"{num}\s*(פחות|מינוס|ועוד|פלוס|כפול|פעמים|חלקי|לחלק)\s*{num}"
         )
+
+        def _numval(s: str) -> Optional[float]:
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", s):
+                return float(s)
+            return _eval_hebrew_number(s)
+
         for match in heb_op.finditer(text):
-            a = float(match.group(1))
-            b = float(match.group(3))
+            a = _numval(match.group(1))
+            b = _numval(match.group(3))
+            if a is None or b is None:
+                continue
             word = match.group(2)
             try:
                 if word in ("פחות", "מינוס"):

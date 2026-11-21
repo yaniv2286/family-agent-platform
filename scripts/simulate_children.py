@@ -319,7 +319,11 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             elif subject == "math" and i == 4 and kid["name"] == "נויה":
                 utt = "את יכולה להראות לי איך פותרים 23 כפול 15 בשיטת המלבן? כאילו בציור"
             elif subject == "math" and i == 6:
-                utt = "456 פחות 213 זה 243!"  # correct - must not be doubted
+                # Correct answer - must not be doubted. נויה states the
+                # result in Hebrew words (Whisper does this constantly;
+                # production miss where "שלושים וחמש" got no confirmation).
+                utt = ("456 פחות 213 זה מאתיים ארבעים ושלוש!"
+                       if kid["name"] == "נויה" else "456 פחות 213 זה 243!")
             elif subject == "math" and i == 7:
                 utt = "אני חושב ש-456 פחות 213 זה 250!"  # wrong - must not be praised
             else:

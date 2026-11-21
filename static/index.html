@@ -1853,7 +1853,37 @@
         // Per-child, per-subject conversation cache. Keyed by user_id so one
         // child's open session can NEVER bleed into another child's screen
         // (production bug: Libi's math chat restored inside Noya's session).
-        const subjectSession = {};
+        // Persisted to sessionStorage so a page reload also restores the
+        // conversation - otherwise every reload generates a duplicate
+        // greeting into the history (seen: Noya's identical math greeting
+        // saved twice, 5 minutes apart).
+        const _SS_KEY = 'koko_subject_sessions';
+        const _SS_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+        const subjectSession = (() => {
+            try {
+                const raw = JSON.parse(sessionStorage.getItem(_SS_KEY) || '{}');
+                const fresh = {};
+                const now = Date.now();
+                for (const [uid, slots] of Object.entries(raw)) {
+                    const kept = {};
+                    for (const [subj, slot] of Object.entries(slots || {})) {
+                        if (slot && Array.isArray(slot.m) && slot.m.length
+                                && now - (slot.t || 0) < _SS_MAX_AGE_MS) {
+                            kept[subj] = slot;
+                        }
+                    }
+                    if (Object.keys(kept).length) fresh[uid] = kept;
+                }
+                return fresh;
+            } catch (e) {
+                return {};
+            }
+        })();
+        function persistSubjectSession() {
+            try {
+                sessionStorage.setItem(_SS_KEY, JSON.stringify(subjectSession));
+            } catch (e) {}
+        }
         function childSession() {
             if (!subjectSession[selectedUserId]) {
                 subjectSession[selectedUserId] = { math: null, english: null };
@@ -3014,7 +3044,8 @@
 
             // If this child already has an open conversation for this subject,
             // restore it instead of generating a fresh greeting.
-            const existing = childSession()[selectedSubject];
+            const slot = childSession()[selectedSubject];
+            const existing = slot && slot.m;
             if (existing && existing.length) {
                 messages = existing;
                 chatContainer.innerHTML = '';
@@ -3028,7 +3059,8 @@
 
             chatContainer.innerHTML = '<div class="loading">מכין את קוקו…</div>';
             messages = [];
-            childSession()[selectedSubject] = messages;
+            childSession()[selectedSubject] = { t: Date.now(), m: messages };
+            persistSubjectSession();
             sessionStartTime = Date.now();
             sessionDurationSeconds = 20 * 60;
             startSessionTimer();
@@ -3213,6 +3245,12 @@
         function addMessage(role, content) {
             const bubble = renderBubble(role, content);
             messages.push({ role, content });
+            // Keep the session cache fresh so a reload restores this turn.
+            const slot = selectedUserId && selectedSubject ? childSession()[selectedSubject] : null;
+            if (slot && slot.m === messages) {
+                slot.t = Date.now();
+                persistSubjectSession();
+            }
             // When Koko asks an arithmetic question, pin a live visual solver
             // under the message - column arithmetic with borrowing/carrying,
             // animated step by step like the pencil videos kids watch.
@@ -5393,6 +5431,7 @@
                 const s = childSession();
                 s.math = null;
                 s.english = null;
+                persistSubjectSession();
                 messages = [];
                 sessionStartTime = null;
                 stopSessionTimer();

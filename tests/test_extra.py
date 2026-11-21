@@ -583,6 +583,24 @@ class TestUserExpressionEval:
             self._history("איך אומרים חתול באנגלית?")
         ) is None
 
+    def test_fully_spoken_expression_in_hebrew_words(self):
+        # Whisper often produces the whole expression as words:
+        # "מאה פחות חמישים זה חמישים".
+        result = self.tutor._extract_user_expression_eval(
+            self._history("מאה פחות חמישים זה חמישים")
+        )
+        assert result is not None
+        assert result[1] == "50"
+        assert result[2] is True
+
+    def test_hebrew_words_claim_after_digits(self):
+        result = self.tutor._extract_user_expression_eval(
+            self._history("456 פחות 213 זה מאתיים ארבעים ושלוש")
+        )
+        assert result is not None
+        assert result[1] == "243"
+        assert result[2] is True
+
 
 class TestCorrectArithmeticExtraction:
     """KOKO's question -> child's bare number answer must get deterministic
@@ -622,6 +640,29 @@ class TestCorrectArithmeticExtraction:
             self._history(
                 "אם יש לך 15 מכוניות צעצוע ומישהו לוקח 7 מכוניות, כמה מכוניות נשארו לך?",
                 "9",
+            )
+        )
+        assert result is None
+
+    def test_spoken_hebrew_number_words_confirmed(self):
+        # Production miss (Noya, 21.11): after struggling through 64-29 she
+        # said "שלושים וחמש" - correct - and got generic encouragement, not
+        # "נכון!". Whisper transcribes spoken numbers as words, so the
+        # verifier must parse Hebrew number phrases too.
+        result = self.tutor._extract_correct_arithmetic_answer(
+            self._history(
+                "מה ההפרש בין 64 ל-29?",
+                "שלושים וחמש, אני כל כך התבלבלתי.",
+            )
+        )
+        assert result is not None
+        assert result[1] == "35"
+
+    def test_spoken_wrong_hebrew_number_not_confirmed(self):
+        result = self.tutor._extract_correct_arithmetic_answer(
+            self._history(
+                "מה ההפרש בין 64 ל-29?",
+                "התשובה היא בעצם ארבעים וחמש.",
             )
         )
         assert result is None
