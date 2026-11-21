@@ -593,6 +593,7 @@
         .ec-assign { border: none; background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; border-radius: 999px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
         .ec-assign[disabled] { background: #d1d5db; cursor: default; }
         .ec-start { border: 1px solid #667eea; background: #fff; color: #4338ca; border-radius: 999px; padding: 4px 14px; font-weight: 700; cursor: pointer; }
+        .ec-note { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; border-radius: 10px; padding: 8px 12px; margin: 6px 0; font-size: 13px; font-weight: 600; }
         .ec-wallet { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -6px 0 14px; }
         .ec-stars-total { font-size: 20px; font-weight: 800; color: #b8860b; }
         .ec-goal { color: #64748b; font-size: 14px; }
@@ -2623,7 +2624,7 @@
                     list.appendChild(card);
                 }
                 list.querySelectorAll('.ec-assign').forEach(btn => btn.addEventListener('click', () => assignEnglishCourse(btn.dataset.course, btn)));
-                list.querySelectorAll('.ec-start').forEach(btn => btn.addEventListener('click', () => startEnglishLesson(btn.dataset.lesson)));
+                list.querySelectorAll('.ec-start').forEach(btn => btn.addEventListener('click', () => startEnglishLesson(btn.dataset.lesson, btn)));
             } catch (error) {
                 console.error('English catalog failed:', error);
                 list.innerHTML = '<div class="loading">שגיאה בטעינת הקורסים</div>';
@@ -2715,20 +2716,36 @@
             return personalizeHe(slide.prompt_he || slide.say || '');
         }
 
-        async function startEnglishLesson(lessonId) {
-            const response = await safeFetch(`/api/tutor/english/lesson/${lessonId}?user_id=${selectedUserId}`);
-            if (!response.ok) {
-                document.getElementById('ec-placement').textContent = response.status === 403
-                    ? 'השיעור הזה לא בקורס שההורה בחר. ההורה יכול להחליף קורס למטה.'
-                    : 'השיעור הזה עדיין לא מוכן.';
-                return;
-            }
-            const lesson = await response.json();
-            if (lesson.lessons_done_today >= lesson.daily_lesson_limit) {
-                document.getElementById('ec-placement').textContent =
-                    personalizeHe(`כבר סיימתם ${lesson.daily_lesson_limit} שיעורים היום. נמשיך מחר.`);
-                return;
-            }
+        // Lesson-start refusals must appear WHERE the child tapped, not in
+        // the header status line which is scrolled out of view - a refusal
+        // that renders off-screen looks exactly like a dead button.
+        function showLessonStartError(btn, msg) {
+            document.querySelectorAll('.ec-note').forEach(n => n.remove());
+            const note = document.createElement('div');
+            note.className = 'ec-note';
+            note.textContent = msg;
+            const row = btn && btn.closest('.ec-lesson');
+            if (row) row.after(note);
+            else document.getElementById('ec-placement').textContent = msg;
+        }
+
+        async function startEnglishLesson(lessonId, btn) {
+            try {
+                const response = await safeFetch(`/api/tutor/english/lesson/${lessonId}?user_id=${selectedUserId}`);
+                if (!response.ok) {
+                    showLessonStartError(btn, response.status === 403
+                        ? 'השיעור הזה לא בקורס שההורה בחר. ההורה יכול להחליף קורס למטה.'
+                        : 'השיעור הזה עדיין לא מוכן.');
+                    return;
+                }
+                const lesson = await response.json();
+                // Replaying a completed lesson never consumes a daily slot -
+                // the server exempts it at complete-time too.
+                if (!lesson.already_completed && lesson.lessons_done_today >= lesson.daily_lesson_limit) {
+                    showLessonStartError(btn,
+                        personalizeHe(`כבר סיימתם ${lesson.daily_lesson_limit} שיעורים היום. נמשיך מחר.`));
+                    return;
+                }
             activeLesson = lesson;
             selectedSubject = 'english';
             showScreen('tutoring');
@@ -2742,6 +2759,10 @@
             const opening = personalizeHe(
                 `שלום ${name}! ${lesson.intro_he || ''} ${slideSpokenText(lesson.slides[0])}`);
             speakResponse(opening, 'wave');
+            } catch (error) {
+                console.error('Lesson start failed:', error);
+                showLessonStartError(btn, 'אופס, השיעור לא נפתח. נסו שוב בעוד רגע.');
+            }
         }
 
         function renderLessonSlide(index, stars, deferSpeak = false) {

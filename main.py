@@ -698,6 +698,13 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
     await _require_lesson_course(user.name, meta)
     done_today = await _lessons_today(user.name)
     limit = await _daily_limit(user.name, meta)
+    async with TutorHistorySessionLocal() as history_db:
+        progress_row = (await history_db.execute(
+            select(EnglishLessonProgress).where(
+                EnglishLessonProgress.child_name == user.name,
+                EnglishLessonProgress.lesson_id == lesson_id,
+            )
+        )).scalar_one_or_none()
     return {
         "lesson_id": lesson_id,
         "title_he": lesson["title_he"],
@@ -706,6 +713,7 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
         "slides": [public_slide(s) for s in lesson["slides"]],
         "lessons_done_today": done_today,
         "daily_lesson_limit": limit,
+        "already_completed": bool(progress_row and progress_row.completed),
     }
 
 

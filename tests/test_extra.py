@@ -287,6 +287,26 @@ class TestLessonEngine:
             headers=headers)
         assert third.status_code == 409
 
+    async def test_lesson_payload_marks_replay_vs_new(self, client, child_user):
+        """`already_completed` lets the client exempt replays from the daily
+        limit - a completed lesson may be re-opened even when the limit is
+        reached (frontend showed a dead-looking button before this flag)."""
+        headers = {"x-app-pin": APP_PIN}
+        done = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
+            headers=headers)
+        assert done.status_code == 200, done.text
+        replay = await client.get(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello?user_id={child_user.id}",
+            headers=headers)
+        assert replay.status_code == 200
+        assert replay.json()["already_completed"] is True
+        fresh = await client.get(
+            f"/api/tutor/english/lesson/a1.gtky.01_meet_you?user_id={child_user.id}",
+            headers=headers)
+        assert fresh.status_code == 200
+        assert fresh.json()["already_completed"] is False
+
     async def test_unbuilt_lesson_is_not_startable(self, client, child_user):
         response = await client.get(
             f"/api/tutor/english/lesson/pre_a.letters.99_future?user_id={child_user.id}",
