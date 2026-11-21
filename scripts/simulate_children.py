@@ -193,6 +193,38 @@ def _arith_candidates(text: str) -> list:
     return vals
 
 
+_REPLY_EQ_RE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*"
+    r"([-+*/×x:÷−]|פחות|מינוס|ועוד|פלוס|כפול|פעמים|חלקי|לחלק)\s*"
+    r"(\d+(?:\.\d+)?)\s*(?:=|שווה|זה|יוצא)\s*(\d+(?:\.\d+)?)(?!\d)")
+
+
+def _wrong_reply_equations(text: str) -> list:
+    """Equations KOKO stated in her own reply whose right side is wrong.
+    Mirror of tutors._sanitize_reply_arithmetic - a hit means the sanitizer
+    let a wrong equation reach the child (production bug: '6 - 2 = 3')."""
+    _OPS = {"פחות": "-", "מינוס": "-", "ועוד": "+", "פלוס": "+",
+            "כפול": "*", "פעמים": "*", "חלקי": "/", "לחלק": "/",
+            "×": "*", "x": "*", "÷": "/", ":": "/", "−": "-"}
+    wrong = []
+    for m in _REPLY_EQ_RE.finditer(text):
+        # Mid-chain (2+3+4=9): skip - the '=' applies to the whole chain.
+        if re.search(r"[+\-*/×x:÷−]\s*$", text[:m.start()]):
+            continue
+        a, op, b, res = m.groups()
+        sym = _OPS.get(op.strip(), op.strip())
+        expr = f"{a} {sym} {b}"
+        if "**" in expr:
+            continue
+        try:
+            val = eval(expr, {"__builtins__": {}}, {})
+        except Exception:
+            continue
+        if isinstance(val, complex) or abs(val - float(res)) > 1e-9:
+            wrong.append((m.group(0), val, res))
+    return wrong
+
+
 async def timed(client, method, url, bucket="non_llm", **kw):
     t0 = time.monotonic()
     r = await client.request(method, url, **kw)
@@ -365,11 +397,13 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
         n_en = sum(1 for r in replies if len(LATIN_RE.findall(r)) >= 8)
         if n_en < kid["min_english_replies"]:
             fails.append(f"too little English pushed: {n_en} < {kid['min_english_replies']}")
-        # Colors as the OPENING topic is the banned default. A color
-        # mini-activity mid-lesson is legitimate spiral review (seen live:
-        # animals -> one color game -> animals = a varied lesson) - it only
+        # Colors as the OPENING topic is the banned default - only reply[0]
+        # is truly unprompted; a child saying 'Pink!' at turn 1 makes the
+        # follow-up colors legitimate (live QA: נויה drove a colors stretch
+        # herself, then the lesson moved on to animals). A color
+        # mini-activity mid-lesson is legitimate spiral review - it only
         # fails when colors dominate a strict majority of replies.
-        opening_colors = len(COLOR_RE.findall(" ".join(replies[:2])))
+        opening_colors = len(COLOR_RE.findall(replies[0] if replies else ""))
         color_replies = sum(1 for r in replies if len(COLOR_RE.findall(r)) >= 2)
         dominated = color_replies > len(replies) // 2
         if opening_colors >= 2 or dominated:
@@ -438,6 +472,14 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                     f"doubted a correct bare-number answer: {u_text!r} after {str(a_msg.get('content'))[:60]!r} "
                     f"-> {n_text[:80]!r}"
                 )
+                break
+        # Generic regression: every equation KOKO states must be true -
+        # '6 - 2 = 3' must never reach the child (production bug).
+        for a_msg in messages:
+            if a_msg.get("role") != "assistant":
+                continue
+            for bad, val, res in _wrong_reply_equations(str(a_msg.get("content") or "")):
+                fails.append(f"KOKO stated a wrong equation {bad!r} (is {val}) in: {str(a_msg.get('content'))[:90]!r}")
                 break
         # Visual-method probe: a drawing request must get a text table,
         # never a refusal (נויה's real session: 'אני לא יכולה לצייר כאן').
