@@ -80,8 +80,9 @@ async def _update_cursors(cursors: Dict[str, str]) -> None:
 # configured simply returns ([], {}) so the platform runs fine without it.
 # ---------------------------------------------------------------------------
 
-async def _collect_telegram() -> Tuple[List[dict], Dict[str, str]]:
-    channels = _csv_env("SCOUT_TELEGRAM_CHANNELS")
+async def _collect_telegram(channels: Optional[List[str]] = None) -> Tuple[List[dict], Dict[str, str]]:
+    if channels is None:
+        channels = _csv_env("SCOUT_TELEGRAM_CHANNELS")
     api_id = os.getenv("SCOUT_TELEGRAM_API_ID")
     api_hash = os.getenv("SCOUT_TELEGRAM_API_HASH")
     session = os.getenv("SCOUT_TELEGRAM_SESSION")
@@ -267,8 +268,11 @@ def configured_sources() -> dict:
 # Collection pipeline
 # ---------------------------------------------------------------------------
 
-async def collect_all() -> int:
+async def collect_all(channels: Optional[List[str]] = None) -> int:
     """Run every collector, dedupe against scout_items, store new rows.
+
+    `channels` optionally restricts the Telegram collector to a subset of the
+    configured channel list (used by the on-demand bot command).
 
     Returns the number of new items stored.
     """
@@ -276,7 +280,10 @@ async def collect_all() -> int:
     cursors: Dict[str, str] = {}
     for collector in _COLLECTORS:
         try:
-            items, cur = await collector()
+            if collector is _collect_telegram:
+                items, cur = await collector(channels=channels)
+            else:
+                items, cur = await collector()
             collected.extend(items)
             cursors.update(cur)
         except Exception:
@@ -578,9 +585,9 @@ def _build_research_digest(candidates: List[dict], max_ideas: int) -> str:
         verdict = research.get("verdict", "זהירות")
         emoji = _RESEARCH_VERDICTS.get(verdict, "⚠️")
         direction = direction_he.get(cand.get("direction", "watch"), "מעקב")
-        lines.append(f"{i}. **{cand['asset']}** — {emoji} {verdict} (המקור: {direction})")
+        lines.append(f"{i}. **{cand['asset']}** — {emoji} {verdict} (הערוץ הציע: {direction})")
         if cand.get("reason"):
-            lines.append(f"   מהמקור: {cand['reason']}")
+            lines.append(f"   הערוץ אומר: {cand['reason']}")
         if research.get("reasoning"):
             lines.append(f"   ניתוח: {research['reasoning']}")
         if research.get("confidence"):
@@ -636,15 +643,20 @@ async def _send_via_messenger(text: str, channel: str = "telegram") -> bool:
         return False
 
 
-async def run_scout_digest() -> dict:
+async def run_scout_digest(channels: Optional[List[str]] = None) -> dict:
     """Entry point: collect new items, summarize pending items, send digest.
+
+    `channels` optionally restricts the Telegram collection to a subset of the
+    configured channels (manual /scout command). The digest itself still draws
+    from all pending fresh items, so a filtered run only affects what is
+    newly collected.
 
     Items stay digested=0 when the Telegram send fails so the next run picks
     them up again instead of losing them silently.
     """
     async with _DIGEST_LOCK:
-        logger.info("Starting scout digest run")
-        collected = await collect_all()
+        logger.info("Starting scout digest run", channels=channels or "all")
+        collected = await collect_all(channels=channels)
 
         pending_ids: List[int] = []
         pending_items: List[dict] = []
@@ -759,17 +771,212 @@ async def run_scout_digest() -> dict:
 
 async def handle_collect_digest(event, payload):
     """Mesh ask handler: run a digest on demand."""
-    return await run_scout_digest()
+    channels = (payload or {}).get("channels")
+    return await run_scout_digest(channels=channels)
 
 
 agent_mesh.on_ask("scout_ideas", "collect_digest", handle_collect_digest)
 
 
-@router.post("/run-now")
-async def scout_run_now():
-    """Manually trigger a collect + digest run."""
+# ---------------------------------------------------------------------------
+# Telegram bot commands (/scout ...) - on-demand digest + channel selection
+# ---------------------------------------------------------------------------
+
+SCOUT_BOT_COMMANDS = [
+    {"command": "scout", "description": "סריקה מיידית של כל הערוצים"},
+    {"command": "scout_list", "description": "רשימת הערוצים הממוספרים"},
+    {"command": "scout_help", "description": "עזרה בפקודות"},
+]
+
+
+def parse_scout_command(text: str) -> Tuple[str, Optional[List[str]]]:
+    """Parse a /scout command into (action, channels).
+
+    action: "run" | "list" | "help" | "unknown"
+    channels: None = all configured channels, otherwise a subset chosen by
+    channel number (from /scout_list) or @username/id.
+    """
+    parts = (text or "").strip().split(None, 1)
+    cmd = parts[0].lower().lstrip("/") if parts else ""
+    args = parts[1].strip() if len(parts) > 1 else ""
+
+    if cmd in ("scout_list", "scout_channels"):
+        return "list", None
+    if cmd in ("scout_help", "scouthelp"):
+        return "help", None
+    if cmd != "scout":
+        return "unknown", None
+    if not args:
+        return "run", None
+
+    configured = _csv_env("SCOUT_TELEGRAM_CHANNELS")
+    channels: List[str] = []
+    for tok in re.split(r"[,\s]+", args):
+        if not tok:
+            continue
+        if tok.isdigit():
+            idx = int(tok)
+            if 1 <= idx <= len(configured):
+                channels.append(configured[idx - 1])
+        else:
+            channels.append(tok if (tok.startswith("@") or tok.lstrip("-").isdigit()) else f"@{tok}")
+    return "run", channels or None
+
+
+async def _bot_reply(text: str, reply_markup: Optional[dict] = None) -> None:
+    """Reply into the family Telegram chat via the messenger bot token."""
+    from agents.messenger_agent import send_telegram_message  # avoid circulars
+    await send_telegram_message(text, reply_markup=reply_markup)
+
+
+def _channel_keyboard(channels: List[str], titles: Dict[str, str]) -> dict:
+    """Inline keyboard: one row per channel (tap = scan it) + an 'all' row.
+
+    Button text is the channel's real display name only - no index, no
+    @handle. The internal index stays in callback_data 's:<index>', which the
+    messenger agent forwards as '/scout <index>' back to this handler.
+    """
+    rows = [[{
+        "text": "🌐 סריקת כל הערוצים",
+        "callback_data": "s:all",
+    }]]
+    row: List[dict] = []
+    for i, chan in enumerate(channels, start=1):
+        label = titles.get(chan) or chan
+        row.append({"text": label[:40], "callback_data": f"s:{i}"})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return {"inline_keyboard": rows}
+
+
+async def _channel_titles() -> Dict[str, str]:
+    """{channel_handle: real channel title} resolved from the latest collected
+    item per source (collector stores the resolved Telegram title in author).
+    Falls back to the raw handle when nothing was collected yet."""
+    titles: Dict[str, str] = {}
     try:
-        return await run_scout_digest()
+        async with SessionLocal() as db:
+            latest_ids = select(func.max(ScoutItem.id)).group_by(ScoutItem.source).subquery()
+            rows = (await db.execute(
+                select(ScoutItem.source, ScoutItem.author)
+                .where(ScoutItem.id.in_(select(latest_ids)))
+            )).all()
+            for source, author in rows:
+                if author and source.startswith("telegram:"):
+                    titles[source.split(":", 1)[1]] = author
+    except Exception:
+        logger.exception("Failed to resolve channel titles for /scout_list")
+    return titles
+
+
+async def _resolve_channel_titles(channels: List[str]) -> Dict[str, str]:
+    """Channel titles as the user sees them in Telegram.
+
+    Stored item authors cover channels that already produced items; for the
+    rest (newly added / quiet channels) resolve live via the Telethon user
+    session. Missing entries fall back to the raw handle.
+    """
+    titles = await _channel_titles()
+    missing = [c for c in channels if c not in titles]
+    if not missing:
+        return titles
+    api_id = os.getenv("SCOUT_TELEGRAM_API_ID")
+    api_hash = os.getenv("SCOUT_TELEGRAM_API_HASH")
+    session = os.getenv("SCOUT_TELEGRAM_SESSION")
+    if not (api_id and api_hash and session):
+        return titles
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        async with TelegramClient(StringSession(session), int(api_id), api_hash) as client:
+            await client.get_dialogs()  # populate entity cache for bare IDs
+            for chan in missing:
+                try:
+                    entity = int(chan) if chan.lstrip("-").isdigit() else chan
+                    resolved = await client.get_entity(entity)
+                    title = getattr(resolved, "title", None) or getattr(resolved, "first_name", None)
+                    if title:
+                        titles[chan] = title
+                except Exception:
+                    logger.warning("Could not resolve channel title", channel=chan)
+    except Exception:
+        logger.exception("Live channel title resolution failed")
+    return titles
+
+
+_COMMAND_HELP = (
+    "🔎 פקודות Scout:\n"
+    "/scout — סריקה מיידית של כל הערוצים\n"
+    "/scout_list — רשימת הערוצים הממוספרים\n"
+    "/scout 3 7 — סריקה רק של ערוצים 3 ו-7 מהרשימה\n"
+    "/scout @Noaminvest — סריקה של ערוץ ספציפי לפי שם\n"
+    "\nהדידג'סט האוטומטי רץ גם כך פעמיים ביום (08:15 ו-20:15)."
+)
+
+
+async def handle_telegram_command(event, payload):
+    """Mesh handler: messenger forwards /scout commands here."""
+    text = (payload or {}).get("text") or ""
+    action, channels = parse_scout_command(text)
+    logger.info("Scout telegram command", text=text[:60], action=action, channels=channels)
+
+    if action in ("help", "unknown"):
+        await _bot_reply(_COMMAND_HELP)
+        return {"handled": True, "action": "help"}
+
+    if action == "list":
+        configured = _csv_env("SCOUT_TELEGRAM_CHANNELS")
+        if not configured:
+            await _bot_reply("לא מוגדרים ערוצי טלגרם (SCOUT_TELEGRAM_CHANNELS ריק).")
+        else:
+            titles = await _resolve_channel_titles(configured)
+            listing = "\n".join(
+                f"{i}. {titles.get(c) or c}"
+                for i, c in enumerate(configured, start=1)
+            )
+            await _bot_reply(
+                f"📡 {len(configured)} ערוצים מוגדרים — לחץ כפתור לסריקה מיידית:\n{listing}",
+                reply_markup=_channel_keyboard(configured, titles),
+            )
+        return {"handled": True, "action": "list"}
+
+    if _DIGEST_LOCK.locked():
+        await _bot_reply("⏳ סריקה כבר רצה כרגע - הדידג'סט ישלח בסיומה.")
+        return {"handled": True, "action": "busy"}
+
+    scope = "כל הערוצים" if channels is None else f"{len(channels)} ערוצים שנבחרו"
+    await _bot_reply(
+        f"🔎 מתחיל סריקה יזומה של {scope}…\n"
+        "(איסוף הודעות + מחקר Gemini חי - בערך 2-4 דקות)"
+    )
+
+    async def _run_and_report():
+        result = await run_scout_digest(channels=channels)
+        if result.get("skipped"):
+            await _bot_reply("ℹ️ לא נמצאו פריטים חדשים מאז הסריקה האחרונה.")
+        elif not result.get("telegram_sent"):
+            await _bot_reply("⚠️ הסריקה הסתיימה אבל שליחת הדידג'סט נכשלה - נסה שוב בעוד דקה.")
+
+    asyncio.create_task(_run_and_report())
+    return {"handled": True, "action": "run"}
+
+
+agent_mesh.on_ask("scout_ideas", "telegram_command", handle_telegram_command)
+
+
+@router.post("/run-now")
+async def scout_run_now(payload: Optional[dict] = None):
+    """Manually trigger a collect + digest run.
+
+    Optional JSON body: {"channels": ["@chan", "12345"]} restricts the
+    Telegram collection to a subset (same as `/scout 3 7` in the bot).
+    """
+    channels = (payload or {}).get("channels") or None
+    try:
+        return await run_scout_digest(channels=channels)
     except Exception as e:
         logger.exception("Manual scout digest run failed")
         return {"status": "error", "message": str(e)}

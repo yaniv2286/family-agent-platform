@@ -87,7 +87,6 @@ from english_curriculum import (
     get_course,
     get_lesson,
     course_ids,
-    DEFAULT_DAILY_LESSON_LIMIT,
 )
 from lesson_engine import (
     available_lesson_ids,
@@ -622,7 +621,6 @@ async def _tutor_child(user_id: int, db: AsyncSession):
 
 class CoursePlacementRequest(BaseModel):
     course_id: str
-    daily_lesson_limit: Optional[int] = Field(default=None, ge=1, le=6)
     # Parent-set reward cycle: a gift after every N completed lessons.
     reward_every: Optional[int] = Field(default=None, ge=0, le=30)
     reward_text: Optional[str] = Field(default=None, max_length=120)
@@ -662,31 +660,6 @@ async def _require_lesson_course(child_name: str, meta: dict) -> None:
         raise HTTPException(403, "lesson is not in the child's assigned course")
 
 
-async def _daily_limit(child_name: str, meta: dict) -> int:
-    """The parent's placement override wins; otherwise the course default."""
-    course = get_course(meta["course_id"])
-    fallback = (course or {}).get("daily_lesson_limit", DEFAULT_DAILY_LESSON_LIMIT)
-    async with TutorHistorySessionLocal() as history_db:
-        placement = await history_db.get(EnglishCoursePlacement, child_name)
-    if placement is not None and placement.daily_lesson_limit:
-        return placement.daily_lesson_limit
-    return fallback
-
-
-async def _lessons_today(child_name: str) -> int:
-    """How many distinct lessons this child already finished today."""
-    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    async with TutorHistorySessionLocal() as history_db:
-        rows = (await history_db.execute(
-            select(EnglishLessonProgress).where(
-                EnglishLessonProgress.child_name == child_name,
-                EnglishLessonProgress.completed == 1,
-                EnglishLessonProgress.updated_at >= start,
-            )
-        )).scalars().all()
-    return len({row.lesson_id for row in rows})
-
-
 @app.get("/api/tutor/english/lesson/{lesson_id}")
 async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depends(get_db)):
     """The slides of one lesson, with the answer keys removed."""
@@ -696,8 +669,6 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
     if meta is None or lesson is None:
         raise HTTPException(404, "lesson not available yet")
     await _require_lesson_course(user.name, meta)
-    done_today = await _lessons_today(user.name)
-    limit = await _daily_limit(user.name, meta)
     async with TutorHistorySessionLocal() as history_db:
         progress_row = (await history_db.execute(
             select(EnglishLessonProgress).where(
@@ -711,8 +682,6 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
         "intro_he": lesson.get("intro_he", ""),
         "stars_total": lesson.get("stars_total", len(lesson["slides"])),
         "slides": [public_slide(s) for s in lesson["slides"]],
-        "lessons_done_today": done_today,
-        "daily_lesson_limit": limit,
         "already_completed": bool(progress_row and progress_row.completed),
     }
 
@@ -747,7 +716,6 @@ async def english_lesson_complete(
     if lesson is None or meta is None:
         raise HTTPException(404, "lesson not available yet")
     await _require_lesson_course(user.name, meta)
-    limit = await _daily_limit(user.name, meta)
     stars_total = lesson.get("stars_total", 0)
     # The browser counted the slides the child actually got right; when it
     # does not say (older clients), keep the previous max-stars behavior.
@@ -756,16 +724,6 @@ async def english_lesson_complete(
         if body is None or body.stars_earned is None
         else min(body.stars_earned, stars_total)
     )
-    async with TutorHistorySessionLocal() as history_db:
-        row = (await history_db.execute(
-            select(EnglishLessonProgress).where(
-                EnglishLessonProgress.child_name == user.name,
-                EnglishLessonProgress.lesson_id == lesson_id,
-            )
-        )).scalar_one_or_none()
-        already = row is not None and row.completed
-    if not already and await _lessons_today(user.name) >= limit:
-        raise HTTPException(409, f"daily lesson limit reached ({limit})")
     result = await record_lesson_completion(user.name, lesson_id, earned)
     return {"lesson_id": lesson_id, "completed": True, **result}
 
@@ -810,7 +768,6 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
         "user_id": user_id,
         "child_name": user.name,
         "course_id": placement.course_id,
-        "daily_lesson_limit": placement.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
         "course": course,
         "lesson_progress": lesson_progress,
         "wallet": wallet_state,
@@ -835,7 +792,6 @@ async def set_english_placement(
             placement = EnglishCoursePlacement(child_name=user.name, course_id=body.course_id)
             history_db.add(placement)
         placement.course_id = body.course_id
-        placement.daily_lesson_limit = body.daily_lesson_limit
         placement.updated_at = datetime.utcnow()
         if body.reward_every is not None or body.reward_text is not None:
             wallet = await history_db.get(EnglishChildWallet, user.name)
@@ -852,7 +808,6 @@ async def set_english_placement(
         "user_id": user_id,
         "child_name": user.name,
         "course_id": body.course_id,
-        "daily_lesson_limit": body.daily_lesson_limit or DEFAULT_DAILY_LESSON_LIMIT,
     }
 
 

@@ -52,11 +52,12 @@ def _detect_feedback_subject(text: str) -> Optional[str]:
     return None
 
 
-async def send_telegram_message(text: str) -> bool:
+async def send_telegram_message(text: str, reply_markup: Optional[dict] = None) -> bool:
     """Send a message via Telegram Bot API.
 
     Returns True on success, False otherwise (never raises, so a Telegram
-    outage doesn't crash the caller).
+    outage doesn't crash the caller). `reply_markup` optionally carries an
+    inline_keyboard payload for tappable buttons.
     """
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -71,15 +72,31 @@ async def send_telegram_message(text: str) -> bool:
     deployment_label = os.getenv("DEPLOYMENT_LABEL", "LOCAL").strip().upper() or "LOCAL"
     labeled_text = f"[{deployment_label}]\n{text}"
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    body = {"chat_id": chat_id, "text": labeled_text}
+    if reply_markup:
+        body["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json={"chat_id": chat_id, "text": labeled_text})
+            response = await client.post(url, json=body)
             response.raise_for_status()
         logger.info("Message sent to Telegram successfully")
         return True
     except Exception:
         logger.exception("Failed to send message to Telegram")
         return False
+
+
+async def answer_telegram_callback(callback_query_id: str, text: str = "") -> None:
+    """Dismiss the tap spinner on an inline-keyboard button."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return
+    url = f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, json={"callback_query_id": callback_query_id, "text": text})
+    except Exception:
+        logger.exception("answerCallbackQuery failed")
 
 
 async def handle_send_message(event, payload):
@@ -112,6 +129,29 @@ async def check_telegram_feedback(updates):
 
         new_offset = _LAST_TELEGRAM_UPDATE_ID
         for update in updates:
+            # Inline-keyboard taps arrive as callback_query updates.
+            callback = update.get("callback_query")
+            if callback:
+                cb_msg = callback.get("message") or {}
+                data = callback.get("data") or ""
+                if str(cb_msg.get("chat", {}).get("id")) == str(chat_id) and data.startswith("s:"):
+                    await answer_telegram_callback(callback.get("id", ""), "🔎 מעבד…")
+                    sel = data[2:]
+                    try:
+                        await agent_mesh.ask(
+                            to_agent="scout_ideas",
+                            intent="telegram_command",
+                            user_id=0,
+                            child_id=0,
+                            source_agent="messenger",
+                            payload={"text": "/scout" if sel == "all" else f"/scout {sel}"},
+                            timeout=30.0,
+                        )
+                    except Exception:
+                        logger.exception("Scout button dispatch failed", data=data)
+                new_offset = max(new_offset, update.get("update_id", new_offset))
+                continue
+
             msg = update.get("message") or update.get("edited_message")
             if not msg:
                 continue
@@ -121,6 +161,24 @@ async def check_telegram_feedback(updates):
                 continue
             text = (msg.get("text") or "").strip()
             if not text:
+                continue
+
+            # Bot commands (/scout ...) are routed to the owning agent and
+            # must never be stored as parent feedback.
+            if text.lower().startswith("/scout"):
+                try:
+                    await agent_mesh.ask(
+                        to_agent="scout_ideas",
+                        intent="telegram_command",
+                        user_id=0,
+                        child_id=0,
+                        source_agent="messenger",
+                        payload={"text": text},
+                        timeout=30.0,
+                    )
+                except Exception:
+                    logger.exception("Scout command dispatch failed", text=text[:60])
+                new_offset = max(new_offset, update.get("update_id", new_offset))
                 continue
 
             stored_targets = []

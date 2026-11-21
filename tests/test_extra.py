@@ -208,7 +208,6 @@ class TestEnglishCourses:
         )
         assert response.status_code == 200
         assert response.json()["course_id"] == "pre_a"
-        assert response.json()["daily_lesson_limit"] == 2
 
         again = await client.get(
             f"/api/tutor/english/placement/{child_user.id}", headers={"x-app-pin": APP_PIN})
@@ -234,7 +233,7 @@ class TestEnglishCourses:
 
 class TestLessonEngine:
     """A scripted lesson grades itself. The browser must never receive the
-    answer key, and a child cannot blow past the daily lesson limit."""
+    answer key, and there is no daily cap on completed lessons."""
 
     async def test_answer_key_never_reaches_the_browser(self, client, child_user):
         response = await client.get(
@@ -275,22 +274,20 @@ class TestLessonEngine:
                                   headers={"x-app-pin": APP_PIN})
         assert right.json()["correct"] is True
 
-    async def test_daily_lesson_limit(self, client, child_user):
+    async def test_no_daily_lesson_limit(self, client, child_user):
+        """Product decision: no daily cap - a child completes as many lessons
+        as they want in one day."""
         headers = {"x-app-pin": APP_PIN}
-        for lesson_id in ("pre_a.letters.00_hello", "a1.gtky.01_meet_you"):
+        for lesson_id in ("pre_a.letters.00_hello", "a1.gtky.01_meet_you",
+                          "a2.gtky.01_about_me"):
             done = await client.post(
                 f"/api/tutor/english/lesson/{lesson_id}/complete?user_id={child_user.id}",
                 headers=headers)
             assert done.status_code == 200, done.text
-        third = await client.post(
-            f"/api/tutor/english/lesson/a2.gtky.01_about_me/complete?user_id={child_user.id}",
-            headers=headers)
-        assert third.status_code == 409
 
     async def test_lesson_payload_marks_replay_vs_new(self, client, child_user):
-        """`already_completed` lets the client exempt replays from the daily
-        limit - a completed lesson may be re-opened even when the limit is
-        reached (frontend showed a dead-looking button before this flag)."""
+        """`already_completed` marks replays so the client can render 'שוב'
+        and treat a re-opened lesson differently from a first run."""
         headers = {"x-app-pin": APP_PIN}
         done = await client.post(
             f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
@@ -391,7 +388,7 @@ class TestEnglishWallet:
         headers = {"x-app-pin": APP_PIN}
         placed = await client.put(
             f"/api/tutor/english/placement/{child_user.id}",
-            json={"course_id": "pre_a", "daily_lesson_limit": 4,
+            json={"course_id": "pre_a",
                   "reward_every": 2, "reward_text": "גלידה"},
             headers=headers)
         assert placed.status_code == 200, placed.text
@@ -508,7 +505,7 @@ class TestEnglishWallet:
         headers = {"x-app-pin": APP_PIN}
         placed = await client.put(
             f"/api/tutor/english/placement/{child_user.id}",
-            json={"course_id": "a1", "daily_lesson_limit": 6},
+            json={"course_id": "a1"},
             headers=headers)
         assert placed.status_code == 200
         unit_lessons = ["a1.gtky.00_hello", "a1.gtky.01_meet_you",

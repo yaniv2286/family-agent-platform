@@ -550,7 +550,7 @@ async def section_lessons(client, kids, verbose) -> list[str]:
             print(f"  lesson completed: stars={res.get('stars_earned', res.get('earned', '?'))}")
     elif r.status_code == 409:
         if verbose:
-            print(f"  daily limit hit (409) - completion already recorded, OK")
+            print(f"  complete returned 409 - treating as already recorded, OK")
     else:
         fails.append(f"lesson complete: {r.status_code}")
 

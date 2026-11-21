@@ -74,12 +74,6 @@ def _unit(unit_id: str, title_he: str, blurb_he: str, lessons: List[Dict]) -> Di
     }
 
 
-# Two lessons a day is the product default (same idea as Lexi's cap). It is a
-# pacing choice, separate from the anti-cheat points cap, and a parent can
-# override it per child.
-DEFAULT_DAILY_LESSON_LIMIT = 2
-
-
 COURSES: List[Dict] = [
     {
         "course_id": "pre_a",
@@ -90,7 +84,6 @@ COURSES: List[Dict] = [
             "מתאים לכל גיל. צבעים, מספרים, ויותר מ-60 מילים ראשונות. "
             "כל אות מגיעה עם חבר, ומחוברת לאות עברית שהילד כבר מכיר."
         ),
-        "daily_lesson_limit": DEFAULT_DAILY_LESSON_LIMIT,
         "units": [
             _unit(
                 "pre_a.letters",
@@ -198,7 +191,6 @@ COURSES: List[Dict] = [
             "משפטים ראשונים, שיחות קצרות וקריאה. היחידה הראשונה: נעים להכיר - "
             "מציגים את עצמנו, לומדים רגשות, ופוגשים משפחה."
         ),
-        "daily_lesson_limit": DEFAULT_DAILY_LESSON_LIMIT,
         "units": [
             _unit(
                 "a1.getting_to_know_you",
@@ -250,7 +242,6 @@ COURSES: List[Dict] = [
             "סיפורים, הבנת הנקרא ודקדוק: present simple, past simple, וכתיבת משפטים. "
             "היחידה הראשונה חוזרת על 'נעים להכיר' בעומק של כיתה גבוהה."
         ),
-        "daily_lesson_limit": DEFAULT_DAILY_LESSON_LIMIT,
         "units": [
             _unit(
                 "a2.getting_to_know_you",

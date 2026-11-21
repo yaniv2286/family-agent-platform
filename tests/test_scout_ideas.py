@@ -5,6 +5,7 @@ messenger send are mocked - these tests exercise the real endpoints, the
 collection/dedup pipeline, cursor persistence, and the send-failure retry
 path through the FastAPI client.
 """
+import asyncio
 import pytest_asyncio
 from unittest.mock import AsyncMock
 
@@ -288,6 +289,84 @@ async def test_digest_skips_stale_and_samples_sources_fairly(client, monkeypatch
             select(ScoutItem).where(ScoutItem.external_id == "old1")
         )).scalar_one()
         assert stale.digested == 2
+
+
+def test_parse_scout_command_variants(monkeypatch):
+    """/scout command parsing: numbers map to configured channels, names get
+    an @ prefix, bare /scout means all channels."""
+    import agents.scout_ideas_agent as scout
+
+    monkeypatch.setenv("SCOUT_TELEGRAM_CHANNELS", "@alpha,@beta,123,@gamma")
+
+    assert scout.parse_scout_command("/scout") == ("run", None)
+    assert scout.parse_scout_command("/scout 2 4") == ("run", ["@beta", "@gamma"])
+    assert scout.parse_scout_command("/scout 2,4") == ("run", ["@beta", "@gamma"])
+    assert scout.parse_scout_command("/scout @beta") == ("run", ["@beta"])
+    assert scout.parse_scout_command("/scout beta") == ("run", ["@beta"])
+    assert scout.parse_scout_command("/scout 99") == ("run", None)  # out of range -> all
+    assert scout.parse_scout_command("/scout_list") == ("list", None)
+    assert scout.parse_scout_command("/scout_help") == ("help", None)
+    assert scout.parse_scout_command("hello") == ("unknown", None)
+
+
+async def test_telegram_command_runs_filtered_digest(client, monkeypatch):
+    """'/scout 2' must trigger a digest restricted to that channel, with a
+    progress reply sent back to the chat."""
+    import agents.scout_ideas_agent as scout
+
+    monkeypatch.setenv("SCOUT_TELEGRAM_CHANNELS", "@alpha,@beta")
+    replies = []
+    async def _reply(text, reply_markup=None):
+        replies.append(text)
+    monkeypatch.setattr(scout, "_bot_reply", _reply)
+    run = AsyncMock(return_value={"skipped": False, "telegram_sent": True})
+    monkeypatch.setattr(scout, "run_scout_digest", run)
+
+    result = await scout.handle_telegram_command(None, {"text": "/scout 2"})
+    assert result["action"] == "run"
+    # The background task may not have completed yet; flush it.
+    await asyncio.sleep(0)
+    run.assert_awaited_once()
+    assert run.await_args.kwargs["channels"] == ["@beta"]
+    assert any("סריקה" in r for r in replies)
+
+
+async def test_telegram_command_list_shows_numbered_channels(client, monkeypatch):
+    import agents.scout_ideas_agent as scout
+
+    monkeypatch.setenv("SCOUT_TELEGRAM_CHANNELS", "@alpha,@beta")
+    replies = []
+    markups = []
+    async def _reply(text, reply_markup=None):
+        replies.append(text)
+        markups.append(reply_markup)
+    monkeypatch.setattr(scout, "_bot_reply", _reply)
+
+    result = await scout.handle_telegram_command(None, {"text": "/scout_list"})
+    assert result["action"] == "list"
+    assert "1. @alpha" in replies[0]
+    assert "2. @beta" in replies[0]
+    # The reply must carry a tappable inline keyboard: an 'all' button plus
+    # one button per channel with 's:<index>' callback data.
+    kb = markups[0]["inline_keyboard"]
+    assert kb[0][0]["callback_data"] == "s:all"
+    flat = [b for row in kb[1:] for b in row]
+    assert {b["callback_data"] for b in flat} == {"s:1", "s:2"}
+
+
+async def test_run_now_accepts_channel_filter(client, monkeypatch):
+    """POST /api/scout/run-now with {"channels": [...]} must forward the
+    filter into the digest run."""
+    import agents.scout_ideas_agent as scout
+
+    run = AsyncMock(return_value={"status": "ok"})
+    monkeypatch.setattr(scout, "run_scout_digest", run)
+    resp = await client.post(
+        "/api/scout/run-now", headers=PIN_HEADERS, json={"channels": ["@beta"]}
+    )
+    assert resp.status_code == 200
+    run.assert_awaited_once()
+    assert run.await_args.kwargs["channels"] == ["@beta"]
 
 
 async def test_items_endpoint_lists_collected_items(client, monkeypatch):

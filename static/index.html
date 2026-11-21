@@ -2586,7 +2586,7 @@
                 const progress = placement.lesson_progress || {};
                 const placed = !!placement.course_id;
                 placementEl.textContent = placement.course
-                    ? `הקורס הנוכחי: ${placement.course.title_he} · עד ${placement.daily_lesson_limit} שיעורים ביום · ${Object.keys(progress).length} שיעורים הושלמו`
+                    ? `הקורס הנוכחי: ${placement.course.title_he} · ${Object.keys(progress).length} שיעורים הושלמו`
                     : 'עדיין אין קורס. ההורה בוחר קורס - כל ילד יכול להיות בכל קורס, בלי קשר לגיל.';
                 renderEnglishWallet(placement.wallet || {}, placement);
                 list.innerHTML = '';
@@ -2739,13 +2739,6 @@
                     return;
                 }
                 const lesson = await response.json();
-                // Replaying a completed lesson never consumes a daily slot -
-                // the server exempts it at complete-time too.
-                if (!lesson.already_completed && lesson.lessons_done_today >= lesson.daily_lesson_limit) {
-                    showLessonStartError(btn,
-                        personalizeHe(`כבר סיימתם ${lesson.daily_lesson_limit} שיעורים היום. נמשיך מחר.`));
-                    return;
-                }
             activeLesson = lesson;
             selectedSubject = 'english';
             showScreen('tutoring');
