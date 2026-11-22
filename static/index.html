@@ -4801,8 +4801,12 @@
                     body: JSON.stringify({ text: ttsText, subject: selectedSubject || 'math', student_name: selectedUserProfile?.name || '' })
                 });
 
-                if (!response.ok) {
-                    console.error('TTS request failed:', response.status);
+                const speechCt = response.headers.get('content-type') || '';
+                if (!response.ok || !speechCt.includes('audio')) {
+                    console.error('TTS request failed:', response.status, speechCt);
+                    reportClientLog('tts', `speech failed status=${response.status} ct=${speechCt.slice(0, 40)}`);
+                    showTtsFailureHint();
+                    autoListenAfterSpeech();
                     return;
                 }
 
@@ -4863,7 +4867,9 @@
                         if (mediaSource.readyState === 'open') mediaSource.endOfStream();
                     } catch (streamErr) {
                         console.error('TTS streaming failed mid-play:', streamErr);
+                        reportClientLog('tts', `mid-stream error: ${String(streamErr).slice(0, 120)}`);
                         if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                        autoListenAfterSpeech();
                     }
                     if (generation !== speechGeneration) return;
                     // Keep currentAudio set until 'ended' fires (handled above).
@@ -4907,6 +4913,9 @@
                 }
             } catch (error) {
                 console.error('Error playing TTS:', error);
+                reportClientLog('tts', `play error: ${String(error).slice(0, 120)}`);
+                showTtsFailureHint();
+                autoListenAfterSpeech();
             }
         }
 
@@ -4922,6 +4931,19 @@
         }
         function hideAutoplayHint() {
             if (autoplayHintEl) { autoplayHintEl.remove(); autoplayHintEl = null; }
+        }
+
+        /* TTS generation failed server-side (or the network ate it) - the
+           bubble text is still there, so we tell the kid Koko is quiet for
+           this turn instead of leaving dead silence (נויה: 'לא שומעים'). */
+        let ttsFailHintEl = null;
+        function showTtsFailureHint() {
+            if (ttsFailHintEl) return;
+            ttsFailHintEl = document.createElement('div');
+            ttsFailHintEl.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#475569;color:#fff;padding:8px 16px;border-radius:20px;font-size:14px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.25);';
+            ttsFailHintEl.textContent = '🔇 אין קול כרגע - קוקו כתבה את התשובה על המסך';
+            document.body.appendChild(ttsFailHintEl);
+            setTimeout(() => { if (ttsFailHintEl) { ttsFailHintEl.remove(); ttsFailHintEl = null; } }, 4500);
         }
 
         /* Lexi-style flow: when Koko finishes a turn, the mic opens so the

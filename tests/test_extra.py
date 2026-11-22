@@ -856,6 +856,19 @@ class TestTTS:
         assert call.kwargs["voice"] == "shimmer"
         assert call.kwargs["model"] == "tts-1"
 
+    async def test_speech_failure_returns_error_status(self, client, mock_openai):
+        """TTS failures must NOT return 200 with a JSON body - the client fed
+        the error JSON into MediaSource and the child heard silence with no
+        recovery (production bug: 'לא שומעים, אמרת תקשיבי')."""
+        mock_openai.audio.speech.create.side_effect = Exception("quota")
+        response = await client.post(
+            "/api/tutor/speech",
+            json={"text": "שלום", "subject": "math"},
+            headers={"x-app-pin": APP_PIN},
+        )
+        assert response.status_code >= 500
+        assert "audio" not in response.headers["content-type"]
+
 
 class TestEndSession:
     async def test_end_session_creates_learning_log(self, client, child_user):

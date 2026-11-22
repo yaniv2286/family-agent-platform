@@ -1025,10 +1025,10 @@ async def speech(request: SpeakRequest):
             headers={"Content-Disposition": "inline; filename=speech.mp3"},
         )
     except RuntimeError:
-        return {"error": "OPENAI_API_KEY is not configured."}
+        return JSONResponse({"error": "TTS is not configured."}, status_code=503)
     except Exception as e:
-        logger.exception("OpenAI TTS request failed")
-        return {"error": "Failed to generate speech."}
+        logger.exception("TTS request failed")
+        return JSONResponse({"error": "Failed to generate speech."}, status_code=502)
 
 
 @app.post("/api/tutor/transcribe")
