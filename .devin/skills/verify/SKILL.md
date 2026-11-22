@@ -69,6 +69,19 @@ flow), `isolation` (per-child history leak check), `chat` (English ×4),
   diagram, never "אני לא יכולה לצייר".
 - **`קר`/car-like attempts**: close pronunciation attempts on a target word
   are accepted, not rejected repeatedly.
+- **Equations KOKO states**: every explicit `A op B = C` in a reply must be
+  arithmetically true (the `6-2=3` bug).
+- **Praise guards**: a wrong answer gets no praise and no praise opener —
+  correction comes first.
+- **Drill-loop escalation**: the same quoted English target may not repeat
+  across 4+ consecutive turns — after 3 failures KOKO changes strategy.
+- **Gibberish guard**: a foreign-script/corrupted transcript gets an
+  ask-to-repeat, never an interpretation or a grade.
+- **Greeting dedup**: reopening a session over a recent unanswered question
+  produces a short nudge reusing the question, not a fresh greeting.
+- **Lesson duration**: completing a lesson writes a server-measured
+  `duration_seconds` visible in `placement.lesson_stats`; a <90s completion
+  is flagged ⚡ for the parent.
 
 When the simulator catches a real behavioral defect, fix the tutor and add
 the regression either here (generic check over all turns) or as a pytest

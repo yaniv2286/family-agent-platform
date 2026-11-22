@@ -1516,7 +1516,14 @@ class MathTutor(BaseAgent):
         re.IGNORECASE,
     )
     _PRAISE_OPENER_RE = re.compile(
-        r"^(?:כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו)[,!.\u05F3]+\s*",
+        r"^(?:כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו|נפלא)[,!.\u05F3]+\s*",
+        re.IGNORECASE,
+    )
+    # A praise clause is a praise word + its tail up to the first sentence
+    # break ('איזה יופי שאת ממשיכה לנסות!') - stripping only the word would
+    # leave a dangling fragment, so the whole clause goes.
+    _PRAISE_OPENER_CLAUSE_RE = re.compile(
+        r"^(?:כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו|נפלא)[^!?.\n]{0,80}[!?.]+\s*",
         re.IGNORECASE,
     )
 
@@ -1533,6 +1540,7 @@ class MathTutor(BaseAgent):
         if not kept:
             return text
         cleaned = " ".join(kept)
+        cleaned = self._PRAISE_OPENER_CLAUSE_RE.sub("", cleaned, count=1)
         cleaned = self._PRAISE_OPENER_RE.sub("", cleaned, count=1)
         if cleaned != text:
             logger.warning("Removed praise from wrong-answer reply", original=text[:120])
@@ -1741,7 +1749,10 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         )
         reply_text, points_earned, skill_id, answer_correct, hints_used = _parse_json_reply(raw)
         reply_text = self._sanitize_reply_arithmetic(reply_text)
-        if answer_verdict and not answer_verdict[3]:
+        # Praise guard fires on BOTH deterministic wrong signals: a bare
+        # wrong answer and a wrong expression claim ('זה 250').
+        wrong = (answer_verdict and not answer_verdict[3]) or (user_expression and user_expression[2] is False)
+        if wrong:
             reply_text = self._sanitize_wrong_verdict_praise(reply_text)
         gesture = _parse_gesture(raw)
 
@@ -1937,6 +1948,27 @@ def _same_target_attempts(conversation_history: List[Dict], expected_phrase: str
             break
         count += 1
     return count
+
+
+_COLOR_WORDS = {"red", "blue", "green", "yellow", "pink", "purple",
+                "orange", "black", "white", "brown", "gray", "grey"}
+
+
+def _color_drill_streak(conversation_history: List[Dict]) -> int:
+    """Count consecutive latest assistant turns whose quoted phrase contains
+    a color word. A self-chosen colors sequence is a banned default topic
+    even mid-lesson - the LLM ignored the written ban (QA: pink->orange->
+    purple drilled 6 turns), so the stop is injected as a system fact."""
+    streak = 0
+    for msg in reversed(conversation_history):
+        if msg.get("role") != "assistant":
+            continue
+        phrase = _quoted_english_phrase(str(msg.get("content") or ""))
+        if set(_normalize_english_tokens(phrase or "")) & _COLOR_WORDS:
+            streak += 1
+        else:
+            break
+    return streak
 
 
 def _transcript_needs_repeat(text: str) -> bool:
@@ -2340,6 +2372,12 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
             system_prompt += (
                 "\n\nבדיקת מערכת: ההודעה האחרונה של התלמיד/ה נראית כמו תמלול קול שגוי או ריק - "
                 "בקש/י בחיבוב שיחזור/תחזור על התשובה. אסור לנחש משמעות ואסור לסמן תשובה כשגויה."
+            )
+        if _color_drill_streak(conversation_history) >= 2:
+            system_prompt += (
+                "\n\nבדיקת מערכת: בשני התורים האחרונים כבר ניתנה מילת צבע לתרגול. "
+                "אסור להציע מילת צבע נוספת או משפט עם צבע בתור הזה - עבר/י מיד לנושא אחר "
+                "(חיה, חפץ, פעולה, משפחה, מספר) עם מילה חדשה. זוהי הוראה מחייבת, לא המלצה."
             )
 
         # Inject cross-agent memory context so the tutor feels like a companion.

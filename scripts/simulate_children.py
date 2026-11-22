@@ -126,6 +126,19 @@ LAT = {"non_llm": [], "chat": [], "lesson": []}   # latency buckets (seconds)
 NON_LLM_BUDGET, LLM_BUDGET = 5.0, 45.0
 
 
+def _quoted_latin(text: str) -> str:
+    """The English phrase KOKO quotes as the drill target, normalized for
+    streak detection - the 'I kick ball' loop repeats the exact same quote."""
+    quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'|“([^”]+)”|‘([^’]+)’', text)
+    best, best_n = "", 0
+    for group in quoted:
+        for piece in group:
+            toks = re.findall(r"[A-Za-z']+", piece)
+            if len(toks) > best_n:
+                best, best_n = " ".join(t.lower() for t in toks), len(toks)
+    return best
+
+
 def en_ratio(t: str) -> float:
     he, la = len(HEBREW_RE.findall(t)), len(LATIN_RE.findall(t))
     return la / (he + la) if (he + la) else 0.0
@@ -299,7 +312,10 @@ async def section_smoke(client, kids, verbose) -> list[str]:
     checks = [
         ("GET", "/api/ping", {"x-app-pin": pin}, 200),
         ("GET", "/api/health", {}, 200),
-        ("GET", "/api/control/agents", {}, 401),                     # no PIN
+        # Anonymous access = child scope (RBAC: kids enter without a
+        # password); only a WRONG pin fails closed with 401.
+        ("GET", "/api/control/agents", {}, 200),
+        ("GET", "/api/control/agents", {"x-app-pin": "bad-pin-000"}, 401),
         ("GET", "/api/control/agents", {"x-app-pin": pin}, 200),     # with PIN
         ("GET", "/api/tutor/english/courses", {"x-app-pin": pin}, 200),
         ("GET", "/api/tutor/nonexistent-endpoint", {"x-app-pin": pin}, 404),
@@ -339,6 +355,7 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
     url = "/api/tutor/english" if subject == "english" else "/api/tutor/chat"
 
     probe_reply, visual_reply, correct_probe_reply, wrong_probe_reply = None, None, None, None
+    gibberish_reply = None
     for i in range(turns):
         if i == 0:
             body_msgs = []
@@ -348,6 +365,11 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             # text diagram, never "אני לא יכולה לצייר" (נויה's real session).
             if subject == "math" and i == 2:
                 utt = "איך אומרים חתול באנגלית?"
+            elif subject == "english" and i == 5 and kid["name"] == "לביא":
+                # Gibberish Whisper probe: a foreign-script/corrupted transcript
+                # is an ASR failure, not an answer - KOKO must ask to repeat,
+                # never interpret or grade it (production regression).
+                utt = "أكي بول ؟؟؟"
             elif subject == "math" and i == 4 and kid["name"] == "נויה":
                 utt = "את יכולה להראות לי איך פותרים 23 כפול 15 בשיטת המלבן? כאילו בציור"
             elif subject == "math" and i == 6:
@@ -379,6 +401,8 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             correct_probe_reply = reply
         if subject == "math" and i == 7:
             wrong_probe_reply = reply
+        if subject == "english" and i == 5 and kid["name"] == "לביא":
+            gibberish_reply = reply
         messages.append({"role": "assistant", "content": reply})
         replies.append(reply)
         if verbose:
@@ -419,6 +443,31 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                         rejected += 1
             if rejected >= 3:
                 fails.append(f"garbled 'קר'(car) rejected {rejected}x - must accept close attempts")
+        # Gibberish probe: a corrupted/foreign-script transcript must get an
+        # ask-to-repeat, never be interpreted or graded as an answer.
+        if gibberish_reply is not None and not re.search(
+            r"(חזור|חזרי|תחזור|תחזירי|שמעתי|תמלול|הבנתי|אמור שוב|אמרי שוב|נסה שוב|נסי שוב|שוב\?)",
+            gibberish_reply,
+        ):
+            fails.append(f"gibberish transcript interpreted, not asked to repeat: {gibberish_reply[:100]!r}")
+        # Drill-loop regression: the same quoted target repeated across 4+
+        # consecutive turns is the 'I kick ball' loop - after 3 failed
+        # attempts the prompt forces a strategy change, so a 4th identical
+        # quote must not appear.
+        streak, last_q, max_streak, max_phrase = 0, None, 0, ""
+        for r in replies:
+            phrase = _quoted_latin(r)
+            if phrase and phrase == last_q:
+                streak += 1
+            else:
+                streak, last_q = (1 if phrase else 0), phrase
+            if streak > max_streak:
+                max_streak, max_phrase = streak, phrase
+        if max_streak >= 4:
+            fails.append(
+                f"same drill target {max_phrase!r} quoted {max_streak} turns in a row - "
+                "escalation did not force a strategy change"
+            )
     else:  # math
         for i, r in enumerate(replies):
             if EN_TEACH_RE.search(r) and not MATH_RETURN_RE.search(r):
@@ -451,6 +500,11 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
             corrected = re.search(r"(243|לא בדיוק|לא נכון|שגו|טעות|קרוב|בוא נבדוק|בואי נבדוק|נסה שוב|נסי שוב|כמעט)", wrong_probe_reply)
             if praised and not corrected:
                 fails.append(f"praised a wrong answer (456-213=250): {wrong_probe_reply[:100]!r}")
+            # Praise-opener guard: 'מעולה! ...התשובה היא 243' teaches that
+            # wrong = great (production: praise wrapped around correction).
+            if re.match(r"^\s*(כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו)\b",
+                        wrong_probe_reply):
+                fails.append(f"wrong answer got a praise opener: {wrong_probe_reply[:80]!r}")
         # Generic regression: a bare-number child reply that equals the
         # computed answer to KOKO's own question must never be doubted
         # (live QA catch: '15 מכוניות ומישהו לוקח 7' -> child '8' ->
@@ -502,6 +556,30 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                             fails.append(
                                 f"praised wrong answer: child said {said}, KOKO praised but stated {stated}: {r[:100]!r}"
                             )
+
+    # Greeting-dedup regression: reopening a session (empty message list,
+    # as initChat does after reload/new device) over a recent unanswered
+    # question must produce a short nudge reusing that question - never a
+    # brand-new greeting (production: identical greetings minutes apart).
+    # The nudge path is deterministic server-side, no LLM call.
+    await asyncio.sleep(1.5)  # turn persistence runs as a background task
+    hr = await timed(client, "GET", f"/api/history/{kid['name']}?subject={subject}",
+                     headers={"x-app-pin": pin}, timeout=30)
+    stored = hr.json().get("messages", []) if hr.status_code == 200 else []
+    if stored and stored[-1].get("role") == "assistant" and "?" in str(stored[-1].get("content") or ""):
+        body = {"user_id": user.id, "messages": [], "idempotency_key": str(uuid.uuid4())}
+        if subject != "english":
+            body["subject"] = "math"
+        r = await timed(client, "POST", url, "non_llm", json=body,
+                        headers={"x-app-pin": pin}, timeout=30)
+        if r.status_code != 200:
+            fails.append(f"session-reopen probe: {r.status_code}")
+        elif "עוד מחכה" not in r.json()["reply"]:
+            fails.append(
+                f"reopen over pending question got a fresh greeting: {r.json()['reply'][:100]!r}"
+            )
+        elif verbose:
+            print(f"  reopen nudge ok: {r.json()['reply'][:80]}")
 
     return fails
 
@@ -601,6 +679,22 @@ async def section_lessons(client, kids, verbose) -> list[str]:
                     headers={"x-app-pin": pin}, timeout=30)
     if r.status_code >= 500:
         fails.append(f"rewards claim: {r.status_code} server error")
+
+    # Duration regression: the server must measure lesson time (opened_at at
+    # GET, duration_seconds at complete) and surface it to the parent via
+    # placement.lesson_stats - a ~35-second 'finish' is skip-tapping, and
+    # the parent must be able to see it as such.
+    r = await timed(client, "GET", f"/api/tutor/english/placement/{user.id}",
+                    "lesson", headers={"x-app-pin": pin}, timeout=30)
+    if r.status_code != 200:
+        fails.append(f"placement after lesson: {r.status_code}")
+    else:
+        stats = (r.json().get("lesson_stats") or {}).get(lesson_id)
+        secs = stats.get("duration_seconds") if stats else None
+        if not isinstance(secs, int) or secs < 0:
+            fails.append(f"lesson_stats missing measured duration for {lesson_id}: {stats!r}")
+        elif verbose:
+            print(f"  lesson duration measured: {secs}s" + (" (⚡ rushed)" if secs < 90 else ""))
     return fails
 
 
@@ -614,7 +708,12 @@ async def section_isolation(client, kids, verbose) -> list[str]:
     sibling's session."""
     fails = []
     pin = os.environ.get("APP_PIN", "")
-    kid_a, kid_b = kids[0], kids[-1]
+    kid_a = kids[0]
+    # Scoped runs (--kids one-name) leave A==B; borrow any other child from
+    # the full roster so the leak check stays meaningful.
+    kid_b = next((k for k in (kids + KIDS) if k["name"] != kid_a["name"]), kids[-1])
+    if kid_b["name"] == kid_a["name"]:
+        return ["isolation needs two distinct children"]
     user_a = await ensure_user(client, kid_a)
     marker = f"מילת-סוד-ייחודית-{uuid.uuid4().hex[:8]}"
 

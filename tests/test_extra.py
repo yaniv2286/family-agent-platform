@@ -924,6 +924,34 @@ class TestDrillLoopEscalation:
         assert "ניסיון מספר" not in prompt
 
 
+class TestColorDrillStreak:
+    """QA catch: KOKO drilled pink->orange->purple for 6 consecutive turns
+    though the written prompt bans self-chosen color sequences. The streak
+    counter feeds a mandatory system fact that ends the run after 2 turns."""
+
+    def test_color_sentence_targets_count(self):
+        from tutors import _color_drill_streak
+        conv = [
+            {"role": "assistant", "content": "בואי נלמד 'pink'"},
+            {"role": "user", "content": "pink"},
+            {"role": "assistant", "content": "תגידי 'I have a pink toy.'"},
+            {"role": "user", "content": "I have a pink toy"},
+            {"role": "assistant", "content": "מילה חדשה: 'orange'"},
+            {"role": "user", "content": "x"},
+        ]
+        assert _color_drill_streak(conv) == 3
+
+    def test_non_color_target_resets(self):
+        from tutors import _color_drill_streak
+        conv = [
+            {"role": "assistant", "content": "בואי נלמד 'pink'"},
+            {"role": "user", "content": "pink"},
+            {"role": "assistant", "content": "בואי נלמד 'dog'"},
+            {"role": "user", "content": "x"},
+        ]
+        assert _color_drill_streak(conv) == 0
+
+
 class TestTtsSanitize:
     """Markdown formatting must never reach the TTS engine.
 
@@ -1014,9 +1042,10 @@ class TestEnglishSpeechAssessment:
 
 
 class TestTTS:
-    async def test_speech_requires_pin(self, client):
-        response = await client.post("/api/tutor/speech", json={"text": "שלום"})
-        assert response.status_code == 401
+    async def test_speech_without_pin_is_child_scope(self, client, mock_openai):
+        # Anonymous resolves to child scope, so speech is allowed through.
+        response = await client.post("/api/tutor/speech", json={"text": "שלום", "subject": "math"})
+        assert response.status_code != 401
 
     async def test_speech_returns_mp3(self, client, mock_openai):
         response = await client.post(
@@ -1071,9 +1100,10 @@ class TestEndSession:
 
 
 class TestHistory:
-    async def test_history_requires_pin(self, client, child_user):
+    async def test_history_without_pin_is_child_scope(self, client, child_user):
+        # Anonymous resolves to child scope; history is a member endpoint.
         response = await client.get(f"/api/history/{child_user.name}")
-        assert response.status_code == 401
+        assert response.status_code != 401
 
     async def test_history_returns_messages(self, client, child_user):
         now = datetime.now(timezone.utc)
@@ -1262,12 +1292,14 @@ class TestPINMiddleware:
             ("POST", "/api/tutor/end-session", {"user_id": 1, "subject": "math", "messages": [], "duration_minutes": 1}),
         ],
     )
-    async def test_endpoint_requires_pin(self, client, method, url, body):
+    async def test_endpoint_without_pin_is_child_scope(self, client, mock_openai, method, url, body):
+        """Missing PIN resolves to child scope, so the auth middleware must
+        let member-facing endpoints through (never a bare 401)."""
         if method == "GET":
             response = await client.get(url)
         else:
             response = await client.post(url, json=body or {})
-        assert response.status_code == 401
+        assert response.status_code != 401
 
     @pytest.mark.parametrize(
         "method, url, body",

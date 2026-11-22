@@ -964,7 +964,10 @@ async def get_chat_history(child_name: str, subject: str = DEFAULT_SUBJECT, limi
         result = await db.execute(
             select(ChatHistory)
             .where(ChatHistory.child_name == child_name, ChatHistory.subject == subject)
-            .order_by(ChatHistory.timestamp.desc())
+            # A user turn and KOKO's reply are committed with the SAME
+            # timestamp - the id tiebreak keeps the reply (inserted last)
+            # on top, or a pending-question check reads the wrong tail.
+            .order_by(ChatHistory.timestamp.desc(), ChatHistory.id.desc())
             .limit(limit)
         )
         rows = result.scalars().all()
