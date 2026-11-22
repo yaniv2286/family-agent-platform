@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import httpx
 from typing import List, Dict, Optional, Tuple, Any
 from num2words import num2words
@@ -23,6 +23,7 @@ from database import (
     append_chat_messages,
     update_student_profile_summary,
     get_skill_mastery,
+    record_speech_mastery,
     TUTOR_CURRICULUM,
     grade_level_cap,
 )
@@ -1509,6 +1510,34 @@ class MathTutor(BaseAgent):
             return text[m.start():m.start(4)] + fixed + text[m.end(4):m.end()]
         return self._REPLY_EQ_RE.sub(_fix, text)
 
+    _PRAISE_SENTENCE_RE = re.compile(
+        r"^(?:כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו|"
+        r"עבודה נהדרת|הצלחה נהדרת|אלופה|אלוף|ברavo)[!.,\s]*$",
+        re.IGNORECASE,
+    )
+    _PRAISE_OPENER_RE = re.compile(
+        r"^(?:כל הכבוד|מעולה|נהדר|איזה יופי|יופי|מושלם|מדהים|פנטסטי|וואו)[,!.\u05F3]+\s*",
+        re.IGNORECASE,
+    )
+
+    def _sanitize_wrong_verdict_praise(self, text: str) -> str:
+        """When the deterministic verdict says the child answered WRONG, praise
+        before the correction teaches that wrong = great (production: 'הרחקה
+        נהדרת' for a wrong 24/3). Drop pure-praise sentences and praise
+        openers; keep encouragement that follows the correction ('ניסיון יפה'
+        after the right answer is fine)."""
+        sentences = [s for s in re.split(r"(?<=[.!?\n])\s+", text) if s.strip()]
+        if not sentences:
+            return text
+        kept = [s for s in sentences if not self._PRAISE_SENTENCE_RE.match(s.strip())]
+        if not kept:
+            return text
+        cleaned = " ".join(kept)
+        cleaned = self._PRAISE_OPENER_RE.sub("", cleaned, count=1)
+        if cleaned != text:
+            logger.warning("Removed praise from wrong-answer reply", original=text[:120])
+        return cleaned.strip() or text
+
     def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, answer_verdict: Optional[Tuple[str, str, str, bool]] = None, user_expression: Optional[Tuple[str, str, Optional[bool]]] = None, skill_context: str = "") -> str:
         """Generate system prompt based on user profile, dynamic long-term memory,
         and the most recent chat turns.
@@ -1543,7 +1572,8 @@ class MathTutor(BaseAgent):
             else:
                 correct_answer_line = (
                     f'התלמיד/ה ענה/ה {user_answer} על השאלה {question} — אבל התשובה הנכונה היא {correct_value}. '
-                    f'התשובה של התלמיד/ה שגויה: אסור לשבח אותה ואסור לומר שהיא נכונה. '
+                    f'התשובה של התלמיד/ה שגויה: אסור לשבח אותה, אסור לומר שהיא נכונה, '
+                    f'ואסור לפתוח את התשובה במילות שבח כמו מעולה/נהדר/כל הכבוד - התחל/י ישר בתיקון העדין. '
                     f'הדרכ/י בעדינות צעד-צעד לחישוב הנכון ותן/י לילד/ה לנסות שוב.')
 
 
@@ -1675,6 +1705,9 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         user_id = user_profile.get("id")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
+        nudge = _pending_nudge(recent_history, conversation_history, child_name)
+        if nudge is not None:
+            return nudge, 0, None, None, 0, None
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         answer_verdict = self._extract_answer_verdict(conversation_history)
         user_expression = self._extract_user_expression_eval(conversation_history)
@@ -1686,6 +1719,11 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         if auto_focus and not user_profile.get("focus_skill_id"):
             user_profile["focus_skill_id"] = auto_focus
         system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, answer_verdict, user_expression, skill_context)
+        if conversation_history and conversation_history[-1].get("role") == "user" and _transcript_needs_repeat(str(conversation_history[-1].get("content") or "")):
+            system_prompt += (
+                "\n\nבדיקת מערכת: ההודעה האחרונה של התלמיד/ה נראית כמו תמלול קול שגוי או ריק - "
+                "בקש/י בחיבוב שיחזור/תחזור על התשובה. אסור לנחש משמעות ואסור לסמן תשובה כשגויה."
+            )
 
         # Inject cross-agent memory context so the tutor feels like a companion.
         if user_id:
@@ -1703,6 +1741,8 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         )
         reply_text, points_earned, skill_id, answer_correct, hints_used = _parse_json_reply(raw)
         reply_text = self._sanitize_reply_arithmetic(reply_text)
+        if answer_verdict and not answer_verdict[3]:
+            reply_text = self._sanitize_wrong_verdict_praise(reply_text)
         gesture = _parse_gesture(raw)
 
         # Extract and store insights in the background so the tutor keeps learning.
@@ -1863,6 +1903,81 @@ def _normalize_english_tokens(text: str) -> List[str]:
     return normalized
 
 
+def _quoted_english_phrase(assistant_text: str) -> Optional[str]:
+    """The expected English is whatever the tutor quoted. Collect Latin-letter
+    phrases inside quotes and take the longest one."""
+    quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'|“([^”]+)”|‘([^’]+)’', assistant_text)
+    candidates = []
+    for group in quoted:
+        for piece in group:
+            piece = piece.strip()
+            if piece and re.search(r"[A-Za-z]", piece) and not re.search(r"[\u0590-\u05FF]", piece):
+                candidates.append(piece)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: len(_normalize_english_tokens(c)))
+
+
+def _same_target_attempts(conversation_history: List[Dict], expected_phrase: str) -> int:
+    """Count consecutive earlier turns where KOKO drilled the SAME English
+    phrase and the child kept missing - the 'I kick ball' loop a real teacher
+    would abandon after 2-3 failures instead of repeating verbatim."""
+    target = set(_normalize_english_tokens(expected_phrase))
+    if not target:
+        return 0
+    count = 0
+    # -1 is the child's latest attempt, -2 the tutor turn that set the target;
+    # walk the earlier assistant turns backwards while they repeat it.
+    for i in range(len(conversation_history) - 3, -1, -1):
+        msg = conversation_history[i]
+        if msg.get("role") != "assistant":
+            continue
+        prev = _quoted_english_phrase(str(msg.get("content") or ""))
+        if prev is None or set(_normalize_english_tokens(prev)) != target:
+            break
+        count += 1
+    return count
+
+
+def _transcript_needs_repeat(text: str) -> bool:
+    """Whisper sometimes returns empty, foreign-script, or noise-only
+    transcripts. Those are ASR failures, not answers - KOKO should ask the
+    child to repeat instead of 'interpreting' gibberish or grading it wrong."""
+    stripped = re.sub(r"[\s.,!?;:'\"-]+", "", text or "")
+    if len(stripped) < 2:
+        return True
+    # Any letter outside Hebrew/Latin (Arabic, Cyrillic, CJK, ...) is a
+    # transcription artifact - a Hebrew-speaking child did not type it.
+    foreign = [c for c in stripped if c.isalpha() and not ("\u0590" <= c <= "\u05FF" or c.isascii())]
+    if foreign:
+        return True
+    # Punctuation/symbols only is noise; a bare number is a real answer.
+    return not any(c.isalnum() for c in stripped)
+
+
+def _pending_nudge(recent_history: List[Dict], conversation_history: List[Dict], child_name: str) -> Optional[str]:
+    """A reopened session arrives with an empty message list, which used to
+    trigger a brand-new greeting even when the previous turn was an
+    unanswered question from minutes ago (production: duplicate identical
+    greetings). If the stored history ends with a recent (<2h) pending
+    question, reuse it as a short nudge instead."""
+    if conversation_history or not recent_history:
+        return None
+    last = recent_history[-1]
+    if last.get("role") != "assistant":
+        return None
+    ts = last.get("timestamp")
+    if ts is None or (datetime.utcnow() - ts) > timedelta(hours=2):
+        return None
+    text = str(last.get("content") or "").strip()
+    if "?" not in text:
+        return None
+    q = text.rfind("?")
+    start = max(text.rfind(".", 0, q), text.rfind("!", 0, q), text.rfind("\n", 0, q)) + 1
+    tail = text[start:q + 1].strip()
+    return f"עוד מחכה לך, {child_name}! {tail}"
+
+
 def _assess_english_speech(
     conversation_history: List[Dict],
 ) -> Optional[Tuple[str, str, List[str], List[str]]]:
@@ -1883,18 +1998,9 @@ def _assess_english_speech(
     assistant_text = str(last_assistant.get("content") or "")
     user_text = str(last_user.get("content") or "")
 
-    # The expected English is whatever the tutor quoted. Collect Latin-letter
-    # phrases inside quotes and take the longest one.
-    quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'|“([^”]+)”|‘([^’]+)’', assistant_text)
-    candidates = []
-    for group in quoted:
-        for piece in group:
-            piece = piece.strip()
-            if piece and re.search(r"[A-Za-z]", piece) and not re.search(r"[\u0590-\u05FF]", piece):
-                candidates.append(piece)
-    if not candidates:
+    expected_phrase = _quoted_english_phrase(assistant_text)
+    if expected_phrase is None:
         return None
-    expected_phrase = max(candidates, key=lambda c: len(_normalize_english_tokens(c)))
     expected_words = _normalize_english_tokens(expected_phrase)
     transcript_words = _normalize_english_tokens(user_text)
     if not expected_words or not transcript_words:
@@ -1980,7 +2086,7 @@ class EnglishTutor(BaseAgent):
     SUBJECT = "english"
 
     
-    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, speech_assessment: Optional[Tuple[str, str, List[str], List[str]]] = None, course_context: str = "", course_cefr: Optional[str] = None, skill_context: str = "") -> str:
+    def generate_system_prompt(self, user_profile: Dict, dynamic_summary: str = "", recent_history: List[Dict] = None, parent_directives: List[str] = None, speech_assessment: Optional[Tuple[str, str, List[str], List[str]]] = None, course_context: str = "", course_cefr: Optional[str] = None, skill_context: str = "", drill_attempts: int = 0) -> str:
         """Generate system prompt for the bilingual English tutor - mentor persona,
         enriched with the student's dynamic long-term memory and recent chat turns.
         """
@@ -2016,6 +2122,14 @@ class EnglishTutor(BaseAgent):
                     f'בדיקת מערכת: התלמיד/ה אמר/ה בעצם "{expected}" - התמלול הציג זאת מעוות. '
                     "אשר/י את התשובה כנכונה, שבח/י בקצרה, ועבור/י מיד למשפט או מילה חדשים. "
                     "אסור לתקן על בסיס האיות של התמלול."
+                )
+            elif drill_attempts >= 2:
+                assessment_line = (
+                    f'בדיקת מערכת: זהו ניסיון מספר {drill_attempts + 1} ברצף על "{expected}" ללא הצלחה. '
+                    "אסור לחזור על אותו תרגיל שוב! החלף/י אסטרטגיה עכשיו - בחר/י אחת: "
+                    "(א) רד/י למילה בודדת מהמשפט ותרגל/י רק אותה הברה-הברה, "
+                    "(ב) ותר/י על היעד ועבר/י למילה או משפט אחרים, קלים יותר, "
+                    "(ג) קבל/י את הניסיון בשבח חם ועבר/י הלאה."
                 )
             else:
                 assessment_line = (
@@ -2182,10 +2296,15 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
         user_id = user_profile.get("id")
         dynamic_summary = (await get_student_profile_summary(child_name, self.SUBJECT)) or ""
         recent_history = await get_chat_history(child_name, self.SUBJECT, limit=10)
+        nudge = _pending_nudge(recent_history, conversation_history, child_name)
+        if nudge is not None:
+            return nudge, 0, None, None, 0, None
         parent_directives = [d.message for d in await memory_manager.get_active_directives(child_name, self.SUBJECT, limit=3)]
         speech_assessment = _assess_english_speech(conversation_history)
+        drill_attempts = 0
         if speech_assessment:
             expected, verdict, matched, missing = speech_assessment
+            drill_attempts = _same_target_attempts(conversation_history, expected)
             logger.info(
                 "English speech assessment",
                 child=child_name,
@@ -2193,16 +2312,35 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
                 expected=expected,
                 matched=matched,
                 missing=missing,
+                drill_attempts=drill_attempts,
                 transcript=conversation_history[-1].get("content"),
             )
+            # Sentence-level spoken accuracy feeds lesson prep, so a child who
+            # keeps failing long spoken targets gets shorter ones next time
+            # instead of a global difficulty drop.
+            if len(_normalize_english_tokens(expected)) >= 3:
+                await record_speech_mastery(child_name, self.SUBJECT, "english.speech.sentence", verdict == "correct")
         course_context, course_cefr = await _english_course_context(child_name)
         # 'Lesson prep': the child's real measured level per skill. Also the
         # server-side focus fallback when the client didn't pass one.
         mastery_by_skill = await get_skill_mastery(child_name, self.SUBJECT)
         skill_context, auto_focus = _lesson_prep_block(mastery_by_skill, self.SUBJECT, user_profile.get("grade_level"))
+        speech_row = mastery_by_skill.get("english.speech.sentence")
+        if speech_row and (speech_row.attempts or 0) >= 3:
+            speech_acc = (speech_row.correct_attempts or 0) / speech_row.attempts
+            if speech_acc < 0.5:
+                skill_context += (
+                    f"\nערוץ דיבור: דיוק נמוך במשפטים מדוברים ({speech_acc:.0%} ב-{speech_row.attempts} ניסיונות). "
+                    "רד/י רמה ביעדים המדוברים: מילה בודדת או 2-3 מילים בלבד בכל פעם, והברה-הברה לפני משפט שלם."
+                )
         if auto_focus and not user_profile.get("focus_skill_id"):
             user_profile["focus_skill_id"] = auto_focus
-        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, speech_assessment, course_context, course_cefr, skill_context)
+        system_prompt = self.generate_system_prompt(user_profile, dynamic_summary, recent_history, parent_directives, speech_assessment, course_context, course_cefr, skill_context, drill_attempts)
+        if conversation_history and conversation_history[-1].get("role") == "user" and _transcript_needs_repeat(str(conversation_history[-1].get("content") or "")):
+            system_prompt += (
+                "\n\nבדיקת מערכת: ההודעה האחרונה של התלמיד/ה נראית כמו תמלול קול שגוי או ריק - "
+                "בקש/י בחיבוב שיחזור/תחזור על התשובה. אסור לנחש משמעות ואסור לסמן תשובה כשגויה."
+            )
 
         # Inject cross-agent memory context so the tutor feels like a companion.
         if user_id:

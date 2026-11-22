@@ -824,6 +824,8 @@ class EnglishLessonProgress(TutorHistoryBase):
     lesson_id = Column(String, nullable=False)
     stars = Column(Integer, nullable=False, default=0)
     completed = Column(Integer, nullable=False, default=0)
+    opened_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
@@ -929,6 +931,21 @@ async def _migrate_tutor_history_schema(conn):
                 "ON chat_history(child_name, subject, idempotency_key)"
             )
         )
+
+    # Track when a lesson was last opened and how long completing it took,
+    # so the parent can see a 35-second "finish" for what it is.
+    lp_columns = await _table_columns(conn, "english_lesson_progress")
+    if lp_columns:
+        if "opened_at" not in lp_columns:
+            logger.warning("Adding 'opened_at' column to english_lesson_progress")
+            await conn.execute(
+                text("ALTER TABLE english_lesson_progress ADD COLUMN opened_at DATETIME")
+            )
+        if "duration_seconds" not in lp_columns:
+            logger.warning("Adding 'duration_seconds' column to english_lesson_progress")
+            await conn.execute(
+                text("ALTER TABLE english_lesson_progress ADD COLUMN duration_seconds INTEGER")
+            )
 
 
 async def init_tutor_history_db():
@@ -1083,6 +1100,29 @@ async def get_skill_mastery(child_name: str, subject: str = DEFAULT_SUBJECT) -> 
             )
         )).scalars().all()
     return {row.skill_id: row for row in rows}
+
+
+async def record_speech_mastery(child_name: str, subject: str, skill_id: str, correct: bool):
+    """Upsert a mastery row for an internally-graded signal (e.g. spoken
+    sentence accuracy) that isn't part of the public curriculum, so lesson
+    prep can adapt the channel difficulty per child."""
+    async with TutorHistorySessionLocal() as db:
+        row = (await db.execute(
+            select(TutorSkillMastery).where(
+                TutorSkillMastery.child_name == child_name,
+                TutorSkillMastery.subject == subject,
+                TutorSkillMastery.skill_id == skill_id,
+            )
+        )).scalar_one_or_none()
+        if row is None:
+            row = TutorSkillMastery(child_name=child_name, subject=subject, skill_id=skill_id)
+            db.add(row)
+        delta = 0.15 if correct else -0.08
+        row.mastery = max(0.0, min(1.0, float(row.mastery or 0.0) + delta))
+        row.attempts = int(row.attempts or 0) + 1
+        row.correct_attempts = int(row.correct_attempts or 0) + int(correct)
+        row.last_practiced_at = datetime.utcnow()
+        await db.commit()
 
 
 async def get_student_profile_summary(child_name: str, subject: str = DEFAULT_SUBJECT):

@@ -589,6 +589,8 @@
         .ec-lesson.done { color: #15803d; }
         .ec-lesson.next { background: #eef2ff; border-radius: 10px; padding: 6px 8px; font-weight: 700; }
         .ec-stars { font-size: 12px; }
+        .ec-dur { font-size: 11px; color: #64748b; white-space: nowrap; }
+        .ec-dur-fast { color: #b45309; font-weight: 700; }
         .ec-soon { color: #9ca3af; font-size: 12px; white-space: nowrap; }
         .ec-assign { border: none; background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; border-radius: 999px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
         .ec-assign[disabled] { background: #d1d5db; cursor: default; }
@@ -2584,6 +2586,7 @@
                 const catalog = await catalogRes.json();
                 const placement = await placementRes.json();
                 const progress = placement.lesson_progress || {};
+                const lessonStats = placement.lesson_stats || {};
                 const placed = !!placement.course_id;
                 placementEl.textContent = placement.course
                     ? `הקורס הנוכחי: ${placement.course.title_he} · ${Object.keys(progress).length} שיעורים הושלמו`
@@ -2608,7 +2611,17 @@
                             const stars = progress[lesson.lesson_id];
                             const done = stars !== undefined;
                             let label = escapeFitnessHtml(lesson.title_he);
-                            if (done) label = `✅ ${label} <span class="ec-stars">${'⭐'.repeat(stars)}</span>`;
+                            if (done) {
+                                label = `✅ ${label} <span class="ec-stars">${'⭐'.repeat(stars)}</span>`;
+                                const secs = (lessonStats[lesson.lesson_id] || {}).duration_seconds;
+                                if (secs != null) {
+                                    const mm = Math.floor(secs / 60), ss = secs % 60;
+                                    const dtxt = mm ? `${mm}m${ss ? ss + 's' : ''}` : `${ss}s`;
+                                    label += secs < 90
+                                        ? ` <span class="ec-dur ec-dur-fast" title="completed in ${secs}s">⚡${dtxt}</span>`
+                                        : ` <span class="ec-dur">⏱${dtxt}</span>`;
+                                }
+                            }
                             let cls = 'ec-lesson';
                             if (done) cls += ' done';
                             if (!done && isCurrent && !nextMarked) { cls += ' next'; nextMarked = true; label = `▶ ${label}`; }

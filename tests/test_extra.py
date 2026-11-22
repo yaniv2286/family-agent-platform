@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -15,6 +15,8 @@ from tutors import (
     _parse_gesture,
     _parse_json_reply,
     _parse_learned_interests,
+    _pending_nudge,
+    _transcript_needs_repeat,
 )
 from database import (
     ChatHistory,
@@ -303,6 +305,50 @@ class TestLessonEngine:
             headers=headers)
         assert fresh.status_code == 200
         assert fresh.json()["already_completed"] is False
+
+    async def test_lesson_duration_tracked_server_side(self, client, child_user):
+        """Opening a lesson stamps `opened_at`; completing writes a
+        server-measured `duration_seconds` visible to the parent via
+        placement.lesson_stats. A 35-second 'finish' must be visible
+        as such - the parent tells mastery from skip-tapping."""
+        headers = {"x-app-pin": APP_PIN}
+        lid = "pre_a.letters.00_hello"
+        opened = await client.get(
+            f"/api/tutor/english/lesson/{lid}?user_id={child_user.id}",
+            headers=headers)
+        assert opened.status_code == 200
+        done = await client.post(
+            f"/api/tutor/english/lesson/{lid}/complete?user_id={child_user.id}",
+            headers=headers)
+        assert done.status_code == 200, done.text
+        placement = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}",
+            headers=headers)
+        assert placement.status_code == 200
+        stats = placement.json().get("lesson_stats") or {}
+        assert lid in stats, "lesson_stats must expose the completed lesson"
+        secs = stats[lid].get("duration_seconds")
+        assert isinstance(secs, int) and secs >= 0
+        assert secs < 90, "open-then-complete in one test run is a rushed lesson"
+        assert stats[lid].get("completed_at")
+
+    async def test_lesson_replay_remeasures_duration(self, client, child_user):
+        """A replay re-stamps `opened_at` and the second completion writes
+        its own measured duration - the parent sees the latest attempt."""
+        headers = {"x-app-pin": APP_PIN}
+        lid = "a1.gtky.01_meet_you"
+        for _ in range(2):
+            assert (await client.get(
+                f"/api/tutor/english/lesson/{lid}?user_id={child_user.id}",
+                headers=headers)).status_code == 200
+            assert (await client.post(
+                f"/api/tutor/english/lesson/{lid}/complete?user_id={child_user.id}",
+                headers=headers)).status_code == 200
+        placement = await client.get(
+            f"/api/tutor/english/placement/{child_user.id}",
+            headers=headers)
+        secs = (placement.json().get("lesson_stats") or {}).get(lid, {}).get("duration_seconds")
+        assert isinstance(secs, int) and secs >= 0
 
     async def test_unbuilt_lesson_is_not_startable(self, client, child_user):
         response = await client.get(
@@ -746,6 +792,136 @@ class TestReplyArithmeticSanitizer:
     def test_chained_expression_untouched(self):
         text = "החישוב 2+3+4=9 נכון"
         assert self.tutor._sanitize_reply_arithmetic(text) == text
+
+
+class TestWrongVerdictPraise:
+    """Regression: a wrong answer got praise wrapped around the correction
+    ('הצלחת להבין… הרחקה נהדרת' for wrong 24/3). When the verdict is wrong,
+    pure-praise sentences and praise openers must not reach the child."""
+
+    def setup_method(self):
+        self.tutor = MathTutor.__new__(MathTutor)
+
+    def test_praise_sentence_dropped(self):
+        out = self.tutor._sanitize_wrong_verdict_praise(
+            "מעולה! התשובה הנכונה היא 8. בואי ננסה עוד.")
+        assert "מעולה" not in out and "8" in out
+
+    def test_praise_opener_stripped(self):
+        out = self.tutor._sanitize_wrong_verdict_praise(
+            "נהדר, אבל בעצם התשובה היא 8")
+        assert not out.startswith("נהדר") and "8" in out
+
+    def test_embedded_praise_word_kept(self):
+        text = "יופי של ניסיון, אבל התשובה היא 8"
+        assert self.tutor._sanitize_wrong_verdict_praise(text) == text
+
+    def test_neutral_reply_untouched(self):
+        text = "כמעט! התשובה הנכונה היא 4, בוא נספור ביחד."
+        assert self.tutor._sanitize_wrong_verdict_praise(text) == text
+
+
+class TestTranscriptNeedsRepeat:
+    """Whisper can return empty, foreign-script or noise transcripts - those
+    are ASR failures, not answers. KOKO must ask to repeat instead of
+    grading gibberish (and a bare number is a real answer)."""
+
+    def test_empty_and_noise(self):
+        assert _transcript_needs_repeat("") is True
+        assert _transcript_needs_repeat("...") is True
+        assert _transcript_needs_repeat("؟؟؟") is True
+
+    def test_foreign_script(self):
+        assert _transcript_needs_repeat("أكي بول") is True
+
+    def test_real_attempts_not_flagged(self):
+        assert _transcript_needs_repeat("אקי בול") is False
+        assert _transcript_needs_repeat("שלום") is False
+        assert _transcript_needs_repeat("42") is False
+
+
+class TestPendingNudge:
+    """A reopened session arrives with an empty message list and used to
+    trigger a fresh identical greeting over an unanswered question
+    (production: same greeting twice minutes apart). A recent pending
+    question must produce a short nudge instead."""
+
+    def _hist(self, content, minutes=10):
+        return [{"role": "assistant", "content": content,
+                 "timestamp": datetime.utcnow() - timedelta(minutes=minutes)}]
+
+    def test_pending_question_gets_nudge(self):
+        out = _pending_nudge(
+            self._hist("שלום! כמה זה 18-6?"), [], "לביא")
+        assert out is not None and "18-6?" in out and "לביא" in out
+
+    def test_no_question_no_nudge(self):
+        assert _pending_nudge(self._hist("נתראה מחר!"), [], "x") is None
+
+    def test_stale_question_no_nudge(self):
+        assert _pending_nudge(self._hist("כמה זה 5+5?", minutes=300), [], "x") is None
+
+    def test_active_session_no_nudge(self):
+        assert _pending_nudge(
+            self._hist("כמה זה 5+5?"),
+            [{"role": "user", "content": "x"}], "x") is None
+
+    def test_user_turn_last_no_nudge(self):
+        hist = [{"role": "user", "content": "שלום",
+                 "timestamp": datetime.utcnow()}]
+        assert _pending_nudge(hist, [], "x") is None
+
+
+class TestDrillLoopEscalation:
+    """Regression: a child was drilled on 'I kick ball' five turns in a row
+    while Whisper kept corrupting it. After 3 failed attempts on the same
+    target the prompt must force a strategy change."""
+
+    def _conv(self, n_extra_asks):
+        conv = [{"role": "assistant", "content": 'בואי נאמר "I kick ball"'},
+                {"role": "user", "content": "אקי בול"}]
+        for i in range(n_extra_asks):
+            conv += [{"role": "assistant", "content": 'כמעט! שוב "I kick ball"'},
+                     {"role": "user", "content": "cake ball"}]
+        return conv
+
+    def test_counts_same_target_asks(self):
+        """Prior asks of the same phrase are counted; the current attempt is
+        count+1 - so 2 prior asks means attempt #3 triggers escalation."""
+        from tutors import _same_target_attempts, _quoted_english_phrase
+        conv = self._conv(2)
+        exp = _quoted_english_phrase(conv[-2]["content"])
+        assert exp == "I kick ball"
+        assert _same_target_attempts(conv, exp) == 2
+
+    def test_stops_on_different_target(self):
+        from tutors import _same_target_attempts
+        conv = [
+            {"role": "assistant", "content": 'אמור "I kick ball"'},
+            {"role": "user", "content": "אקי בול"},
+            {"role": "assistant", "content": 'אמור "my cat"'},
+            {"role": "user", "content": "my cat"},
+            {"role": "assistant", "content": 'שוב "I kick ball"'},
+            {"role": "user", "content": "cake ball"},
+        ]
+        assert _same_target_attempts(conv, "I kick ball") == 0
+
+    def test_escalation_in_prompt(self):
+        from tutors import EnglishTutor
+        assessment = ("I kick ball", "partial", ["kick"], ["I", "ball"])
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "לביא", "grade_level": "כיתה א", "interests": None},
+            speech_assessment=assessment, drill_attempts=2)
+        assert "ניסיון מספר 3" in prompt
+        assert "אסור לחזור על אותו תרגיל" in prompt
+
+    def test_no_escalation_on_first_fail(self):
+        from tutors import EnglishTutor
+        assessment = ("I kick ball", "partial", ["kick"], ["I", "ball"])
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "לביא", "grade_level": "כיתה א", "interests": None},
+            speech_assessment=assessment, drill_attempts=0)
+        assert "ניסיון מספר" not in prompt
 
 
 class TestTtsSanitize:

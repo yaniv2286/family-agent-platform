@@ -676,13 +676,20 @@ async def english_lesson(lesson_id: str, user_id: int, db: AsyncSession = Depend
                 EnglishLessonProgress.lesson_id == lesson_id,
             )
         )).scalar_one_or_none()
+        if progress_row is None:
+            progress_row = EnglishLessonProgress(child_name=user.name, lesson_id=lesson_id)
+            history_db.add(progress_row)
+        already_completed = bool(progress_row.completed)
+        progress_row.opened_at = datetime.utcnow()
+        progress_row.updated_at = datetime.utcnow()
+        await history_db.commit()
     return {
         "lesson_id": lesson_id,
         "title_he": lesson["title_he"],
         "intro_he": lesson.get("intro_he", ""),
         "stars_total": lesson.get("stars_total", len(lesson["slides"])),
         "slides": [public_slide(s) for s in lesson["slides"]],
-        "already_completed": bool(progress_row and progress_row.completed),
+        "already_completed": already_completed,
     }
 
 
@@ -748,6 +755,14 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
             )
         )).scalars().all()
     lesson_progress = {row.lesson_id: row.stars for row in progress_rows}
+    lesson_stats = {
+        row.lesson_id: {
+            "stars": row.stars,
+            "duration_seconds": row.duration_seconds,
+            "completed_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in progress_rows
+    }
     wallet_state = {
         "total_stars": (wallet.total_stars if wallet else 0),
         "reward_every": (wallet.reward_every if wallet else 0),
@@ -761,6 +776,7 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
             "child_name": user.name,
             "course": None,
             "lesson_progress": lesson_progress,
+            "lesson_stats": lesson_stats,
             "wallet": wallet_state,
         }
     course = get_course(placement.course_id)
@@ -770,6 +786,7 @@ async def english_placement(user_id: int, db: AsyncSession = Depends(get_db)):
         "course_id": placement.course_id,
         "course": course,
         "lesson_progress": lesson_progress,
+        "lesson_stats": lesson_stats,
         "wallet": wallet_state,
     }
 

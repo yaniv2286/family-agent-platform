@@ -66,6 +66,9 @@ async def record_lesson_completion(
             db.add(row)
         row.completed = 1
         row.stars = max(row.stars or 0, earned)
+        if row.opened_at:
+            elapsed = (datetime.utcnow() - row.opened_at).total_seconds()
+            row.duration_seconds = max(0, min(int(elapsed), 24 * 3600))
         row.updated_at = datetime.utcnow()
 
         wallet = await db.get(EnglishChildWallet, child_name)
