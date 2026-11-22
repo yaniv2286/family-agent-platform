@@ -29,18 +29,45 @@ services:
       - DEPLOYMENT_LABEL=CLOUD
       - AGENT_NEURALTRADER_URL=http://neuraltrader-control:8000
       - AGENT_VOLATILITYHUNTER_URL=http://volatilityhunter_monitoring:8080
+      - NUTRITION_DATABASE_URL=postgresql+asyncpg://koko_app:${NUTRITION_APP_PASSWORD}@postgres:5432/nutrition
+      - NUTRITION_ADMIN_DATABASE_URL=postgresql+asyncpg://koko_owner:${NUTRITION_OWNER_PASSWORD}@postgres:5432/nutrition
     env_file:
       - .env
     volumes:
       - ./data/koko:/app/data
     networks:
       - family-agents-net
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5); exit(0) if r.status == 200 else exit(1)\""]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: koko-postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=koko_owner
+      - POSTGRES_DB=nutrition
+      - POSTGRES_PASSWORD=${NUTRITION_OWNER_PASSWORD}
+      - NUTRITION_APP_PASSWORD=${NUTRITION_APP_PASSWORD}
+    volumes:
+      # postgres:18+ keeps data in a versioned subdir - mount the parent
+      # path, not /var/lib/postgresql/data, or entrypoint init fails.
+      - pg_nutrition:/var/lib/postgresql
+      - ./db/nutrition-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - family-agents-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U koko_owner -d nutrition"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 networks:
   family-agents-net:
@@ -50,3 +77,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  pg_nutrition:
