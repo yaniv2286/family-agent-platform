@@ -834,6 +834,14 @@ class TestTranscriptNeedsRepeat:
     def test_foreign_script(self):
         assert _transcript_needs_repeat("أكي بول") is True
 
+    def test_meta_echo_shape(self):
+        # A lone 'word:' token is a Whisper meta/prompt echo - 'context:'
+        # reached the tutor in production and got answered with a raw
+        # profile analysis the child could see.
+        assert _transcript_needs_repeat("context:") is True
+        assert _transcript_needs_repeat("transcript:") is True
+        assert _transcript_needs_repeat("context: שלום") is False  # real text after it
+
     def test_real_attempts_not_flagged(self):
         assert _transcript_needs_repeat("אקי בול") is False
         assert _transcript_needs_repeat("שלום") is False

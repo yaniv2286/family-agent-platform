@@ -79,7 +79,10 @@ from fitness_agent import router as fitness_router
 from agents.messenger_agent import router as messenger_router
 from agents.data_agent import router as data_router
 from agents.nutrition_agent import router as nutrition_router
+from agents.nutrition_coach_agent import router as meal_coach_router
+from agents.meal_assistant import router as meal_assistant_router
 from agents.scout_ideas_agent import router as scout_router
+from nutrition_db import init_nutrition_db
 from rbac import resolve_role, Role
 from english_curriculum import (
     COURSES,
@@ -174,6 +177,7 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize the databases.
     await init_db()
     await init_tutor_history_db()
+    await init_nutrition_db()
     start_scheduler()
     yield
     # Shutdown: Cleanup if needed
@@ -199,6 +203,8 @@ for _router in (
     messenger_router,
     data_router,
     nutrition_router,
+    meal_assistant_router,
+    meal_coach_router,
     scout_router,
 ):
     app.include_router(_router)
@@ -462,10 +468,18 @@ async def tutor_chat(request: ChatRequest, background_tasks: BackgroundTasks):
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
     if request.focus_skill_id:
         curriculum = _curriculum(request.subject)
-        if request.focus_skill_id not in {skill["skill_id"] for skill in curriculum}:
-            raise HTTPException(422, "unknown focus_skill_id for subject")
-        user_profile["focus_skill_id"] = request.focus_skill_id
-    
+        if request.focus_skill_id in {skill["skill_id"] for skill in curriculum}:
+            user_profile["focus_skill_id"] = request.focus_skill_id
+        else:
+            # A stale daily-practice skill from another subject must not kill
+            # the turn - the child sees a 422 as Koko literally saying
+            # "undefined" (production, Nov 23). Log and continue without it.
+            logger.warning(
+                "Ignoring unknown focus_skill_id",
+                child_name=user_profile["name"], subject=request.subject,
+                focus_skill_id=request.focus_skill_id,
+            )
+
     # Idempotency: if this exact request has already been processed, replay the
     # stored response without calling the LLM or awarding points again.
     if request.idempotency_key:
@@ -523,10 +537,18 @@ async def tutor_english(request: EnglishChatRequest, background_tasks: Backgroun
         return ChatResponse(reply="מצטער, לא מצאתי את הפרופיל שלך. אנא נסה שוב.")
     if request.focus_skill_id:
         curriculum = _curriculum("english")
-        if request.focus_skill_id not in {skill["skill_id"] for skill in curriculum}:
-            raise HTTPException(422, "unknown focus_skill_id for subject")
-        user_profile["focus_skill_id"] = request.focus_skill_id
-    
+        if request.focus_skill_id in {skill["skill_id"] for skill in curriculum}:
+            user_profile["focus_skill_id"] = request.focus_skill_id
+        else:
+            # A stale daily-practice skill from another subject must not kill
+            # the turn - the child sees a 422 as Koko literally saying
+            # "undefined" (production, Nov 23). Log and continue without it.
+            logger.warning(
+                "Ignoring unknown focus_skill_id",
+                child_name=user_profile["name"], subject="english",
+                focus_skill_id=request.focus_skill_id,
+            )
+
     # Idempotency: if this exact request has already been processed, replay the
     # stored response without calling the LLM or awarding points again.
     if request.idempotency_key:

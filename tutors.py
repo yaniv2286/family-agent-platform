@@ -1978,6 +1978,11 @@ def _transcript_needs_repeat(text: str) -> bool:
     stripped = re.sub(r"[\s.,!?;:'\"-]+", "", text or "")
     if len(stripped) < 2:
         return True
+    # A lone word ending in a colon ("context:", "transcript:") is a Whisper
+    # meta/prompt echo, not child speech - it once made KOKO answer with a
+    # raw profile analysis as the reply (production, Nov 23).
+    if re.fullmatch(r"[A-Za-z]+:", (text or "").strip()):
+        return True
     # Any letter outside Hebrew/Latin (Arabic, Cyrillic, CJK, ...) is a
     # transcription artifact - a Hebrew-speaking child did not type it.
     foreign = [c for c in stripped if c.isalpha() and not ("\u0590" <= c <= "\u05FF" or c.isascii())]

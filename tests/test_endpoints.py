@@ -7,15 +7,17 @@ APP_PIN = "test-pin-1234"
 
 
 class TestAuthentication:
-    async def test_ping_without_pin_is_unauthorized(self, client):
+    async def test_ping_without_pin_is_child_scope(self, client):
+        # Anonymous = child scope: ping succeeds, role is child.
         response = await client.get("/api/ping")
-        assert response.status_code == 401
+        assert response.status_code == 200
 
     async def test_ping_with_valid_pin_is_ok(self, client):
         response = await client.get("/api/ping", headers={"x-app-pin": APP_PIN})
         assert response.status_code == 200
 
-    async def test_chat_without_pin_is_unauthorized(self, client, child_user):
+    async def test_chat_without_pin_is_child_scope(self, client, child_user, mock_openai):
+        # Kids chat without a PIN (anonymous resolves to child scope).
         body = {
             "user_id": child_user.id,
             "subject": "math",
@@ -23,7 +25,7 @@ class TestAuthentication:
             "idempotency_key": str(uuid.uuid4()),
         }
         response = await client.post("/api/tutor/chat", json=body)
-        assert response.status_code == 401
+        assert response.status_code == 200
 
 
 class TestChat:
@@ -104,9 +106,12 @@ class TestChat:
         assert data["answer_correct"] is True
         assert data["hints_used"] == 0
 
-    async def test_unknown_focus_skill_is_rejected(
+    async def test_unknown_focus_skill_is_ignored_not_rejected(
         self, client, child_user, mock_openai
     ):
+        """A stale daily-practice skill from another subject is a soft hint,
+        not a reason to 422 - the client renders the error body as
+        'undefined' and even speaks it aloud (production, Nov 23)."""
         response = await client.post(
             "/api/tutor/chat",
             json={
@@ -118,7 +123,8 @@ class TestChat:
             },
             headers={"x-app-pin": APP_PIN},
         )
-        assert response.status_code == 422
+        assert response.status_code == 200
+        assert response.json()["reply"]
 
     async def test_chat_injects_lesson_prep_from_mastery(
         self, client, child_user, mock_openai
