@@ -639,6 +639,32 @@
         .ls-next { margin-top: 12px; background: #fffbeb; border: 2px dashed #f59e0b; border-radius: 12px; padding: 8px 12px; font-weight: 700; color: #92400e; }
         .ls-star-pop { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); font-size: 42px; pointer-events: none; animation: lsStarPop 1.4s ease forwards; }
         @keyframes lsStarPop { 0% { opacity: 0; transform: translateX(-50%) scale(.3); } 30% { opacity: 1; transform: translateX(-50%) scale(1.4); } 100% { opacity: 0; transform: translateX(-50%) translateY(-34px) scale(1); } }
+        /* ---- LEXI-style presentation layer: slides animate in, options
+           pop one by one, visuals float, confetti on finish ---- */
+        .lesson-slide { animation: lsSlideIn .45s cubic-bezier(.2,.9,.3,1.15); }
+        @keyframes lsSlideIn { from { opacity: 0; transform: translateY(26px) scale(.97); } to { opacity: 1; transform: none; } }
+        .ls-progress { animation: lsSlideIn .35s ease; }
+        .ls-bar { height: 8px; background: #e0e7ff; border-radius: 999px; overflow: hidden; margin: 8px auto 4px; max-width: 320px; }
+        .ls-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg,#f59e0b,#fbbf24); transition: width .6s cubic-bezier(.3,1.2,.4,1); }
+        .ls-image { animation: lsImgPop .55s cubic-bezier(.2,1,.4,1.3); }
+        .ls-image:not(:has(img)) { animation: lsImgPop .55s cubic-bezier(.2,1,.4,1.3), lsFloat 3s ease-in-out .6s infinite; }
+        @keyframes lsImgPop { 0% { opacity: 0; transform: scale(.3) rotate(-8deg); } 100% { opacity: 1; transform: none; } }
+        @keyframes lsFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+        .ls-letter-card { animation: lsLetterDrop .6s cubic-bezier(.2,1.4,.4,1); }
+        @keyframes lsLetterDrop { 0% { opacity: 0; transform: translateY(-46px) rotate(-10deg) scale(.4); } 70% { transform: translateY(4px) rotate(2deg) scale(1.08); } 100% { opacity: 1; transform: none; } }
+        .ls-letter-anchor { animation: lsOptIn .4s ease .45s backwards; }
+        .ls-en { animation: lsOptIn .4s ease .15s backwards; }
+        .ls-options > * { animation: lsOptIn .35s cubic-bezier(.2,1,.4,1.2) backwards; }
+        @keyframes lsOptIn { from { opacity: 0; transform: translateY(14px) scale(.85); } to { opacity: 1; transform: none; } }
+        .ls-option-card { transition: transform .15s ease, box-shadow .15s ease; }
+        .ls-option-card:active { transform: scale(.92); }
+        .ls-correct { outline: 4px solid #22c55e !important; background: #dcfce7 !important; animation: lsWinPulse .5s ease 2; }
+        @keyframes lsWinPulse { 50% { transform: scale(1.08); } }
+        .ls-wrong { outline: 4px solid #f87171 !important; animation: lsShake .4s ease; }
+        @keyframes lsShake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-7px); } 75% { transform: translateX(7px); } }
+        .ls-confetti { position: absolute; top: -10px; font-size: 22px; pointer-events: none; z-index: 6; animation: lsConfetti 1.9s ease-in forwards; }
+        @keyframes lsConfetti { 0% { opacity: 1; transform: translateY(0) rotate(0); } 100% { opacity: 0; transform: translateY(340px) rotate(560deg); } }
+        .ls-learned span { animation: lsOptIn .4s cubic-bezier(.2,1.4,.4,1.2) backwards; }
 
         /* Syllable-clap chips inside the game modal */
         .syl-chips { display: flex; gap: 8px; justify-content: center; margin: 12px 0; flex-wrap: wrap; }
@@ -3298,6 +3324,7 @@
                   (slide.hebrew_anchor ? `<div class="ls-letter-anchor">${escapeFitnessHtml(slide.hebrew_anchor)}</div>` : '')
                 : '';
             box.innerHTML = `<div class="ls-progress">${starsHtml} · ${index + 1}/${lesson.slides.length}</div>` +
+                `<div class="ls-bar"><i style="width:${Math.round((index / lesson.slides.length) * 100)}%"></i></div>` +
                 letterCard + slideImage +
                 `<div class="ls-he">${escapeFitnessHtml(personalizeHe(slide.prompt_he) || '')}</div>` +
                 `<div class="ls-en" dir="ltr">${escapeFitnessHtml(slide.prompt_en || '')}</div>` +
@@ -3332,6 +3359,19 @@
                 if (nextTitle)
                     lines.push(`<div class="ls-next">בשיעור הבא: ${escapeFitnessHtml(nextTitle)} — נתראה! 👋</div>`);
                 box.innerHTML = lines.join('');
+                // Confetti burst over the summary card - the LEXI-style
+                // celebration the child earned by finishing the lesson.
+                const pieces = ['🎉', '⭐', '🌟', '✨', '🎈'];
+                for (let i = 0; i < 22; i++) {
+                    const c = document.createElement('span');
+                    c.className = 'ls-confetti';
+                    c.textContent = pieces[i % pieces.length];
+                    c.style.left = `${(i * 97) % 100}%`;
+                    c.style.animationDelay = `${(i * 83) % 700}ms`;
+                    box.appendChild(c);
+                }
+                setTimeout(() => box.querySelectorAll('.ls-confetti').forEach(c => c.remove()), 2800);
+                box.querySelectorAll('.ls-learned span').forEach((s, i) => { s.style.animationDelay = `${i * 90}ms`; });
                 const learnedLine = learned.length
                     ? `היום למדנו: ${learned.slice(0, 4).join(', ')}. ` : '';
                 const teaser = nextTitle ? `בשיעור הבא: ${nextTitle}. נתראה!` : 'נתראה בשיעור הבא!';
@@ -3344,13 +3384,14 @@
                     'celebrate');
             };
 
-            const answered = async (answer) => {
+            const answered = async (answer, el) => {
                 options.querySelectorAll('button').forEach(b => b.disabled = true);
                 const response = await safeFetch(
                     `/api/tutor/english/lesson/${lesson.lesson_id}/answer?user_id=${selectedUserId}`,
                     { method: 'POST', headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ slide_id: slide.id, answer }) });
                 const result = await response.json();
+                if (el) el.classList.add(result.correct ? 'ls-correct' : 'ls-wrong');
                 const nextStars = stars + (result.star ? 1 : 0);
                 if (result.star) {
                     const pop = document.createElement('span');
@@ -3374,9 +3415,10 @@
             } else if (slide.type === 'order') {
                 const chosen = [];
                 const pool = document.createElement('div');
-                slide.words.forEach(word => {
+                slide.words.forEach((word, wi) => {
                     const b = document.createElement('button');
                     b.className = 'ec-start';
+                    b.style.animationDelay = `${0.25 + wi * 0.1}s`;
                     b.textContent = word;
                     b.onclick = () => { chosen.push(word); b.disabled = true; line.textContent = chosen.join(' ');
                         if (chosen.length === slide.words.length) answered(chosen); };
@@ -3389,8 +3431,9 @@
                 const choices = slide.type === 'true_false'
                     ? [{ id: 'true', label: 'נכון ✓' }, { id: 'false', label: 'לא נכון ✗' }]
                     : slide.options;
-                choices.forEach(opt => {
+                choices.forEach((opt, oi) => {
                     const b = document.createElement('button');
+                    b.style.animationDelay = `${0.25 + oi * 0.12}s`;
                     const optImage = opt.image
                         ? (/\.(png|jpe?g|webp|gif|svg)$/i.test(opt.image)
                             ? `<img src="${escapeFitnessHtml(opt.image)}" alt="">`
@@ -3404,7 +3447,7 @@
                     } else {
                         b.innerHTML = `${opt.emoji || ''} ${escapeFitnessHtml(opt.label)}`;
                     }
-                    b.onclick = () => answered(opt.id);
+                    b.onclick = () => answered(opt.id, b);
                     options.appendChild(b);
                 });
                 if (slide.story_he) feedback.textContent = slide.story_he;
@@ -5598,7 +5641,11 @@
             if (autoListenMisses >= 3) return;
             listenWasAuto = true;
             reportClientLog('voice', 'auto-listen');
-            startListening();
+            // A short grace lets the TTS tail fade from the room before the
+            // mic opens - on speakers it otherwise records Koko's own voice.
+            setTimeout(() => {
+                if (listenWasAuto) startListening();
+            }, 800);
         }
 
         // Voice capture
@@ -5650,6 +5697,7 @@
                 return;
             }
             if (kokoWasSpeakingAtMic && isEchoOfKoko(transcript)) {
+                if (listenWasAuto) autoListenMisses++;
                 console.warn('Discarded TTS echo transcript:', transcript);
                 addMessage('assistant', 'שמעתי את עצמי מדברת 😄 בואי ננסה שוב — מה התשובה?');
                 return;
@@ -5966,17 +6014,22 @@
                 if (generation !== voiceGeneration) return;
                 reportClientLog('voice', `transcription-result hasText=${!!data.text}`);
                 if (data.text) {
-                    autoListenMisses = 0;
                     if (kokoWasSpeakingAtMic && isEchoOfKoko(data.text)) {
+                        // An echo is not engagement - count it like an empty
+                        // recording so auto-listen eventually disengages in a
+                        // reverb-y room instead of looping forever.
+                        if (listenWasAuto) autoListenMisses++;
                         console.warn('Discarded TTS echo transcript:', data.text);
                         addMessage('assistant', 'שמעתי את עצמי מדברת 😄 בואי ננסה שוב — מה התשובה?');
                     } else if (lessonSlideAnswer) {
+                        autoListenMisses = 0;
                         // Voice answer inside a scripted lesson goes to the
                         // slide, not the free-chat endpoint.
                         const slideAnswer = lessonSlideAnswer;
                         lessonSlideAnswer = null;
                         slideAnswer(data.text);
                     } else {
+                        autoListenMisses = 0;
                         textInput.value = data.text;
                         sendMessage(data.text);
                     }
