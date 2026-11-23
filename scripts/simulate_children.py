@@ -443,6 +443,19 @@ async def simulate_chat(client, kid, turns, verbose, subject="english") -> list[
                         rejected += 1
             if rejected >= 3:
                 fails.append(f"garbled 'קר'(car) rejected {rejected}x - must accept close attempts")
+        if kid["name"] == "ליבי":
+            # Beginner tier (גן/Pre-A) = single words only. Production miss:
+            # KOKO asked a kindergartener to repeat 'I have a tiger'. Any
+            # quoted English practice target of 3+ words is a violation.
+            for r in replies:
+                bad = next(
+                    (m.group(1) for m in
+                     re.finditer(r"[\"'“]([^\"'”]*[A-Za-z][^\"'”]*)[\"'”]", r)
+                     if len(re.findall(r"[A-Za-z]+", m.group(1))) >= 3),
+                    None)
+                if bad:
+                    fails.append(f"sentence-length target at beginner tier: {bad[:60]!r}")
+                    break
         # Gibberish probe: a corrupted/foreign-script transcript must get an
         # ask-to-repeat, never be interpreted or graded as an answer.
         if gibberish_reply is not None and not re.search(

@@ -960,6 +960,135 @@ class TestColorDrillStreak:
         assert _color_drill_streak(conv) == 0
 
 
+class TestBeginnerTierWordLevel:
+    """QA catch: ליבי (גן) was asked to repeat a full sentence ('I have a
+    tiger') though Pre-A/kindergarten means single words only. The tier-0
+    rules must forbid sentence targets, and a child who stops producing
+    English mid-lesson forces an immediate drop to single words."""
+
+    def test_kindergarten_prompt_forbids_sentence_targets(self):
+        from tutors import EnglishTutor
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "ליבי", "grade_level": "גן", "interests": None}
+        )
+        assert "אסור לבקש מהילד/ה לקרוא או לחזור על משפט" in prompt
+        assert "אותיות, צבעים, חיות" in prompt
+
+    def test_pre_a_course_also_gets_word_only_rules(self):
+        from tutors import EnglishTutor
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "ליבי", "grade_level": "כיתה א", "interests": None},
+            course_cefr="Pre-A")
+        assert "אסור לבקש מהילד/ה לקרוא או לחזור על משפט" in prompt
+
+    def test_immersion_tier_mapping(self):
+        from tutors import _immersion_tier
+        assert _immersion_tier("Pre-A", "כיתה ה") == 0
+        assert _immersion_tier(None, "גן") == 0
+        assert _immersion_tier(None, "כיתה א") == 1
+        assert _immersion_tier("A1", "גן") == 2
+        assert _immersion_tier("A2", "גן") == 4
+        assert _immersion_tier(None, "כיתה ה") == 5
+
+    def test_turns_without_english(self):
+        from tutors import _turns_without_english
+        conv = [
+            {"role": "assistant", "content": "תגידי 'dog'"},
+            {"role": "user", "content": "כלב"},
+            {"role": "assistant", "content": "נסי 'cat'"},
+            {"role": "user", "content": "חתול"},
+        ]
+        assert _turns_without_english(conv) == 2
+        conv.append({"role": "assistant", "content": "נסי 'bird'"})
+        conv.append({"role": "user", "content": "bird"})
+        assert _turns_without_english(conv) == 0
+
+    async def test_word_level_drop_injected(self, monkeypatch):
+        """Two consecutive child turns without English at beginner tier
+        injects the mandatory single-word fact into the system prompt."""
+        import tutors
+        captured = {}
+
+        async def fake_llm(self, system_prompt, conversation, **kw):
+            captured["prompt"] = system_prompt
+            return '{"reply_text": "נסי dog!", "points_earned": 0}'
+
+        async def _none(*a, **k):
+            return None
+
+        async def _empty_list(*a, **k):
+            return []
+
+        async def _empty_dict(*a, **k):
+            return {}
+
+        async def _no_course(*a, **k):
+            return ("", None)
+
+        monkeypatch.setattr(tutors.EnglishTutor, "_call_llm", fake_llm)
+        monkeypatch.setattr(tutors, "get_student_profile_summary", _none)
+        monkeypatch.setattr(tutors, "get_chat_history", _empty_list)
+        monkeypatch.setattr(tutors, "get_skill_mastery", _empty_dict)
+        monkeypatch.setattr(tutors, "_english_course_context", _no_course)
+        monkeypatch.setattr(tutors.memory_manager, "get_active_directives", _empty_list)
+
+        conv = [
+            {"role": "user", "content": "היי"},
+            {"role": "assistant", "content": "בואי נלמד מילה: 'tiger' - נמר! תגידי tiger?"},
+            {"role": "user", "content": "לא יודעת"},
+            {"role": "assistant", "content": "בסדר, נסי 'cat'"},
+            {"role": "user", "content": "לא מבינה"},
+        ]
+        reply, *_ = await tutors.EnglishTutor().get_llm_response(
+            conv, {"name": "ליבי", "grade_level": "גן", "interests": None})
+        assert "לא הפיק/ה אנגלית בשני התורים האחרונים" in captured["prompt"]
+        assert "אסור לבקש משפטים בתורות הקרובים" in captured["prompt"]
+
+
+class TestProfileSummaryGuard:
+    """QA catch: ליבי's English profile was overwritten by the mic-hint UI
+    string ('המיקרופון מוכן 🎤...') leaving the tutor with no level signal.
+    A summary with no pedagogical content must be discarded."""
+
+    async def _run_memory(self, monkeypatch, llm_result):
+        import tutors
+        saved = []
+
+        async def fake_append(*a, **k):
+            return None
+
+        async def fake_get(*a, **k):
+            return None
+
+        async def fake_llm(*a, **k):
+            return llm_result
+
+        async def fake_update(child, subject, summary):
+            saved.append(summary)
+
+        monkeypatch.setattr(tutors, "append_chat_messages", fake_append)
+        monkeypatch.setattr(tutors, "get_student_profile_summary", fake_get)
+        monkeypatch.setattr(tutors, "call_llm", fake_llm)
+        monkeypatch.setattr(tutors, "update_student_profile_summary", fake_update)
+        await tutors.update_tutor_memory(
+            "ליבי", {"grade_level": "גן"},
+            [{"role": "user", "content": "dog"}], "כל הכבוד!",
+            subject="english")
+        return saved
+
+    async def test_ui_text_summary_rejected(self, monkeypatch):
+        saved = await self._run_memory(
+            monkeypatch, "המיקרופון מוכן 🎤 עכשיו החזיקו את הרווח, דברו, ושחררו בסוף.")
+        assert saved == []
+
+    async def test_pedagogical_summary_saved(self, monkeypatch):
+        saved = await self._run_memory(
+            monkeypatch,
+            "רמה מוכחת: מילים בודדות. התלמידה שלטה ב-dog ו-cat. המלצה: חיות.")
+        assert len(saved) == 1
+        assert "רמה מוכחת" in saved[0]
+
+
 class TestTtsSanitize:
     """Markdown formatting must never reach the TTS engine.
 

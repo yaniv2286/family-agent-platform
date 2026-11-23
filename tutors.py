@@ -2119,6 +2119,47 @@ async def _english_course_context(child_name: str) -> Tuple[str, Optional[str]]:
     ), course["cefr"]
 
 
+def _immersion_tier(course_cefr: Optional[str], grade_level: Optional[str]) -> int:
+    """The parent's course choice sets the level when one exists; grade is
+    only the fallback. Tier drives how much English the tutor may use."""
+    if course_cefr == "Pre-A":
+        return 0
+    if course_cefr == "A1":
+        return 2
+    if course_cefr == "A2":
+        return 4
+    g = (grade_level or "").lower()
+    if "kinder" in g or "גן" in g:
+        return 0
+    if "1st" in g or "כיתה א" in g:
+        return 1
+    if "2nd" in g or "כיתה ב" in g:
+        return 2
+    if "3rd" in g or "כיתה ג" in g:
+        return 3
+    if "4th" in g or "כיתה ד" in g:
+        return 4
+    return 5
+
+
+_ENGLISH_LETTERS = re.compile(r"[a-zA-Z]")
+
+
+def _turns_without_english(history: List[Dict]) -> int:
+    """Consecutive trailing child turns with no English letters at all.
+
+    A no-English streak during a lesson signals the demonstrated level is
+    below the planned tier - the child isn't producing English back."""
+    streak = 0
+    for m in reversed(history or []):
+        if m.get("role") != "user":
+            continue
+        if _ENGLISH_LETTERS.search(str(m.get("content") or "")):
+            break
+        streak += 1
+    return streak
+
+
 class EnglishTutor(BaseAgent):
     SUBJECT = "english"
 
@@ -2181,31 +2222,14 @@ class EnglishTutor(BaseAgent):
         # The long-term goal is a full English conversation, but a child who
         # hears only English learns nothing - Hebrew is the scaffold and
         # English exposure grows with demonstrated success.
-        if course_cefr == "Pre-A":
-            immersion_tier = 0
-        elif course_cefr == "A1":
-            immersion_tier = 2
-        elif course_cefr == "A2":
-            immersion_tier = 4
-        else:
-            g = grade_level.lower()
-            if "kinder" in g or "גן" in g:
-                immersion_tier = 0
-            elif "1st" in g or "כיתה א" in g:
-                immersion_tier = 1
-            elif "2nd" in g or "כיתה ב" in g:
-                immersion_tier = 2
-            elif "3rd" in g or "כיתה ג" in g:
-                immersion_tier = 3
-            elif "4th" in g or "כיתה ד" in g:
-                immersion_tier = 4
-            else:
-                immersion_tier = 5
+        immersion_tier = _immersion_tier(course_cefr, grade_level)
 
         if immersion_tier <= 1:
             immersion_rules = (
                 "רמת הטבילה של השיעור הזה: מתחילים.\n"
-                "- דבר/י כמעט רק בעברית. בכל תור שלח/י מילה אחת או משפט קצר מאוד באנגלית (עד 3 מילים), ומיד אחריו הסבר בעברית: מה המילה אומרת ואיך מבטאים אותה.\n"
+                "- דבר/י כמעט רק בעברית. בכל תור שלח/י מילה אחת באנגלית בלבד, ומיד אחריה הסבר בעברית: מה המילה אומרת ואיך מבטאים אותה.\n"
+                "- יעד התרגול הוא מילה בודדת בלבד (ובכל היותר צמד של 2 מילים כמו 'red car'). אסור לבקש מהילד/ה לקרוא או לחזור על משפט באנגלית - ברמה זו הילד/ה מפיק/ה מילים, לא משפטים.\n"
+                "- התוכן לרמה זו: אותיות, צבעים, חיות, חפצים יומיומיים ומילים קונקרטיות פשוטות - לא משפטים, לא שאלות מורכבות ולא קריאת טקסט.\n"
                 "- דוגמה לתור נכון: \"בואי נלמד מילה חדשה: Dog - זה כלב באנגלית! תנסי להגיד Dog?\"\n"
                 "- אסור לפתוח או לענות במשפט שלם באנגלית בלי הסבר בעברית - הילד/ה עוד לא מבין/ה משפטים באנגלית.\n"
                 "- המטרה: מילה אחת חדשה בכל פעם, עם הרבה שבח על ניסיון."
@@ -2383,6 +2407,20 @@ CRITICAL RULE: You are the sole judge of points. NEVER award points if the user 
                 "\n\nבדיקת מערכת: בשני התורים האחרונים כבר ניתנה מילת צבע לתרגול. "
                 "אסור להציע מילת צבע נוספת או משפט עם צבע בתור הזה - עבר/י מיד לנושא אחר "
                 "(חיה, חפץ, פעולה, משפחה, מספר) עם מילה חדשה. זוהי הוראה מחייבת, לא המלצה."
+            )
+
+        # Demonstrated level beats planned level: at the beginner tiers a
+        # child who stopped producing English mid-lesson needs a real-time
+        # drop to single words, not another sentence target.
+        if _immersion_tier(course_cefr, user_profile.get("grade_level")) <= 1 \
+                and _turns_without_english(conversation_history) >= 2 \
+                and any(_ENGLISH_LETTERS.search(str(m.get("content") or ""))
+                        for m in conversation_history if m.get("role") == "assistant"):
+            system_prompt += (
+                "\n\nבדיקת מערכת: התלמיד/ה לא הפיק/ה אנגלית בשני התורים האחרונים - "
+                "הרמה בפועל נמוכה מהמתוכנן. עבר/י מיד למילה בודדת קלה בלבד "
+                "(חיה, צבע או חפץ מתחומי העניין), עם שבח חם על כל ניסיון הגייה. "
+                "אסור לבקש משפטים בתורות הקרובים. זוהי הוראה מחייבת."
             )
 
         # Inject cross-agent memory context so the tutor feels like a companion.
@@ -2629,6 +2667,20 @@ async def update_tutor_memory(
             if stripped.startswith(reply_markers):
                 logger.warning(
                     "Discarding invalid profile summary (looks like a tutor reply)",
+                    child_name=child_name,
+                    subject=subject,
+                    summary_prefix=stripped[:80],
+                )
+                return
+            # Guard: occasionally the summarizer persists UI/system text it
+            # found in the transcript (e.g. the mic hint string) as the
+            # profile. A real profile always contains pedagogical content.
+            pedagogy_markers = ("רמה מוכחת", "אוצר מילים", "תלמיד", "הילד", "התלמיד",
+                                "לומד", "לומדת", "שלט", "הצליח", "הצליחה", "מתקשה",
+                                "למידה", "התקדמ", "תרגול", "Pedagog")
+            if not any(m in stripped for m in pedagogy_markers):
+                logger.warning(
+                    "Discarding invalid profile summary (no pedagogical content)",
                     child_name=child_name,
                     subject=subject,
                     summary_prefix=stripped[:80],
