@@ -652,7 +652,7 @@ async def section_lessons(client, kids, verbose) -> list[str]:
 
     # Hebrew-first: every spoken slide must have a Hebrew instruction available
     for s in data["slides"]:
-        if s.get("type") in ("speak", "listen") and not s.get("prompt_he"):
+        if s.get("type") in ("speak", "letter", "listen") and not s.get("prompt_he"):
             fails.append(f"slide {s['id']}: spoken but no Hebrew prompt_he")
 
     correct = 0

@@ -7,7 +7,10 @@
   "slides": [
     {
       "id": "b_sound",
-      "type": "speak",
+      "type": "letter",
+      "letter": "B",
+      "letter_small": "b",
+      "hebrew_anchor": "B זה ב' בעברית — כמו בלון, כמו בובה",
       "prompt_en": "B says בּ",
       "prompt_he": "האות B אומרת בּ עם קול מלא. תגידו בּ-בּ-בּ",
       "say": "The letter B says בּ, a full voiced sound. Say it: b, b, b.",

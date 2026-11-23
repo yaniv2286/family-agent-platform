@@ -6,10 +6,16 @@ cannot drift into a different lesson or mark a wrong answer correct.
 
 Slides:
   speak   the tutor says a line and the child repeats it
+  letter  a letter card with a Hebrew sound anchor; the child repeats
+          the sound (graded exactly like speak)
   choice  pick the matching card (picture, word, or sentence)
   listen  the tutor says a word and the child picks what they heard
   true_false  a sentence about a story, then the correction
   order   tap words into the right sentence
+
+Optional visuals on any slide/option:
+  image   emoji char or an image URL, shown as a big card
+  hebrew_anchor (letter slides) e.g. "B זה ב' בעברית — כמו בלון"
 
 A slide that needs a spoken answer ("speak") is graded leniently, because
 Whisper garbles children's English; it checks the key words, not the spelling.
@@ -67,6 +73,60 @@ def public_slide(slide: Dict) -> Dict:
     return {k: v for k, v in slide.items() if k not in hidden}
 
 
+def learned_words(lesson: Dict) -> List[str]:
+    """The English words a lesson actually taught - for the closing ritual.
+    speak slides contribute their target; choice/listen slides contribute
+    the correct option's label. Letter-card slides contribute the letter."""
+    words = []
+    for slide in lesson.get("slides") or []:
+        kind = slide.get("type")
+        if kind == "letter":
+            letter = (slide.get("letter") or "").strip()
+            if letter:
+                words.append(letter)
+        elif kind == "speak":
+            accept = slide.get("accept") or []
+            if accept:
+                words.append(str(accept[0]))
+        elif kind in ("choice", "listen"):
+            correct_id = slide.get("correct")
+            for opt in slide.get("options") or []:
+                if str(opt.get("id")) == str(correct_id) and opt.get("label"):
+                    words.append(str(opt["label"]))
+                    break
+    seen, out = set(), []
+    for w in words:
+        key = w.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(w)
+    return out
+
+
+def next_lesson_meta(lesson_id: str, done_ids: set) -> Optional[Dict]:
+    """The next uncompleted lesson after `lesson_id` in its own course,
+    skipping over lessons that have no authored content yet."""
+    from english_curriculum import get_lesson, get_course
+    from lesson_engine import available_lesson_ids
+    meta = get_lesson(lesson_id)
+    if meta is None:
+        return None
+    course = get_course(meta["course_id"])
+    if course is None:
+        return None
+    authored = set(available_lesson_ids())
+    found_current = False
+    for unit in course["units"]:
+        for lesson in unit["lessons"]:
+            lid = lesson["lesson_id"]
+            if lid == lesson_id:
+                found_current = True
+                continue
+            if found_current and lid in authored and lid not in done_ids:
+                return {"lesson_id": lid, "title_he": lesson["title_he"]}
+    return None
+
+
 def _close(heard: str, wanted: str) -> bool:
     """A child's pronunciation rarely transcribes letter-perfect."""
     if heard == wanted or heard.translate(_CONFUSIONS) == wanted:
@@ -90,7 +150,7 @@ def grade(slide: Dict, answer) -> Dict:
     """Grade one answer. Returns correct, a short praise or hint, and the
     canonical right answer so the screen can reveal it."""
     kind = slide.get("type")
-    if kind == "speak":
+    if kind in ("speak", "letter"):
         correct = _score_spoken(str(answer or ""), slide.get("accept") or [])
         revealed = slide["accept"][0]
     elif kind in ("choice", "listen"):

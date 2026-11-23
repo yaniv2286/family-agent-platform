@@ -95,6 +95,8 @@ from lesson_engine import (
     available_lesson_ids,
     load_lesson,
     public_slide,
+    learned_words,
+    next_lesson_meta,
     grade as grade_slide,
 )
 from english_progress import record_lesson_completion
@@ -754,7 +756,22 @@ async def english_lesson_complete(
         else min(body.stars_earned, stars_total)
     )
     result = await record_lesson_completion(user.name, lesson_id, earned)
-    return {"lesson_id": lesson_id, "completed": True, **result}
+    # Closing ritual (LEXI-style): what was learned + a hook to the next
+    # lesson so the child leaves knowing what comes tomorrow.
+    async with TutorHistorySessionLocal() as history_db:
+        done_ids = set((await history_db.execute(
+            select(EnglishLessonProgress.lesson_id).where(
+                EnglishLessonProgress.child_name == user.name,
+                EnglishLessonProgress.completed == 1,
+            )
+        )).scalars().all())
+    return {
+        "lesson_id": lesson_id,
+        "completed": True,
+        "learned_words": learned_words(lesson),
+        "next_lesson": next_lesson_meta(lesson_id, done_ids),
+        **result,
+    }
 
 
 @app.get("/api/tutor/english/courses")

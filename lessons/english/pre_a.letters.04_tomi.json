@@ -8,6 +8,7 @@
     {
       "id": "tiger",
       "type": "speak",
+      "image": "🐯",
       "prompt_en": "tiger",
       "prompt_he": "לטומי יש נמר צעצוע. tiger זה נמר. תגידו tiger",
       "say": "Tomi has a toy tiger. Say: tiger.",
@@ -48,27 +49,28 @@
     {
       "id": "black",
       "type": "choice",
+      "image": "⚫",
       "prompt_en": "black",
-      "prompt_he": "הנמר של טומי הוא black. איזה צבע הוא black?",
-      "say": "Tomi's tiger is black. Point to black.",
+      "prompt_he": "הנמר של טומי הוא black. black מתחיל באות B - בדיוק כמו ב' בעברית, כמו בלון! איזה צבע הוא black?",
+      "say": "Tomi's tiger is black. Black starts with B - like the Hebrew bet, like baloon. Point to black.",
       "options": [
         {"id": "black", "label": "black", "emoji": "⚫"},
         {"id": "white", "label": "white", "emoji": "⚪"},
         {"id": "red", "label": "red", "emoji": "🔴"}
       ],
       "correct": "black",
-      "praise_he": "black זה שחור.",
-      "hint_he": "black הוא השחור."
+      "praise_he": "black זה שחור - ו-B זה ב', כמו בלון!",
+      "hint_he": "black הוא השחור. מתחיל ב-B כמו ב'."
     },
     {
       "id": "i_have",
       "type": "speak",
-      "prompt_en": "I have a tiger.",
-      "prompt_he": "תגידו מה יש לכם: I have a ואז חיה או צעצוע",
-      "say": "Tomi says: I have a tiger. Now you say: I have a ball, or I have a tiger.",
-      "accept": ["i have"],
-      "praise_he": "I have זה יש לי. משפט שלם!",
-      "hint_he": "מתחילים ב-I have."
+      "prompt_en": "tiger",
+      "prompt_he": "אצל טומי כתוב I have a tiger - יש לי נמר. אתם תגידו את המילה החשובה: tiger!",
+      "say": "Tomi says: I have a tiger. The important word is tiger - you say it!",
+      "accept": ["tiger", "i have a tiger", "i have tiger"],
+      "praise_he": "tiger! בעוד קצת תגידו את כל המשפט I have a tiger.",
+      "hint_he": "רק מילה אחת: tiger - נמר."
     }
   ]
 }

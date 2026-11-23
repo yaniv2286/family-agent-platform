@@ -430,7 +430,7 @@
         }
         .tutor-call {
             position: relative;
-            width: 164px;
+            width: 190px;
             aspect-ratio: 3 / 4;
             border-radius: 24px;
             overflow: hidden;
@@ -446,6 +446,13 @@
         @keyframes listenPulse {
             0%, 100% { box-shadow: 0 0 0 4px rgba(45,212,191,.85), 0 8px 24px rgba(13,148,136,.30); }
             50%      { box-shadow: 0 0 0 9px rgba(45,212,191,.40), 0 8px 24px rgba(13,148,136,.40); }
+        }
+        .tutor-stage.speaking .tutor-call {
+            animation: speakPulse 1.2s ease-in-out infinite;
+        }
+        @keyframes speakPulse {
+            0%, 100% { box-shadow: 0 0 0 4px rgba(99,102,241,.80), 0 8px 24px rgba(74,87,184,.30); }
+            50%      { box-shadow: 0 0 0 10px rgba(99,102,241,.35), 0 8px 24px rgba(74,87,184,.45); }
         }
         .tutor-avatar {
             position: absolute;
@@ -563,6 +570,11 @@
             30%, 75% { transform: rotate(6deg); }
         }
         .tutor-stage.gesture-listen .tutor-call { animation: gwListen 1.3s ease-in-out 1; }
+        /* The child's own camera tile, video-call style like a real tutor
+           session. Appears only when the child allows the camera. */
+        .child-cam { position: absolute; left: 10px; bottom: 10px; width: 96px; border-radius: 12px; overflow: hidden; border: 2px solid rgba(255,255,255,.85); box-shadow: 0 2px 10px rgba(0,0,0,.25); z-index: 5; }
+        .child-cam video { display: block; width: 100%; height: 72px; object-fit: cover; transform: scaleX(-1); }
+        .child-cam-name { background: rgba(15,23,42,.75); color: #fff; font-size: 11px; font-weight: 700; text-align: center; padding: 2px 4px; letter-spacing: .5px; }
         @keyframes gwListen {
             0%, 100% { transform: rotate(0); }
             30%, 70% { transform: rotate(-5deg); }
@@ -613,6 +625,18 @@
         .ls-options .ec-start { font-size: 18px; padding: 12px 20px; }
         .ls-feedback { margin-top: 14px; font-weight: 700; color: #3730a3; min-height: 22px; }
         .ls-reward { color: #d97706; font-weight: 700; font-size: 18px; margin-top: 6px; }
+        .ls-image { font-size: 64px; line-height: 1.1; margin: 4px 0 10px; }
+        .ls-image img { width: 150px; height: 110px; object-fit: cover; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+        .ls-letter-card { display: inline-block; background: linear-gradient(160deg,#eef2ff,#fff); border: 3px solid #818cf8; border-radius: 22px; padding: 14px 30px; margin: 6px 0 10px; }
+        .ls-letter-card .big { font-size: 64px; font-weight: 900; color: #4338ca; line-height: 1; }
+        .ls-letter-card .small { font-size: 34px; font-weight: 800; color: #6366f1; margin-right: 8px; }
+        .ls-letter-anchor { font-size: 19px; font-weight: 700; color: #0f766e; margin: 4px 0 10px; }
+        .ls-option-card { min-width: 96px; font-size: 40px !important; padding: 14px 18px !important; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .ls-option-card .opt-label { font-size: 16px; font-weight: 700; }
+        .ls-option-card img { width: 84px; height: 62px; object-fit: cover; border-radius: 10px; }
+        .ls-learned { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 10px 0; }
+        .ls-learned span { background: #ecfdf5; border: 2px solid #6ee7b7; color: #065f46; border-radius: 999px; padding: 6px 14px; font-weight: 800; font-size: 17px; }
+        .ls-next { margin-top: 12px; background: #fffbeb; border: 2px dashed #f59e0b; border-radius: 12px; padding: 8px 12px; font-weight: 700; color: #92400e; }
         .ls-star-pop { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); font-size: 42px; pointer-events: none; animation: lsStarPop 1.4s ease forwards; }
         @keyframes lsStarPop { 0% { opacity: 0; transform: translateX(-50%) scale(.3); } 30% { opacity: 1; transform: translateX(-50%) scale(1.4); } 100% { opacity: 0; transform: translateX(-50%) translateY(-34px) scale(1); } }
 
@@ -2209,6 +2233,10 @@
                     <div class="tutor-status" id="tutor-status"><span class="dot"></span><span id="tutor-status-text">בשיעור</span></div>
                     <div class="tutor-name-tag" id="tutor-name-tag">קוקו</div>
                 </div>
+                <div class="child-cam" id="child-cam" hidden>
+                    <video id="child-cam-video" autoplay muted playsinline></video>
+                    <div class="child-cam-name" id="child-cam-name"></div>
+                </div>
             </div>
 
             <div class="chat-container" id="chat-container">
@@ -2485,6 +2513,7 @@
             tutorStatusEl.className = 'tutor-status st-' + state;
             tutorStatusText.textContent = TUTOR_STATUS_TEXT[state] || TUTOR_STATUS_TEXT.idle;
             tutorStage.classList.toggle('listening', state === 'listening');
+            tutorStage.classList.toggle('speaking', state === 'speaking');
         }
 
         function openAvatarPicker() {
@@ -3259,7 +3288,17 @@
             const box = document.createElement('div');
             box.className = 'lesson-slide';
             const starsHtml = '⭐'.repeat(stars) + '☆'.repeat(lesson.slides.length - stars);
+            const slideImage = slide.image
+                ? (/\.(png|jpe?g|webp|gif|svg)$/i.test(slide.image)
+                    ? `<div class="ls-image"><img src="${escapeFitnessHtml(slide.image)}" alt=""></div>`
+                    : `<div class="ls-image">${escapeFitnessHtml(slide.image)}</div>`)
+                : '';
+            const letterCard = slide.type === 'letter'
+                ? `<div class="ls-letter-card" dir="ltr"><span class="big">${escapeFitnessHtml(slide.letter || '')}</span><span class="small">${escapeFitnessHtml(slide.letter_small || '')}</span></div>` +
+                  (slide.hebrew_anchor ? `<div class="ls-letter-anchor">${escapeFitnessHtml(slide.hebrew_anchor)}</div>` : '')
+                : '';
             box.innerHTML = `<div class="ls-progress">${starsHtml} · ${index + 1}/${lesson.slides.length}</div>` +
+                letterCard + slideImage +
                 `<div class="ls-he">${escapeFitnessHtml(personalizeHe(slide.prompt_he) || '')}</div>` +
                 `<div class="ls-en" dir="ltr">${escapeFitnessHtml(slide.prompt_en || '')}</div>` +
                 `<div class="ls-options" dir="ltr"></div>` +
@@ -3281,17 +3320,27 @@
                 const data = await done.json();
                 const lines = [`<div class="ls-en">כל הכבוד!</div>`,
                     `<div class="ls-he">${personalizeHe(`סיימתם את "${escapeFitnessHtml(lesson.title_he)}" עם ${earned} ⭐ +1 ⭐ בונוס על השיעור — סה"כ ${data.total_stars} כוכבים!`)}</div>`];
+                const learned = (data.learned_words || []).slice(0, 8);
+                if (learned.length)
+                    lines.push(`<div class="ls-he">היום למדנו:</div>` +
+                        `<div class="ls-learned" dir="ltr">${learned.map(w => `<span>${escapeFitnessHtml(w)}</span>`).join('')}</div>`);
                 if (data.unit_completed)
                     lines.push(`<div class="ls-he ls-reward">🏆 הושלמה כל היחידה — +2 ⭐ בונוס!</div>`);
                 if (data.reward_earned)
                     lines.push(`<div class="ls-he ls-reward">🎁 קיבלת מתנה${data.reward_text ? ` — ${escapeFitnessHtml(data.reward_text)}` : ''}! ${childGender() === 'f' ? 'ספרי' : 'ספר'} להורה.</div>`);
+                const nextTitle = data.next_lesson && data.next_lesson.title_he;
+                if (nextTitle)
+                    lines.push(`<div class="ls-next">בשיעור הבא: ${escapeFitnessHtml(nextTitle)} — נתראה! 👋</div>`);
                 box.innerHTML = lines.join('');
+                const learnedLine = learned.length
+                    ? `היום למדנו: ${learned.slice(0, 4).join(', ')}. ` : '';
+                const teaser = nextTitle ? `בשיעור הבא: ${nextTitle}. נתראה!` : 'נתראה בשיעור הבא!';
                 speakResponse(personalizeHe(
-                    data.reward_earned
-                        ? 'כל הכבוד! הרווחת מתנה! ספרו להורה!'
+                    (data.reward_earned
+                        ? 'כל הכבוד! הרווחת מתנה! ספרו להורה! '
                         : data.unit_completed
-                            ? 'כל הכבוד! סיימתם את כל היחידה!'
-                            : 'כל הכבוד! סיימתם את השיעור.'),
+                            ? 'כל הכבוד! סיימתם את כל היחידה! '
+                            : 'כל הכבוד! סיימתם את השיעור. ') + learnedLine + teaser),
                     'celebrate');
             };
 
@@ -3316,7 +3365,7 @@
                 setTimeout(() => last ? finish(nextStars) : renderLessonSlide(index + 1, nextStars), 1600);
             };
 
-            if (slide.type === 'speak') {
+            if (slide.type === 'speak' || slide.type === 'letter') {
                 options.innerHTML = `<button class="ec-assign">🎤 ${childGender() === 'f' ? 'לחצי כאן ואמרי את המילה' : 'לחץ כאן ואמור את המילה'}</button>`;
                 const ask = () => speakResponse(slideSpokenText(slide), 'listen');
                 options.querySelector('button').onclick = ask;
@@ -3342,8 +3391,19 @@
                     : slide.options;
                 choices.forEach(opt => {
                     const b = document.createElement('button');
-                    b.className = 'ec-start';
-                    b.innerHTML = `${opt.emoji || ''} ${escapeFitnessHtml(opt.label)}`;
+                    const optImage = opt.image
+                        ? (/\.(png|jpe?g|webp|gif|svg)$/i.test(opt.image)
+                            ? `<img src="${escapeFitnessHtml(opt.image)}" alt="">`
+                            : `<span style="font-size:40px">${escapeFitnessHtml(opt.image)}</span>`)
+                        : '';
+                    const bigCard = optImage || (opt.emoji && opt.emoji.length <= 4);
+                    b.className = 'ec-start' + (bigCard ? ' ls-option-card' : '');
+                    if (bigCard) {
+                        const visual = optImage || `<span style="font-size:40px">${escapeFitnessHtml(opt.emoji)}</span>`;
+                        b.innerHTML = `${visual}<span class="opt-label">${escapeFitnessHtml(opt.label)}</span>`;
+                    } else {
+                        b.innerHTML = `${opt.emoji || ''} ${escapeFitnessHtml(opt.label)}`;
+                    }
                     b.onclick = () => answered(opt.id);
                     options.appendChild(b);
                 });
@@ -3355,6 +3415,32 @@
         }
 
         let lessonSlideAnswer = null;
+
+        /* The child's own camera tile (video-call style, like a real lesson).
+           Starts lazily when the tutoring screen opens; on denial it hides
+           quietly and the lesson continues exactly as before. */
+        let childCamStream = null;
+        async function startChildCam() {
+            const box = document.getElementById('child-cam');
+            if (!box || childCamStream || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+            try {
+                childCamStream = await navigator.mediaDevices.getUserMedia({ video: { width: 320 }, audio: false });
+                document.getElementById('child-cam-video').srcObject = childCamStream;
+                document.getElementById('child-cam-name').textContent =
+                    (selectedUserProfile && selectedUserProfile.name) || '';
+                box.hidden = false;
+            } catch (e) {
+                childCamStream = null;
+            }
+        }
+        function stopChildCam() {
+            if (childCamStream) {
+                childCamStream.getTracks().forEach(t => t.stop());
+                childCamStream = null;
+            }
+            const box = document.getElementById('child-cam');
+            if (box) box.hidden = true;
+        }
 
         async function assignEnglishCourse(courseId, btn) {
             btn.disabled = true;
@@ -3467,6 +3553,7 @@
             backBtn.classList.remove('show');
             switchChildBtn.classList.remove('show');
             const isTutor = screenName === 'tutoring';
+            if (isTutor) startChildCam(); else stopChildCam();
             const isFitness = screenName === 'fitness';
             const isTrader = screenName === 'trader';
             const isAgentLogs = screenName === 'agent-logs';

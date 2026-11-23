@@ -159,20 +159,23 @@ class TestLessonContent:
             assert lesson["stars_total"] == len(lesson["slides"]), lesson_id
             assert lesson.get("intro_he"), lesson_id
             for slide in lesson["slides"]:
-                assert slide["type"] in {"speak", "choice", "listen", "true_false", "order"}
+                assert slide["type"] in {"speak", "letter", "choice", "listen", "true_false", "order"}
                 for field in ("id", "prompt_en", "prompt_he", "say", "praise_he", "hint_he"):
                     assert slide.get(field), f"{lesson_id}/{slide['id']} missing {field}"
                 kind = slide["type"]
-                if kind == "speak":
+                if kind in ("speak", "letter"):
                     assert slide["accept"], f"{lesson_id}/{slide['id']}"
                     assert grade(slide, slide["accept"][0])["correct"]
+                    if kind == "letter":
+                        assert slide.get("letter") and slide.get("hebrew_anchor"), \
+                            f"{lesson_id}/{slide['id']} letter card needs letter+hebrew_anchor"
                 elif kind in ("choice", "listen"):
                     option_ids = {o["id"] for o in slide["options"]}
                     assert slide["correct"] in option_ids, f"{lesson_id}/{slide['id']}"
                     assert grade(slide, slide["correct"])["correct"]
                 elif kind == "true_false":
                     assert grade(slide, str(bool(slide["correct"])).lower())["correct"]
-                else:
+                elif kind == "order":
                     assert grade(slide, slide["expected_order"])["correct"]
                 # The answer key must never reach the browser payload.
                 pub = public_slide(slide)
@@ -305,6 +308,22 @@ class TestLessonEngine:
             headers=headers)
         assert fresh.status_code == 200
         assert fresh.json()["already_completed"] is False
+
+    async def test_complete_returns_closing_ritual_payload(self, client, child_user):
+        """LEXI-style outro: /complete reports the words the lesson taught
+        and the next lesson's title, so the client can recap and tease."""
+        headers = {"x-app-pin": APP_PIN}
+        done = await client.post(
+            f"/api/tutor/english/lesson/pre_a.letters.00_hello/complete?user_id={child_user.id}",
+            headers=headers)
+        assert done.status_code == 200, done.text
+        data = done.json()
+        learned = data.get("learned_words")
+        assert isinstance(learned, list) and learned
+        assert all(isinstance(w, str) and w for w in learned)
+        nxt = data.get("next_lesson")
+        if nxt is not None:
+            assert nxt["lesson_id"] and nxt["title_he"]
 
     async def test_lesson_duration_tracked_server_side(self, client, child_user):
         """Opening a lesson stamps `opened_at`; completing writes a
@@ -1087,6 +1106,53 @@ class TestProfileSummaryGuard:
             "רמה מוכחת: מילים בודדות. התלמידה שלטה ב-dog ו-cat. המלצה: חיות.")
         assert len(saved) == 1
         assert "רמה מוכחת" in saved[0]
+
+
+class TestLetterSlideAndClosingRitual:
+    """LEXI-level features: a dedicated letter-card slide (B=ב phonics
+    anchor) and a closing ritual that tells the child what they learned
+    and which lesson comes next."""
+
+    def test_letter_slide_grades_like_speak(self):
+        from lesson_engine import grade
+        slide = {"id": "b", "type": "letter", "letter": "B",
+                 "accept": ["b"], "hint_he": "x"}
+        assert grade(slide, "B")["correct"] is True
+        assert grade(slide, "cat")["correct"] is False
+
+    def test_public_slide_keeps_letter_and_image(self):
+        from lesson_engine import public_slide
+        s = public_slide({"type": "letter", "letter": "B", "letter_small": "b",
+                          "hebrew_anchor": "B זה ב'", "accept": ["b"], "image": "🎈"})
+        assert s["letter"] == "B" and s["hebrew_anchor"] == "B זה ב'"
+        assert s["image"] == "🎈" and "accept" not in s
+
+    def test_learned_words_derives_targets(self):
+        from lesson_engine import learned_words
+        lesson = {"slides": [
+            {"type": "speak", "accept": ["tiger"]},
+            {"type": "choice", "correct": "black",
+             "options": [{"id": "black", "label": "black"},
+                         {"id": "red", "label": "red"}]},
+            {"type": "letter", "letter": "B"},
+        ]}
+        assert learned_words(lesson) == ["tiger", "black", "B"]
+
+    def test_next_lesson_meta_skips_done(self):
+        from lesson_engine import next_lesson_meta
+        nxt = next_lesson_meta("pre_a.letters.00_hello", {"pre_a.letters.00_hello"})
+        assert nxt and nxt["lesson_id"] == "pre_a.letters.01_backyard"
+        nxt = next_lesson_meta(
+            "pre_a.letters.00_hello",
+            {"pre_a.letters.00_hello", "pre_a.letters.01_backyard"})
+        assert nxt and nxt["lesson_id"] == "pre_a.letters.02_backyard_2"
+
+    def test_kindergarten_prompt_teaches_hebrew_letter_anchor(self):
+        from tutors import EnglishTutor
+        prompt = EnglishTutor().generate_system_prompt(
+            {"name": "ליבי", "grade_level": "גן", "interests": None})
+        assert "אות עברית מקבילה" in prompt
+        assert "בלון" in prompt
 
 
 class TestTtsSanitize:

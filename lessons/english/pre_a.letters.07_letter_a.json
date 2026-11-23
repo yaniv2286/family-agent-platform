@@ -7,7 +7,10 @@
   "slides": [
     {
       "id": "a_sound",
-      "type": "speak",
+      "type": "letter",
+      "letter": "A",
+      "letter_small": "a",
+      "hebrew_anchor": "A אומרת אַ — צליל שאין בעברית, כמו אַפל apple",
       "prompt_en": "A says אַ",
       "prompt_he": "האות A אומרת אַ - צליל שאין בעברית. תגידו אַ-אַ-אַ",
       "say": "The letter A says אַ, like in apple. Say it: אַ, אַ, אַ.",
