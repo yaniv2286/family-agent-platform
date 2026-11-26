@@ -1788,6 +1788,9 @@
             background: var(--nx-surface); transition: border-color .15s ease, box-shadow .15s ease;
         }
         .nx-input:focus, .nx-select:focus, .nx-textarea:focus { border-color: var(--nx-primary); box-shadow: var(--nx-ring); outline: none; }
+        .nx-input-sm { min-height: 30px !important; padding: 3px 8px !important; font-size: 13px; }
+        .nx-input-wrap .nx-input-sm { padding-inline-end: 40px; }
+        .nx-input-wrap .nx-input-sm + .nx-unit { inset-inline-end: 8px; font-size: 11px; }
         .nx-helper { font-size: 12px; color: var(--nx-text3); margin-top: 4px; }
         .nx-error-text { font-size: 12px; color: var(--nx-danger); margin-top: 4px; }
         .nx-input-wrap { position: relative; }
@@ -2176,7 +2179,7 @@
                             </div>
                         </div>
                         <footer class="nx-footer" id="meals-wizard-footer" style="display:none">
-                            <div><button class="nx-btn nx-btn-ghost" id="wiz-prev">הקודם</button></div>
+                            <div><button class="nx-btn nx-btn-secondary" id="wiz-prev">הקודם</button></div>
                             <div><button class="nx-btn nx-btn-primary" id="wiz-next">המשך</button></div>
                         </footer>
                     </main>
@@ -7203,22 +7206,12 @@
             const autoBar = document.createElement('div');
             autoBar.style.cssText = 'margin-top:12px;padding:10px 12px;border:1px dashed #cfdcd6;border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
             autoBar.innerHTML = `<strong style="font-size:13px">הצעת תפריט אוטומטית:</strong>
-                <label style="font-size:13px">בשרי <input id="wiz-auto-meat" type="number" min="0" max="6" value="0" class="nx-input" style="width:52px;padding:4px 6px"></label>
-                <label style="font-size:13px">חלבי <input id="wiz-auto-dairy" type="number" min="0" max="6" value="0" class="nx-input" style="width:52px;padding:4px 6px"></label>
-                <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" id="wiz-auto-gen">הצע ארוחות</button>
+                <span class="nx-meta" style="font-size:12px">מרכיב את כל הארוחות לפי בחירת הסוג (בשרי/חלבי/פרווה) בכל כרטיס — "הכל" = בחירה חופשית</span>
+                <button type="button" class="nx-btn nx-btn-primary nx-btn-sm" id="wiz-auto-gen">הצע ארוחות</button>
                 <span id="wiz-auto-msg" style="font-size:12px;color:var(--nx-text3)"></span>`;
             picker.appendChild(autoBar);
             autoBar.querySelector('#wiz-auto-gen').addEventListener('click', async () => {
-                const meatN = Number(autoBar.querySelector('#wiz-auto-meat').value) || 0;
-                const dairyN = Number(autoBar.querySelector('#wiz-auto-dairy').value) || 0;
                 const msg = autoBar.querySelector('#wiz-auto-msg');
-                // Meat goes to lunch first, then dinner, then the rest in order;
-                // dairy fills breakfast/snacks-style slots first.
-                const order = wiz.chosenSlots.slice().sort((a, b) =>
-                    ({ lunch: 0, dinner: 1 }[a] ?? 2) - ({ lunch: 0, dinner: 1 }[b] ?? 2));
-                order.forEach((s, i) => {
-                    wiz.slotKosher[s] = i < meatN ? 'meat' : (i < meatN + dairyN ? 'dairy' : 'any');
-                });
                 msg.textContent = 'מרכיב הצעה...';
                 const slotsPayload = wiz.chosenSlots.map(s => ({ slot_key: s, kosher: wiz.slotKosher[s] || 'any' }));
                 const targets = {};
@@ -7230,7 +7223,7 @@
                 });
                 const r = await safeFetch(`/api/meals/${mealsUid()}/auto-plan`, { method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slots: slotsPayload, day_targets: targets }) });
+                    body: JSON.stringify({ slots: slotsPayload, day_targets: targets, use_llm: true }) });
                 const d = await r.json().catch(() => ({}));
                 if (!r.ok) { msg.textContent = 'ההצעה נכשלה'; return; }
                 (d.meals || []).forEach(m => {
@@ -7239,7 +7232,8 @@
                     (m.items || []).forEach(i => { wiz.meals[m.slot_key].qty[i.food_version_id] = i.quantity_g; });
                 });
                 const unmetN = (d.unmet || []).length;
-                msg.textContent = `הוצעו ${(d.meals || []).length} ארוחות` + (unmetN ? ` — ${unmetN} ארוחות לתשומת לב` : '');
+                msg.textContent = `הוצעו ${(d.meals || []).length} ארוחות` + (d.source === 'llm' ? ' (AI)' : '')
+                    + (unmetN ? ` — ${unmetN} ארוחות לתשומת לב` : '');
                 renderWizMeals(); renderWizAlts();
             });
             const slotsEl = el.querySelector('#wiz-meals-slots');
@@ -7260,14 +7254,15 @@
                 box.innerHTML = `<div class="nx-card-body" style="padding:14px 16px">
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                         <strong style="font-size:14px">${mealsSlotName(slot)}</strong>
-                        <select data-slot="${slot}" class="nx-select" style="flex:1;min-width:200px;max-width:320px">${options.join('')}</select>
-                        <select data-kosher="${slot}" class="nx-select" style="width:auto;font-size:12px" title="סוג הארוחה להצעה האוטומטית">${kosherSel}</select></div>
+                        <span class="nx-meta" style="font-size:12px">סוג:</span>
+                        <select data-kosher="${slot}" class="nx-select" style="width:auto;min-height:32px;font-size:12px" title="סוג הארוחה להצעה האוטומטית">${kosherSel}</select>
+                        <select data-slot="${slot}" class="nx-select" style="flex:1;min-width:180px;max-width:320px">${options.join('')}</select></div>
                     <div data-qty-box="${slot}" style="margin-top:8px"></div>
                     <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                         <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" data-fit="${slot}">התאם כמויות להנחיה</button>
                         <span data-fit-msg="${slot}" style="font-size:13px"></span>
                     </div></div>`;
-                const sel = box.querySelector('select');
+                const sel = box.querySelector('select[data-slot]');
                 box.querySelector('[data-kosher]').addEventListener('change', e => { wiz.slotKosher[slot] = e.target.value; });
                 const renderAdhoc = () => {
                     const qb = box.querySelector(`[data-qty-box="${slot}"]`);
@@ -7276,7 +7271,7 @@
                     qb.innerHTML = `<div class="nx-meta" style="margin-bottom:8px">${nxBadge('מנה מורכבת — עריכה חופשית של מצרכים וכמויות')}</div>
                         <table class="nx-table"><tr><th>מצרך</th><th>כמות</th><th></th></tr>` +
                         items.map(fid => `<tr><td>${escapeFitnessHtml(mealFoodName(fid))}</td>
-                            <td><span class="nx-input-wrap" style="width:120px"><input type="number" data-qty-fid="${fid}" class="nx-input" value="${escapeFitnessHtml(String((wiz.meals[slot].qty || {})[fid] ?? '100'))}" min="0" step="10"><span class="nx-unit">גרם</span></span></td>
+                            <td><span class="nx-input-wrap" style="width:96px"><input type="number" data-qty-fid="${fid}" class="nx-input nx-input-sm" value="${escapeFitnessHtml(String((wiz.meals[slot].qty || {})[fid] ?? '100'))}" min="0" step="10"><span class="nx-unit">גרם</span></span></td>
                             <td><button type="button" class="nx-btn nx-btn-sm" data-del-fid="${fid}" title="הסר מצרך" style="padding:2px 8px">✕</button></td></tr>`).join('') + `</table>
                         <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
                             <input list="wiz-foods-dl" data-add-inp class="nx-input" style="flex:1;max-width:260px" placeholder="הוסף מצרך...">
@@ -7310,7 +7305,7 @@
                         (rec.items || []).map(i => {
                             const v = (wiz.meals[slot]?.qty || {})[i.food_version_id] ?? i.default_g;
                             return `<tr><td>${escapeFitnessHtml(mealFoodName(i.food_version_id))}</td>
-                                <td><span class="nx-input-wrap" style="width:120px"><input type="number" data-qty-fid="${i.food_version_id}" class="nx-input" value="${escapeFitnessHtml(String(v))}"
+                                <td><span class="nx-input-wrap" style="width:96px"><input type="number" data-qty-fid="${i.food_version_id}" class="nx-input nx-input-sm" value="${escapeFitnessHtml(String(v))}"
                                  min="${i.min_g}" max="${i.max_g}" step="${i.step_g}"><span class="nx-unit">גרם</span></span></td></tr>`;
                         }).join('') + `</table>`;
                     nxHydrateIcons(qb);

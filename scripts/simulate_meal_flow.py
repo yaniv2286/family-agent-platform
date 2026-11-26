@@ -1071,6 +1071,12 @@ async def section_ui(base_url, verbose) -> list[str]:
         await page.goto(base_url, wait_until="networkidle")
         await page.locator(".profile-card", has_text="נויה").click()
         await page.wait_for_selector("#subject-grid .subject-card", timeout=8000)
+        # The nutrition card is appended after an async /state fetch - wait for
+        # it explicitly instead of racing the first tutor card render.
+        try:
+            await page.wait_for_selector('.subject-card[data-agent="meal_coach"]', timeout=8000)
+        except Exception:
+            pass
         if await page.locator('.subject-card[data-agent="meal_coach"]').count() != 1:
             fails.append("ui nutrition card not visible for נויה")
         await shot(page, "11_child_agents_noya")
@@ -1108,6 +1114,9 @@ async def section_ui(base_url, verbose) -> list[str]:
         await page.goto(base_url, wait_until="networkidle")
         await page.locator(".profile-card", has_text="לביא").click()
         await page.wait_for_selector("#subject-grid .subject-card", timeout=8000)
+        # Let the async /state fetch settle so a late card can't slip past a
+        # too-early count.
+        await page.wait_for_load_state("networkidle")
         if await page.locator('.subject-card[data-agent="meal_coach"]').count() != 0:
             fails.append("ui nutrition card visible for לביא without a plan")
         await shot(page, "16_child_agents_lavi")
@@ -1914,6 +1923,10 @@ async def persona_ui(base_url, verbose) -> list[str]:
         await page.goto(base_url, wait_until="networkidle")
         await page.locator(".profile-card", has_text="לביא").click()
         await page.wait_for_selector("#subject-grid .subject-card", timeout=8000)
+        try:
+            await page.wait_for_selector('.subject-card[data-agent="meal_coach"]', timeout=8000)
+        except Exception:
+            pass
         if await page.locator('.subject-card[data-agent="meal_coach"]').count() != 1:
             fails.append("P11 nutrition card missing for לביא after persona publish")
             await ctx.close(); await browser.close()

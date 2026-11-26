@@ -361,10 +361,49 @@ _AUTO_KOSHER_ALLOW = {
 _AUTO_CARB_KINDS = ("bread", "grain", "legume")
 _AUTO_VEG_KINDS = ("vegetable",)
 _AUTO_FRUIT_KINDS = ("fruit",)
+_AUTO_FAT_KINDS = ("fat_oil", "nut_seed", "sauce")
 # Per-slot fallbacks when the draft has no day_targets yet.
 _AUTO_DEFAULT_BUDGET = {"kcal_upper": 500, "protein_lower": 25,
                         "carbs_upper": 50, "fat_upper": 15}
 _AUTO_SNACK_SHARE = Decimal("0.5")
+# Real-meal preference order (exact name_he, matched to the catalog): a
+# suggestion should read like food a kid actually eats, not a nutrient
+# optimum. Anything not listed still competes via the numeric pool sort.
+_AUTO_PREFER_PROTEIN = {
+    "meat":  ["חזה עוף צלוי בתיבול", "חזה הודו צלוי", "עוף בגריל", "פסטרמה הודו",
+              "בשר בקר מבושל רזה", "בשר טחון בקר 5%", "טחון הודו",
+              "פרגית הודו טרייה", "חזה עוף מעושן"],
+    "dairy": ["קוטג׳ 5%", "יוגורט יווני 5%", "גבינה לבנה 5%", "ביצה קשה",
+              "חביתה", "יוגורט יווני 0%", "גבינה לבנה 0%", "קוטג׳ 0%",
+              "ביצה עלומה", "קוטג׳ 3%"],
+    "parve": ["טונה במים (משומר)", "סלמון צלוי", "ביצה קשה", "טונה טרייה צלויה",
+              "חומוס מוכן (ממרח)", "עדשים כתומות מבושלות",
+              "שעועית לבנה מבושלת", "חביתה", "ביצה עלומה"],
+    "any":   ["קוטג׳ 5%", "חזה עוף צלוי בתיבול", "ביצה קשה", "יוגורט יווני 5%",
+              "טונה במים (משומר)", "חזה הודו צלוי", "גבינה לבנה 5%", "סלמון צלוי",
+              "בשר בקר מבושל רזה", "חומוס מוכן (ממרח)"],
+}
+_AUTO_PREFER_CARB = ["אורז בסמטי מבושל", "לחם פרוס מלא", "פסטה מלאה מבושלת",
+                     "בטטה בתנור", "תפוח אדמה בתנור", "קוסקוס מבושל",
+                     "לחם שחור / דגנים", "קינואה מבושלת", "אורז מלא מבושל",
+                     "שיבולת שועל גולמית", "בורגול מבושל", "פסטה לבנה מבושלת"]
+_AUTO_PREFER_VEG = ["מלפפון בשיל", "עגבניית שרי", "חסה", "פלפל אדום", "גזר",
+                    "קישוא", "ברוקולי", "פלפל ירוק", "חסה רומי", "פלפל קלוי"]
+_AUTO_PREFER_FAT = ["אבוקדו", "טחינה מוכנה (סלט)", "שמן זית", "שקדים",
+                    "אגוזי מלך", "גרעיני דלעת", "טחינה מלאה"]
+_AUTO_PREFER_FRUIT = ["תפוח עץ", "בננה", "תות שדה", "אשכולית", "מלון",
+                      "אבטיח", "תפוז", "ענבים", "אגס"]
+# Never a meal component even if the nutrients fit: supplements and
+# liquid/powdered products need a human hand, not an auto-composer.
+_AUTO_NO_COMPONENT = ("אבקת", "אבקה", "משקה", "חלבון ביצה", "שמנת", "חמאה",
+                      "מרגרינה")
+_AUTO_NO_SIDE = ("קמח", "עמילן", "סולת", "דגני", "אבקת")
+_AUTO_NO_VEG = ("חמוץ", "כבוש", "מיובש", "מיץ")
+# Realistic caps: nobody serves 350g of egg whites or half a kilo of rice.
+_AUTO_CAP = {"protein": Decimal(250), "side": Decimal(200), "veg": Decimal(200),
+             "fat": Decimal(30), "fruit": Decimal(200)}
+_AUTO_VEG_QTY = Decimal(150)
+_AUTO_MIN_FAT_QTY = Decimal(10)
 
 
 def _per100(food: dict, nutrient: str) -> Optional[Decimal]:
@@ -374,6 +413,93 @@ def _per100(food: dict, nutrient: str) -> Optional[Decimal]:
 
 def _round_qty(qty: Decimal, step: Decimal = Decimal(10)) -> Decimal:
     return max(step, (qty / step).to_integral_value() * step)
+
+
+def _auto_totals(items) -> dict:
+    tot = {}
+    for f, qty in items:
+        for n in ("kcal", "protein_g", "carbs_g", "fat_g"):
+            p = _per100(f, n)
+            tot[n] = (tot.get(n) or Decimal(0)) + (p * qty / 100 if p is not None else Decimal(0))
+    return tot
+
+
+def _auto_fits(items, p_lo, k_up, c_up, f_up) -> bool:
+    t = _auto_totals(items)
+    return (t["protein_g"] >= p_lo and t["kcal"] <= k_up
+            and t["fat_g"] <= f_up and t["carbs_g"] <= c_up)
+
+
+def _auto_over(items, p_lo, k_up, c_up, f_up) -> Decimal:
+    t = _auto_totals(items)
+    return (max(Decimal(0), t["kcal"] - k_up) + max(Decimal(0), t["fat_g"] - f_up)
+            + max(Decimal(0), t["carbs_g"] - c_up)
+            + max(Decimal(0), p_lo - t["protein_g"]))
+
+
+def _auto_bound(day_targets: dict, name: str, direction: str) -> Optional[Decimal]:
+    v = ((day_targets or {}).get(name) or {}).get(direction)
+    return dec(v) if v is not None else None
+
+
+def _auto_slot_budgets(slots: List[dict], day_targets: dict) -> List[dict]:
+    """Each slot's share of the day budget: snack-family slots get half a
+    main meal's share."""
+    weights = [_AUTO_SNACK_SHARE if slot_family(s["slot_key"]) == "snack"
+               else Decimal(1) for s in slots]
+    total_w = sum(weights) or Decimal(1)
+    budgets = []
+    for w in weights:
+        share = w / total_w
+        budgets.append({
+            "p_lo": (_auto_bound(day_targets, "protein_g", "lower") or
+                     Decimal(_AUTO_DEFAULT_BUDGET["protein_lower"]) * total_w) * share,
+            "k_up": (_auto_bound(day_targets, "kcal", "upper") or
+                     Decimal(_AUTO_DEFAULT_BUDGET["kcal_upper"]) * total_w) * share,
+            "c_up": (_auto_bound(day_targets, "carbs_g", "upper") or
+                     Decimal(_AUTO_DEFAULT_BUDGET["carbs_upper"]) * total_w) * share,
+            "f_up": (_auto_bound(day_targets, "fat_g", "upper") or
+                     Decimal(_AUTO_DEFAULT_BUDGET["fat_upper"]) * total_w) * share,
+            "is_snack": w < 1,
+        })
+    return budgets
+
+
+def _auto_pool(usable: List[dict], kosher: str, kinds, need_nutrient: str,
+               sort_mode: str = "lean", prefer=None, skip=()) -> List[dict]:
+    """Candidate pool: kosher/kind/name filters, preference names first,
+    then the numeric sort."""
+    allow = _AUTO_KOSHER_ALLOW.get(kosher, _AUTO_KOSHER_ALLOW["any"])
+    pool = [f for f in usable
+            if f.get("kind") in kinds
+            and f.get("kosher_evidence") in allow
+            and _per100(f, need_nutrient) is not None
+            and not any(w in (f.get("name_he") or "") for w in skip)]
+    pref = [f for n in (prefer or ())
+            for f in pool if f.get("name_he") == n]
+    seen = {f["food_version_id"] for f in pref}
+    rest = [f for f in pool if f["food_version_id"] not in seen]
+    if sort_mode == "lean":   # lowest fat, then densest in need_nutrient
+        rest.sort(key=lambda f: (_per100(f, "fat_g") or Decimal(999),
+                                 -(_per100(f, need_nutrient) or Decimal(0))))
+    elif sort_mode == "min":  # lightest first (veg, fruit)
+        rest.sort(key=lambda f: _per100(f, need_nutrient) or Decimal(999))
+    else:                     # densest first (carbs)
+        rest.sort(key=lambda f: -(_per100(f, need_nutrient) or Decimal(0)))
+    return pref + rest
+
+
+def _auto_infer_role(food: dict) -> str:
+    kind = food.get("kind")
+    if kind in _AUTO_FAT_KINDS:
+        return "fat"
+    if kind in _AUTO_VEG_KINDS:
+        return "veg"
+    if kind in _AUTO_FRUIT_KINDS:
+        return "fruit"
+    if kind in _AUTO_CARB_KINDS:
+        return "carb"
+    return "protein"
 
 
 def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
@@ -386,106 +512,97 @@ def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
               if f["status"] == "approved"
               and f["food_version_id"] not in excluded
               and f.get("kosher_evidence") != "non_kosher"]
+    _pool = lambda *a, **kw: _auto_pool(usable, *a, **kw)
 
-    def _pool(kosher: str, kinds, need_nutrient: str, sort_mode: str = "lean"):
-        allow = _AUTO_KOSHER_ALLOW.get(kosher, _AUTO_KOSHER_ALLOW["any"])
-        pool = [f for f in usable
-                if f.get("kind") in kinds
-                and f.get("kosher_evidence") in allow
-                and _per100(f, need_nutrient) is not None]
-        if sort_mode == "lean":   # lowest fat, then densest in need_nutrient
-            pool.sort(key=lambda f: (_per100(f, "fat_g") or Decimal(999),
-                                     -(_per100(f, need_nutrient) or Decimal(0))))
-        elif sort_mode == "min":  # lightest first (veg, fruit)
-            pool.sort(key=lambda f: _per100(f, need_nutrient) or Decimal(999))
-        else:                     # densest first (carbs)
-            pool.sort(key=lambda f: -(_per100(f, need_nutrient) or Decimal(0)))
-        return pool
-
-    def _bound(name: str, direction: str) -> Optional[Decimal]:
-        v = ((day_targets or {}).get(name) or {}).get(direction)
-        return dec(v) if v is not None else None
-
-    weights = [_AUTO_SNACK_SHARE if slot_family(s["slot_key"]) == "snack"
-               else Decimal(1) for s in slots]
-    total_w = sum(weights) or Decimal(1)
+    budgets = _auto_slot_budgets(slots, day_targets)
 
     meals, unmet = [], []
+    used_ids: set = set()
     for idx, spec in enumerate(slots):
         slot, kosher = spec["slot_key"], spec.get("kosher") or "any"
-        share = weights[idx] / total_w
-        p_lo = (_bound("protein_g", "lower") or
-                Decimal(_AUTO_DEFAULT_BUDGET["protein_lower"]) * total_w) * share
-        k_up = (_bound("kcal", "upper") or
-                Decimal(_AUTO_DEFAULT_BUDGET["kcal_upper"]) * total_w) * share
-        c_up = (_bound("carbs_g", "upper") or
-                Decimal(_AUTO_DEFAULT_BUDGET["carbs_upper"]) * total_w) * share
-        f_up = (_bound("fat_g", "upper") or
-                Decimal(_AUTO_DEFAULT_BUDGET["fat_upper"]) * total_w) * share
-
-        is_snack = slot_family(slot) == "snack"
+        b = budgets[idx]
+        p_lo, k_up, c_up, f_up = b["p_lo"], b["k_up"], b["c_up"], b["f_up"]
+        is_snack = b["is_snack"]
         proteins = _pool(kosher, _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
-                         "protein_g", "lean")
-        # Powders/shakes are supplements, not meals - the coach adds them by hand.
-        proteins = [p for p in proteins
-                    if not any(w in (p.get("name_he") or "") for w in ("אבקת", "אבקה", "משקה"))]
-        sides = (_pool(kosher, _AUTO_FRUIT_KINDS, "kcal", "min") if is_snack
-                 else _pool(kosher, _AUTO_CARB_KINDS, "carbs_g", "max"))
-        # Raw baking ingredients are carbs but never a meal side.
-        sides = [s for s in sides
-                 if not any(w in (s.get("name_he") or "") for w in ("קמח", "עמילן", "סולת", "דגני", "אבקת"))]
-        vegs = [] if is_snack else _pool(kosher, _AUTO_VEG_KINDS, "kcal", "min")
+                         "protein_g", "lean",
+                         prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
+                         skip=_AUTO_NO_COMPONENT)
+        sides = (_pool(kosher, _AUTO_FRUIT_KINDS, "kcal", "min",
+                       prefer=_AUTO_PREFER_FRUIT, skip=_AUTO_NO_COMPONENT) if is_snack
+                 else _pool(kosher, _AUTO_CARB_KINDS, "carbs_g", "max",
+                            prefer=_AUTO_PREFER_CARB,
+                            skip=_AUTO_NO_COMPONENT + _AUTO_NO_SIDE))
+        vegs = [] if is_snack else _pool(kosher, _AUTO_VEG_KINDS, "kcal", "min",
+                                         prefer=_AUTO_PREFER_VEG,
+                                         skip=_AUTO_NO_COMPONENT + _AUTO_NO_VEG)
+        fats = [] if is_snack else _pool(kosher, _AUTO_FAT_KINDS, "fat_g", "min",
+                                         prefer=_AUTO_PREFER_FAT,
+                                         skip=_AUTO_NO_COMPONENT)
+        # Variety: a protein already served today drops to the end of the
+        # candidate list rather than repeating in every meal.
+        proteins = ([p for p in proteins if p["food_version_id"] not in used_ids]
+                    + [p for p in proteins if p["food_version_id"] in used_ids])
 
-        def _totals(items):
-            tot = {}
-            for f, qty in items:
-                for n in ("kcal", "protein_g", "carbs_g", "fat_g"):
-                    p = _per100(f, n)
-                    tot[n] = (tot.get(n) or Decimal(0)) + (p * qty / 100 if p is not None else Decimal(0))
-            return tot
-
-        def _fits(items):
-            t = _totals(items)
-            return (t["protein_g"] >= p_lo and t["kcal"] <= k_up
-                    and t["fat_g"] <= f_up and t["carbs_g"] <= c_up)
-
-        def _over(items):
-            t = _totals(items)
-            return (max(Decimal(0), t["kcal"] - k_up) + max(Decimal(0), t["fat_g"] - f_up)
-                    + max(Decimal(0), t["carbs_g"] - c_up)
-                    + max(Decimal(0), p_lo - t["protein_g"]))
-
+        _fits = lambda items: _auto_fits(items, p_lo, k_up, c_up, f_up)
         best, best_items = None, None
         for pi in range(len(proteins)):
             prot = proteins[(idx + pi) % len(proteins)]
             p100 = _per100(prot, "protein_g")
             if not p100 or p100 <= 0:
                 continue
-            p_qty = min(Decimal(350), _round_qty(p_lo * 100 / p100, Decimal(25)))
+            p_qty = min(_AUTO_CAP["protein"], _round_qty(p_lo * 100 / p100, Decimal(25)))
             for si in range(min(len(sides), 8)):
                 side = sides[(idx + si) % len(sides)]
                 s100 = _per100(side, "kcal" if is_snack else "carbs_g")
                 s_target = (k_up * Decimal("0.35")) if is_snack else (c_up * Decimal("0.9"))
-                s_qty = min(Decimal(300), _round_qty(s_target * 100 / s100, Decimal(25))
+                side_cap = _AUTO_CAP["fruit"] if is_snack else _AUTO_CAP["side"]
+                s_qty = min(side_cap, _round_qty(s_target * 100 / s100, Decimal(25))
                             if s100 and s100 > 0 else Decimal(150))
                 items = [(prot, p_qty), (side, s_qty)]
                 if vegs:
-                    items.append((vegs[idx % len(vegs)], Decimal(150)))
-                # Shrink the side portion to fit the ceilings, then the protein.
-                for _ in range(12):
+                    items.append((vegs[idx % len(vegs)], _AUTO_VEG_QTY))
+                # A primary protein alone sometimes can't reach the target
+                # within a realistic portion (250g cottage ≈ 27g protein) -
+                # a coach adds a second protein, e.g. cottage + eggs.
+                prot_deficit = p_lo - _auto_totals(items)["protein_g"]
+                if prot_deficit > Decimal(5) and len(proteins) > 1:
+                    prot2 = proteins[(idx + pi + 1) % len(proteins)]
+                    p2100 = _per100(prot2, "protein_g")
+                    if p2100 and p2100 > 0:
+                        p2_qty = min(Decimal(150),
+                                     _round_qty(prot_deficit * 100 / p2100, Decimal(25)))
+                        items.append((prot2, p2_qty))
+                # A real meal carries a fat source (olive oil/tahini/avocado/
+                # nuts) - sized to the fat headroom the protein left.
+                has_fat = False
+                if fats:
+                    fat = fats[idx % len(fats)]
+                    fa100 = _per100(fat, "fat_g")
+                    head = f_up - _auto_totals(items)["fat_g"]
+                    fa_qty = (_round_qty(head * 100 / fa100, Decimal(5))
+                              if fa100 and fa100 > 0 else Decimal(0))
+                    fa_qty = min(_AUTO_CAP["fat"], fa_qty)
+                    if fa_qty >= _AUTO_MIN_FAT_QTY:
+                        items.append((fat, fa_qty))
+                        has_fat = True
+                # Shrink to fit the ceilings: fat first, then side, then protein.
+                for _ in range(16):
                     if _fits(items):
-                        best_items = items
                         break
-                    t = _totals(items)
-                    if t["carbs_g"] > c_up or t["kcal"] > k_up:
+                    t = _auto_totals(items)
+                    if t["fat_g"] > f_up and has_fat:
+                        items.pop()          # drop the fat topping first
+                        has_fat = False
+                    elif t["carbs_g"] > c_up or t["kcal"] > k_up:
                         items[1] = (side, max(Decimal(0), items[1][1] - 25))
                     elif t["fat_g"] > f_up and items[0][1] > Decimal(80):
                         items[0] = (prot, items[0][1] - 25)
                     else:
                         break
-                if best_items:
-                    break
-                score = _over(items)
+                if _fits(items):
+                    best_items = items
+                    break                    # first fitting combo wins the slot
+                score = _auto_over(items, p_lo, k_up, c_up, f_up)
                 if best is None or score < best:
                     best, best_items = score, items
             if best_items and _fits(best_items):
@@ -500,6 +617,214 @@ def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
             "items": [{"food_version_id": f["food_version_id"], "quantity_g": format(q, "f")}
                       for f, q in best_items],
         })
+        used_ids.update(f["food_version_id"] for f, _ in best_items)
+    return {"meals": meals, "unmet": unmet}
+
+
+def _auto_size_chosen(kosher: str, roles: dict, b: dict,
+                      usable: List[dict]) -> list:
+    """Size quantities for caller-picked foods. Roles: protein (sized to the
+    slot's protein share, topped up by a pool protein when short), carb
+    (carbs share), veg (fixed), fat (headroom). Returns items list."""
+    p_lo, k_up, c_up, f_up = b["p_lo"], b["k_up"], b["c_up"], b["f_up"]
+    is_snack = b["is_snack"]
+    items = []
+    # protein(s): split the slot's protein share across the picked proteins
+    prots = [f for f in roles.get("protein") or []
+             if (_per100(f, "protein_g") or Decimal(0)) > 0]
+    prot_need = p_lo
+    for f in prots:
+        target = min(prot_need, p_lo / Decimal(len(prots)))
+        qty = min(_AUTO_CAP["protein"],
+                  _round_qty(target * 100 / _per100(f, "protein_g"), Decimal(25)))
+        items.append((f, qty))
+        prot_need = max(Decimal(0), p_lo - _auto_totals(items)["protein_g"])
+    # a protein shortfall gets a pool top-up, like a coach adds eggs
+    if prot_need > Decimal(5):
+        pool = _auto_pool(usable, kosher,
+                          _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
+                          "protein_g", "lean",
+                          prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
+                          skip=_AUTO_NO_COMPONENT)
+        picked = {f["food_version_id"] for f, _ in items}
+        for f2 in pool:
+            p2100 = _per100(f2, "protein_g")
+            if f2["food_version_id"] in picked or not p2100 or p2100 <= 0:
+                continue
+            items.append((f2, min(Decimal(150),
+                                  _round_qty(prot_need * 100 / p2100, Decimal(25)))))
+            break
+    # carb side / fruit: split the carbs (or snack kcal) share
+    side_role = "fruit" if is_snack else "carb"
+    sides = roles.get(side_role) or []
+    if sides:
+        each = Decimal(len(sides))
+        for f in sides:
+            s100 = _per100(f, "kcal" if is_snack else "carbs_g")
+            target = (k_up * Decimal("0.35") if is_snack else c_up * Decimal("0.9")) / each
+            cap = _AUTO_CAP["fruit"] if is_snack else _AUTO_CAP["side"]
+            qty = min(cap, _round_qty(target * 100 / s100, Decimal(25))
+                      if s100 and s100 > 0 else Decimal(150))
+            items.append((f, qty))
+    for f in roles.get("veg") or []:
+        items.append((f, _AUTO_VEG_QTY))
+    for f in roles.get("fat") or []:
+        fa100 = _per100(f, "fat_g")
+        head = f_up - _auto_totals(items)["fat_g"]
+        qty = min(_AUTO_CAP["fat"], _round_qty(head * 100 / fa100, Decimal(5))
+                  if fa100 and fa100 > 0 else Decimal(0))
+        if qty >= _AUTO_MIN_FAT_QTY:
+            items.append((f, qty))
+    return items
+
+
+def _auto_fit_items(items, b) -> None:
+    """In-place shrink. Fat is the binding constraint first: pop the fat
+    topping, then shrink the protein (where most fat rides). Only then the
+    carb/fruit side for carbs, and last the side then protein for kcal."""
+    p_lo, k_up, c_up, f_up = b["p_lo"], b["k_up"], b["c_up"], b["f_up"]
+    side_i = next((i for i, (f, _) in enumerate(items)
+                   if _auto_infer_role(f) in ("carb", "fruit")), None)
+
+    def _fattiest_protein_i():
+        cand = [(i, (_per100(f, "fat_g") or Decimal(0)) * q)
+                for i, (f, q) in enumerate(items)
+                if _auto_infer_role(f) == "protein" and q > Decimal(80)]
+        return max(cand, key=lambda x: x[1])[0] if cand else None
+
+    for _ in range(24):
+        if _auto_fits(items, p_lo, k_up, c_up, f_up):
+            return
+        t = _auto_totals(items)
+        if (t["fat_g"] > f_up and len(items) > 1
+                and _auto_infer_role(items[-1][0]) == "fat"):
+            items.pop()
+        elif t["fat_g"] > f_up and _fattiest_protein_i() is not None:
+            i = _fattiest_protein_i()
+            items[i] = (items[i][0], items[i][1] - 25)
+        elif t["carbs_g"] > c_up and side_i is not None and items[side_i][1] > 0:
+            items[side_i] = (items[side_i][0], max(Decimal(0), items[side_i][1] - 25))
+        elif t["kcal"] > k_up:
+            if side_i is not None and items[side_i][1] > 0:
+                items[side_i] = (items[side_i][0], max(Decimal(0), items[side_i][1] - 25))
+            elif _fattiest_protein_i() is not None:
+                i = _fattiest_protein_i()
+                items[i] = (items[i][0], items[i][1] - 25)
+            else:
+                return
+        else:
+            return
+
+
+def auto_compose_from_choices(slots: List[dict], day_targets: dict,
+                              src: CatalogSource,
+                              *, excluded_food_ids: Optional[set] = None) -> dict:
+    """Caller-picked foods (coach draft or LLM suggestion), engine-sized
+    portions. The caller decides WHAT goes into each slot; the engine
+    decides HOW MUCH under the same budget math and fail-closed filters as
+    auto_compose_day. Unknown / excluded / kosher-mismatched ids are
+    dropped; a slot left with no usable protein falls back to the
+    deterministic pools for its missing structure."""
+    excluded = set(excluded_food_ids or set())
+    usable = [f for f in src.approved_foods()
+              if f["status"] == "approved"
+              and f["food_version_id"] not in excluded
+              and f.get("kosher_evidence") != "non_kosher"]
+    by_id = {f["food_version_id"]: f for f in usable}
+    budgets = _auto_slot_budgets(slots, day_targets)
+
+    meals, unmet = [], []
+    used_ids: set = set()
+    for idx, spec in enumerate(slots):
+        slot, kosher = spec["slot_key"], spec.get("kosher") or "any"
+        b = budgets[idx]
+        allow = _AUTO_KOSHER_ALLOW.get(kosher, _AUTO_KOSHER_ALLOW["any"])
+        roles: Dict[str, list] = {"protein": [], "carb": [], "veg": [],
+                                  "fat": [], "fruit": []}
+        for it in spec.get("items") or []:
+            f = by_id.get(it.get("food_version_id"))
+            if (not f or f.get("kosher_evidence") not in allow
+                    or f["food_version_id"] in used_ids
+                    or any(w in (f.get("name_he") or "") for w in _AUTO_NO_COMPONENT)):
+                continue
+            role = it.get("role")
+            roles[role if role in roles else _auto_infer_role(f)].append(f)
+        def _fresh(pool):
+            """Prefer candidates not already served today."""
+            rest = [f for f in pool if f["food_version_id"] not in used_ids]
+            return rest or pool
+
+        if not roles["protein"]:
+            # no usable protein pick -> deterministic pool, same as other gaps
+            pool = _fresh(_auto_pool(
+                usable, kosher,
+                _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
+                "protein_g", "lean",
+                prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
+                skip=_AUTO_NO_COMPONENT))
+            if pool:
+                roles["protein"] = [pool[idx % len(pool)]]
+        if not roles["protein"]:
+            unmet.append({"slot_key": slot,
+                          "reason": "אין מצרכים מתאימים באילוצי הכשרות/החרגות"})
+            continue
+        if not b["is_snack"]:
+            for role, kinds, pref in (("carb", _AUTO_CARB_KINDS, _AUTO_PREFER_CARB),
+                                      ("veg", _AUTO_VEG_KINDS, _AUTO_PREFER_VEG),
+                                      ("fat", _AUTO_FAT_KINDS, _AUTO_PREFER_FAT)):
+                if not roles[role]:
+                    pool = _fresh(_auto_pool(
+                        usable, kosher, kinds, "kcal", "min",
+                        prefer=pref, skip=_AUTO_NO_COMPONENT))
+                    if pool:
+                        roles[role] = [pool[idx % len(pool)]]
+        elif not roles["fruit"]:
+            pool = _fresh(_auto_pool(
+                usable, kosher, _AUTO_FRUIT_KINDS, "kcal", "min",
+                prefer=_AUTO_PREFER_FRUIT, skip=_AUTO_NO_COMPONENT))
+            if pool:
+                roles["fruit"] = [pool[idx % len(pool)]]
+
+        items = _auto_size_chosen(kosher, roles, b, usable)
+        _auto_fit_items(items, b)
+        items = [(f, q) for f, q in items if q > 0]
+        if items:
+            # lean protein top-up when the pick can't reach the share
+            gap = b["p_lo"] - _auto_totals(items)["protein_g"]
+            if gap > Decimal(5):
+                picked = {f["food_version_id"] for f, _ in items}
+                for f2 in _fresh(_auto_pool(
+                        usable, kosher,
+                        _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
+                        "protein_g", "lean",
+                        prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
+                        skip=_AUTO_NO_COMPONENT)):
+                    if f2["food_version_id"] in picked:
+                        continue
+                    p100 = _per100(f2, "protein_g")
+                    if not p100 or p100 <= 0:
+                        continue
+                    qty = min(Decimal(150),
+                              _round_qty(gap * 100 / p100, Decimal(25)))
+                    trial = items + [(f2, qty)]
+                    t = _auto_totals(trial)
+                    if (t["fat_g"] <= b["f_up"] and t["kcal"] <= b["k_up"]
+                            and t["carbs_g"] <= b["c_up"]):
+                        items = trial
+                        break
+        if not items:
+            unmet.append({"slot_key": slot,
+                          "reason": "אין מצרכים מתאימים באילוצי הכשרות/החרגות"})
+            continue
+        if not _auto_fits(items, b["p_lo"], b["k_up"], b["c_up"], b["f_up"]):
+            unmet.append({"slot_key": slot,
+                          "reason": "הכמויות לא עמדו במלוא התקציב — כדאי לכוון ידנית"})
+        meals.append({
+            "slot_key": slot,
+            "items": [{"food_version_id": f["food_version_id"], "quantity_g": format(q, "f")}
+                      for f, q in items],
+        })
+        used_ids.update(f["food_version_id"] for f, _ in items)
     return {"meals": meals, "unmet": unmet}
 
 

@@ -2286,6 +2286,51 @@ async def test_auto_plan_endpoint(client, parent_headers):
     assert resp.status_code == 400
 
 
+async def test_auto_plan_llm_hybrid(client, parent_headers, monkeypatch):
+    """use_llm=True: the LLM picks WHAT, the engine sizes HOW MUCH under
+    the same budget math; junk/None LLM output falls back to the
+    deterministic composer."""
+    import agents.nutrition_coach_agent as nca
+    user = await _user()
+    cat = (await client.get("/api/meals/catalog")).json()
+    foods = {f["name_he"]: f for f in cat["foods"]}
+    chicken = foods["חזה עוף טרי"]["food_version_id"]
+    rice = foods["אורז מלא מבושל"]["food_version_id"]
+
+    async def fake_picks(slots, day_targets, usable):
+        return {"lunch": [{"food_version_id": chicken, "role": "protein"},
+                          {"food_version_id": rice, "role": "carb"}]}
+    monkeypatch.setattr(nca, "_auto_llm_picks", fake_picks)
+    resp = await client.post(
+        f"/api/meals/{user.id}/auto-plan",
+        json={"slots": [{"slot_key": "lunch", "kosher": "meat"}],
+              "day_targets": {"kcal": {"upper": "1600"},
+                              "protein_g": {"lower": "120"}},
+              "use_llm": True},
+        headers=parent_headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "llm"
+    lunch = next(m for m in body["meals"] if m["slot_key"] == "lunch")
+    ids = {i["food_version_id"] for i in lunch["items"]}
+    assert chicken in ids and rice in ids
+    assert all(Decimal(i["quantity_g"]) > 0 for i in lunch["items"])
+
+    async def no_picks(slots, day_targets, usable):
+        return None
+    monkeypatch.setattr(nca, "_auto_llm_picks", no_picks)
+    resp = await client.post(
+        f"/api/meals/{user.id}/auto-plan",
+        json={"slots": [{"slot_key": "lunch", "kosher": "meat"}],
+              "day_targets": {"kcal": {"upper": "1600"},
+                              "protein_g": {"lower": "120"}},
+              "use_llm": True},
+        headers=parent_headers)
+    body = resp.json()
+    assert body["source"] == "deterministic"
+    assert body["meals"]
+
+
 async def test_coach_catalog_food_lookup_create_and_edit(client, parent_headers, monkeypatch):
     """Coach adds 'שעועית שחורה': internet lookup fills real nutrients
     (unverified until coach checks); PATCH edits values and re-derives flags."""

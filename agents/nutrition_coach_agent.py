@@ -25,6 +25,7 @@ Confirmed profile shape (profile_json, whole-profile replace):
 import asyncio
 from decimal import Decimal
 import json
+import re
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -531,6 +532,7 @@ class FitPortionsRequest(BaseModel):
 class AutoPlanRequest(BaseModel):
     slots: List[dict]          # [{"slot_key": "lunch", "kosher": "meat|dairy|parve|any"}]
     day_targets: Optional[dict] = None  # same shape as plan content day_targets
+    use_llm: bool = False      # try LLM food picks first, engine sizes portions
 
 
 class SubmissionCreate(BaseModel):
@@ -1318,6 +1320,71 @@ async def fit_portions(request: Request, user_id: int, data: FitPortionsRequest,
 # ---------------------------------------------------------------------------
 # auto-plan - deterministic first-draft day builder (draft helper only)
 # ---------------------------------------------------------------------------
+async def _auto_llm_picks(slots: List[dict], day_targets: dict,
+                          usable: List[dict]) -> Optional[dict]:
+    """Ask the LLM which foods to put in each slot (JSON only). Returns
+    {"slot_key": [{food_version_id, role}]} or None on any failure —
+    the engine validates and sizes whatever survives."""
+    candidates = []
+    for f in usable:
+        if any(w in (f.get("name_he") or "") for w in engine._AUTO_NO_COMPONENT):
+            continue
+        candidates.append({
+            "id": f["food_version_id"], "name": f.get("name_he"),
+            "role": engine._auto_infer_role(f),
+            "k": f.get("kosher_evidence"),
+        })
+    if len(candidates) < len(slots):
+        return None
+    system_prompt = (
+        "You compose a daily meal plan for an Israeli child. Reply with a "
+        "single JSON object, no prose: {\"meals\": [{\"slot_key\": \"...\", "
+        "\"items\": [{\"id\": \"<candidate id>\", \"role\": "
+        "\"protein|carb|veg|fat|fruit\"}]}]}. Rules: pick candidates ONLY "
+        "from the provided list, copy ids exactly; a slot must have at "
+        "least one protein; main slots should also get a carb, a veg, and "
+        "optionally a fat; snack slots get a protein plus a fruit; choose "
+        "candidates whose k value is compatible with the slot's kosher "
+        "class (meat slot -> meat/parve, dairy -> dairy/parve, parve -> "
+        "parve only, any -> everything); vary the foods across slots; "
+        "prefer realistic kid-friendly meals."
+    )
+    user_msg = json.dumps({
+        "slots": [{"slot_key": s["slot_key"], "kosher": s.get("kosher") or "any"}
+                  for s in slots],
+        "day_targets": day_targets,
+        "candidates": candidates,
+    }, ensure_ascii=False)
+    try:
+        from tutors import call_llm  # late import like lookup._llm_lookup
+        raw = await asyncio.wait_for(
+            call_llm(system_prompt,
+                     [{"role": "user", "content": user_msg}],
+                     max_tokens=2500),
+            timeout=25)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    try:
+        data = json.loads(m.group(0) if m else raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("meals"), list):
+        return None
+    picks = {}
+    for meal in data["meals"]:
+        if not isinstance(meal, dict):
+            continue
+        sk, its = meal.get("slot_key"), meal.get("items")
+        if not isinstance(its, list):
+            continue
+        picks[sk] = [{"food_version_id": it.get("id"), "role": it.get("role")}
+                     for it in its if isinstance(it, dict) and it.get("id")]
+    return picks or None
+
+
 @router.post("/{user_id}/auto-plan")
 async def auto_plan(request: Request, user_id: int, data: AutoPlanRequest,
                     db: AsyncSession = Depends(get_nutrition_db)):
@@ -1340,8 +1407,28 @@ async def auto_plan(request: Request, user_id: int, data: AutoPlanRequest,
         for food in src.approved_foods():
             if allergies & set(food.get("allergens") or []):
                 excluded.add(food["food_version_id"])
-    return engine.auto_compose_day(
+    if data.use_llm:
+        usable = [f for f in src.approved_foods()
+                  if f["status"] == "approved"
+                  and f["food_version_id"] not in excluded
+                  and f.get("kosher_evidence") != "non_kosher"]
+        try:
+            picks = await _auto_llm_picks(
+                data.slots, data.day_targets or {}, usable)
+        except Exception:
+            picks = None
+        if picks:
+            slots = [dict(s, items=picks.get(s["slot_key"], []))
+                     for s in data.slots]
+            out = engine.auto_compose_from_choices(
+                slots, data.day_targets or {}, src, excluded_food_ids=excluded)
+            if out["meals"]:
+                out["source"] = "llm"
+                return out
+    out = engine.auto_compose_day(
         data.slots, data.day_targets or {}, src, excluded_food_ids=excluded)
+    out["source"] = "deterministic"
+    return out
 
 
 # ---------------------------------------------------------------------------
