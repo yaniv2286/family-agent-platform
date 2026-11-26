@@ -59,6 +59,7 @@ The following agents are built into the Koko backend and run in-process:
 - `koko_math` and `koko_english` — accessed via `/api/tutor/chat` and `/api/tutor/english`.
 - `fitness` — accessed via `/api/fitness/*` endpoints.
 - `nutrition` — currently an event-only collaborator triggered by fitness workouts.
+- `meal_coach` — the full nutrition coach/child product, accessed via `/api/meals/*` (plan drafts, approve/publish, profiles, sessions, proposals, selections, eating events, health intents, bounded LLM assistant).
 
 By default the `AgentConnector` returns a local snapshot for these agents instead of making an outbound HTTP call. To override this and route control-plane commands to a remote instance, set:
 
@@ -177,3 +178,48 @@ python scripts/simulate_children.py --kids ליבי --turns 6 --verbose
 ```
 
 Run before every deploy alongside the mock suite. Non-zero exit = do not deploy.
+
+## Meal Coach QA bot (pre-deploy gate)
+
+`scripts/simulate_meal_flow.py` role-plays the whole nutrition flow: the ADMIN
+coach's one-time setup (profile, draft, validate, approve, publish) and the
+child's daily use (planned meal, alternatives, session rejects/missing
+ingredients, dislikes, saved meals, honest eating log, corrections/voids,
+health blocks) plus a Playwright UI walk and a seeded `persona` section
+(P-checks: CoachPersona + ChildPersona replay a realistic week while an
+invariant oracle re-checks state after every mutating action). Assertions
+C1-C8 (coach), K1-K12 (child) and L1-L5 (live assistant) map to DESIGN
+B01-B12/§10/§12.
+
+```powershell
+python scripts/simulate_meal_flow.py               # coach + child + ui + persona (no LLM cost)
+python scripts/simulate_meal_flow.py --section coach
+python scripts/simulate_meal_flow.py --section persona --seed 7
+python scripts/simulate_meal_flow.py --section llm # live LLM, costs a little
+python scripts/simulate_meal_flow.py --base-url http://localhost:8000
+```
+
+### Postgres lane (mandatory before deploy - production runs Postgres)
+
+The suite and QA bot default to SQLite, which cannot catch PG-only defects
+(DDL type names, transaction-local RLS `app.client_id` lost after a
+commit/rollback). Both shipped broken once and were caught only here. Run
+`tests/test_meal_coach.py` against a throwaway database in the local
+`koko-pg-local` container (port 55432), never the dev `nutrition` DB:
+
+```bash
+docker exec koko-pg-local sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE nutrition_qa OWNER koko_owner" && psql -U "$POSTGRES_USER" -d nutrition_qa -c "GRANT USAGE ON SCHEMA public TO koko_app; ALTER DEFAULT PRIVILEGES FOR ROLE koko_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO koko_app; ALTER DEFAULT PRIVILEGES FOR ROLE koko_owner IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO koko_app;"'
+NUTRITION_DATABASE_URL="postgresql+asyncpg://koko_app:<NUTRITION_APP_PASSWORD>@localhost:55432/nutrition_qa" NUTRITION_ADMIN_DATABASE_URL="postgresql+asyncpg://koko_owner:<NUTRITION_OWNER_PASSWORD>@localhost:55432/nutrition_qa" python -m pytest tests/test_meal_coach.py -q
+docker exec koko-pg-local sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE nutrition_qa"'
+```
+
+Recreate the database rather than `DROP SCHEMA` - dropping the schema also
+drops the default privileges and every test fails with permission denied.
+Code that commits or rolls back and then keeps querying must call
+`nutrition_db.bind_rls_actor(db, user_id)` again.
+
+Default mode uses a fresh temporary nutrition SQLite DB in-process;
+`--section llm` / `--live` makes real LLM calls. Run before every deploy
+alongside the mock suite and `simulate_children.py`. Non-zero exit = do not
+deploy. Never loosen an assertion to go green — fix the defect and add a
+regression in `tests/test_meal_coach.py`.

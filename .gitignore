@@ -31,3 +31,8 @@ logs/
 build_info.json
 nul
 temp/
+
+# QA artifacts
+server.log
+qa_shots/
+tmp_screens/

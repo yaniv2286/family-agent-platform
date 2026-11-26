@@ -183,7 +183,7 @@ async def list_agents(request: Request, db: AsyncSession = Depends(get_db)):
     role = get_current_role(request)
     allowed = None
     if role == Role.CHILD:
-        allowed = {"koko_math", "koko_english", "fitness"}
+        allowed = {"koko_math", "koko_english", "fitness", "meal_coach"}
 
     agents = (await db.execute(select(RegisteredAgent))).scalars().all()
     result = []

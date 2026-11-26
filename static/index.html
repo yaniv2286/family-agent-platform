@@ -1959,10 +1959,14 @@
         .nx-sheet-box {
             background: var(--nx-surface); border-radius: 16px 16px 0 0; box-shadow: var(--nx-shadow-pop);
             width: 100%; max-width: 520px; max-height: 85vh; overflow-y: auto; padding: 8px 20px 20px;
+            position: relative;
             animation: nx-sheet-up .2s ease;
         }
         @keyframes nx-sheet-up { from { transform: translateY(24px); } }
         .nx-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--nx-border); margin: 8px auto 12px; }
+        .nx-sheet-x { position: absolute; top: 10px; inset-inline-start: 14px; width: 28px; height: 28px; border: 0; border-radius: 50%;
+            background: var(--nx-surface2); color: var(--nx-text3); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
+        .nx-sheet-x:hover { background: var(--nx-border); color: var(--nx-text); }
         .nx-menu { position: fixed; z-index: 210; background: var(--nx-surface); border: 1px solid var(--nx-border); border-radius: var(--nx-r8); box-shadow: var(--nx-shadow-pop); min-width: 200px; padding: 4px; }
         .nx-menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; border: 0; background: transparent; padding: 8px 10px; font-size: 14px; color: var(--nx-text2); cursor: pointer; border-radius: 6px; text-align: right; font-family: inherit; }
         .nx-menu button:hover { background: var(--nx-surface2); }
@@ -1992,6 +1996,9 @@
         .nx-meta .nx-badge svg { width: 14px; height: 14px; }
         .nx-ing { display: flex; justify-content: space-between; font-size: 14px; color: var(--nx-text2); padding: 3px 0; }
         .nx-chat-bubble { background: var(--nx-primary-soft); border: 1px solid var(--nx-primary-border); border-radius: var(--nx-r8); padding: 8px 12px; font-size: 13px; color: var(--nx-primary-h); margin-bottom: 10px; }
+        .nx-alfi-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+        .nx-alfi-avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--nx-primary); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+        .nx-alfi-name { font-size: 10.5px; font-weight: 800; letter-spacing: 0.8px; color: var(--nx-primary-h); }
         .nx-summary-nums { display: flex; gap: 16px; font-size: 13px; color: var(--nx-text2); }
         .nx-summary-nums b { font-weight: 600; color: var(--nx-text); }
         .nx-meal-actions { display: grid; gap: 8px; margin-top: 12px; }
@@ -2058,7 +2065,7 @@
                 סוכני ADMIN
             </div>
             <div class="subject-grid" id="admin-grid">
-                <div class="subject-card" data-admin-agent="meal_coach"><div class="icon">🥗</div><h3>סוכן התזונה</h3><p>סביבת מאמן — תכנון, אישור ופרסום תוכניות ארוחות</p></div>
+                <div class="subject-card" data-admin-agent="meal_coach"><div class="icon" style="color:#0f766e"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:40px;height:40px"><path d="M3.5 13h17a8.5 8.5 0 0 1-17 0Z"/><path d="M12 10.6C12 6.6 15.2 3.8 20 3.8c.3 4.8-3.2 6.8-8 6.8Z"/><path d="M12 13v-2.4"/></svg></div><h3>סוכן התזונה</h3><p>סביבת מאמן — תכנון, אישור ופרסום תוכניות ארוחות</p></div>
                 <div class="subject-card" data-admin-agent="fitness"><div class="icon">💪</div><h3>סוכן כושר</h3><p>תוכניות אימון, הרגלים ומעקב התקדמות</p></div>
                 <div class="subject-card" data-admin-agent="neuraltrader"><div class="icon">📈</div><h3>NeuralTrader</h3><p>ביצועי תיק, החלטות AI וניהול סיכונים</p></div>
                 <div class="subject-card" data-admin-agent="logs"><div class="icon">📋</div><h3>לוגים וניטור</h3><p>יומן פעילות חי של כל הסוכנים</p></div>
@@ -2913,7 +2920,7 @@
             'koko_english': { icon: '🔤', title: 'שיעור אנגלית', desc: 'נלמד מילים ומשפטים חדשים באנגלית!' },
             'fitness': { icon: '💪', title: 'סוכן כושר', desc: 'תוכניות אימון, הרגלים ומעקב התקדמות' },
             'neuraltrader': { icon: '📈', title: 'NeuralTrader', desc: 'ביצועי תיק, החלטות AI וניהול סיכונים' },
-            'meal_coach': { icon: '🥗', title: 'סוכן התזונה', desc: 'תוכנית ארוחות משפחתית — תכנון, בחירה ודיווח אכילה' }
+            'meal_coach': { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#0f766e" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:40px;height:40px"><path d="M3.5 13h17a8.5 8.5 0 0 1-17 0Z"/><path d="M12 10.6C12 6.6 15.2 3.8 20 3.8c.3 4.8-3.2 6.8-8 6.8Z"/><path d="M12 13v-2.4"/></svg>', title: 'סוכן התזונה', desc: 'תוכנית ארוחות משפחתית — תכנון, בחירה ודיווח אכילה' }
         };
         const userFacingAgents = new Set(['koko_math', 'koko_english']);
 
@@ -6218,17 +6225,17 @@
         const MEAL_ALLERGEN_NAMES = { gluten: 'גלוטן', sesame: 'שומשום', egg: 'ביצה', milk: 'חלב', peanut: 'בוטנים', nuts: 'אגוזים', soy: 'סויה', fish: 'דגים' };
         const mealsSlotName = key => MEAL_SLOT_NAMES[key] || key;
         const MEAL_BLOCK_HE = [
-            [/pending health/i, 'ממתין לבירור מידע בריאותי אצל ההורה — הצעות חדשות מושהות; אפשר עדיין לרשום אכילה'],
-            [/allergy disclosure/i, 'פרטי האלרגיות טרם הושלמו — ההורה צריך להשלים את הפרופיל כדי לקבל חלופות'],
+            [/pending health/i, 'ממתין לבירור מידע בריאותי אצל המאמן — הצעות חדשות מושהות; אפשר עדיין לרשום אכילה'],
+            [/allergy disclosure/i, 'פרטי האלרגיות טרם הושלמו — המאמן צריך להשלים את הפרופיל כדי לקבל חלופות'],
             [/missing ingredient/i, 'חסר מצרך בארוחה הזו'],
             [/preparation/i, 'לא מתאים למגבלות ההכנה'],
             [/no approved alternatives/i, 'אין חלופות מאושרות לארוחה הזו'],
             [/incomplete/i, 'חלק מהערכים לא ידועים היום — אי אפשר לחשב יתרה'],
             [/rejected in this session/i, 'נדחה בבקשה שלך הפעם'],
             [/never suggest/i, 'סומן "אל תציע שוב"'],
-            [/medical instruction expired/i, 'הנחיית המקצוע פגה תוקף — ההורה צריך לחדש אותה; אפשר עדיין לרשום אכילה'],
-            [/medical instruction missing/i, 'צריך הנחיית איש מקצוע לפני הצעות חדשות — ההורה יסדיר את זה'],
-            [/active plan violates medical instruction/i, 'התוכנית לא מתאימה להנחיית המקצוע החדשה — ההורה צריך לעדכן אותה; אפשר עדיין לרשום אכילה'],
+            [/medical instruction expired/i, 'הנחיית המקצוע פגה תוקף — המאמן צריך לחדש אותה; אפשר עדיין לרשום אכילה'],
+            [/medical instruction missing/i, 'צריך הנחיית איש מקצוע לפני הצעות חדשות — המאמן יסדיר את זה'],
+            [/active plan violates medical instruction/i, 'התוכנית לא מתאימה להנחיית המקצוע החדשה — המאמן צריך לעדכן אותה; אפשר עדיין לרשום אכילה'],
             [/day bound/i, 'הנחיית המקצוע מגבילה את סכום היום וחלק מהערכים לא ידועים'],
             [/active plan fails current validation/i, 'התוכנית הפעילה כבר לא עוברת את הבדיקות העדכניות'],
             [/combination budget exhausted/i, 'החיפוש לא הסתיים — נסו שוב או פשטו את הארוחה'],
@@ -6237,8 +6244,22 @@
             [/not approved for slot/i, 'המתכון לא מאושר לארוחה הזו'],
             [/saved meal fails current rules/i, 'הארוחה השמורה כבר לא עוברת את הכללים העדכניים'],
             [/unknown data|unknown nutrients/i, 'חלק מהערכים לא ידועים — אי אפשר לבדוק את ההנחיה'],
+            [/unverified food data/i, 'מאכל חדש שממתין לאימות נתונים אצל המאמן'],
+            [/no approved foods left|no composition fits/i, 'לא נשארו מצרכים מאושרים להרכיב מהם מנה'],
+            [/nothing left after removing missing/i, 'לא נשארו מצרכים אחרי הורדת החסרים'],
+            [/fail checks without the missing/i, 'המצרכים שנשארו לא עוברים את הבדיקות'],
         ];
-        const mealReasonHe = r => (MEAL_BLOCK_HE.find(([re]) => re.test(r)) || [null, r])[1];
+        const mealReasonHe = r => {
+            const m = r.match(/^(\S+): ([\s\S]*)$/);
+            const text = m ? m[2] : r;
+            const he = (MEAL_BLOCK_HE.find(([re]) => re.test(text)) || [null, text])[1];
+            if (m) {
+                const rec = mealsRecipeIndex[m[1]], food = mealsFoodIndex[m[1]];
+                const name = rec?.name_he || food?.name_he;
+                if (name) return `${name} — ${he}`;
+            }
+            return he;
+        };
         let mealsActivePlan = null;
         let mealsCatalog = { foods: [], recipes: [] };
         let mealsFoodIndex = {}, mealsRecipeIndex = {};
@@ -6275,6 +6296,8 @@
             'more-horizontal': '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
             'log-out': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
             search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+            nutrition: '<path d="M3.5 13h17a8.5 8.5 0 0 1-17 0Z"/><path d="M12 10.6C12 6.6 15.2 3.8 20 3.8c.3 4.8-3.2 6.8-8 6.8Z"/><path d="M12 13v-2.4"/>',
+            robot: '<path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
             check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
         };
         function nxIcon(name, size = 20) {
@@ -6376,11 +6399,12 @@
             wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true');
             const box = document.createElement('div');
             box.className = 'nx-sheet-box';
-            box.innerHTML = '<div class="nx-sheet-handle"></div>';
+            box.innerHTML = '<div class="nx-sheet-handle"></div><button type="button" class="nx-sheet-x" aria-label="סגירה">✕</button>';
             wrap.appendChild(box);
             document.body.appendChild(overlay); document.body.appendChild(wrap);
             _nxSheetOpen = { overlay, wrap };
             overlay.addEventListener('click', nxCloseSheet);
+            box.querySelector('.nx-sheet-x').addEventListener('click', nxCloseSheet);
             wrap.addEventListener('keydown', e => { if (e.key === 'Escape') nxCloseSheet(); });
             return box;
         }
@@ -6453,7 +6477,8 @@
         }
         const mealFoodName = fid => mealsFoodIndex[fid]?.name_he || fid;
         const mealRecipe = rid => mealsRecipeIndex[rid] || null;
-        const mealComplianceHe = label => label === 'approved_alternative' ? 'חלופה שאושרה ע״י ההורה'
+        const mealComplianceHe = label => label === 'approved_alternative' ? 'חלופה שאושרה ע״י המאמן'
+            : label === 'smart_composition' ? 'הרכבה חכמה — הותאם ליעדיך'
             : label === 'saved_meal_revalidated' ? 'מהארוחות שלי — נבדקה מחדש כרגע'
             : 'חושב לפי הכללים שנקבעו';
         const MEAL_EQUIPMENT_HE = {
@@ -7464,11 +7489,28 @@
             el.innerHTML = `<p style="color:var(--nx-text3);font-size:12px">מהדורת קטלוג: <bdi>${escapeFitnessHtml(d.catalog_epoch || '?')}</bdi> · קטלוג סינתטי להדגמה — לא נתוני מזון אמיתיים</p>`;
             const table = document.createElement('table');
             table.className = 'nx-table';
-            table.innerHTML = '<tr><th>מזון</th><th>קק״ל</th><th>בסיס</th></tr>';
+            table.innerHTML = '<tr><th>מזון</th><th>קק״ל</th><th>בסיס</th><th>אימות</th></tr>';
             (d.foods || []).forEach(f => {
                 const n = (f.nutrients || {});
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${escapeFitnessHtml(f.name_he)}</td><td><bdi>${n.kcal ?? '—'}</bdi></td><td><bdi>${f.basis_g}</bdi> גרם</td>`;
+                const fid = f.food_version_id || f.id;
+                const unverified = f.verified === 0 || f.verified === false;
+                const sourceHe = f.source === 'builtin-synthetic' ? 'הערכה מובנית'
+                    : f.source === 'auto_lookup' ? 'חיפוש חיצוני' : null;
+                tr.innerHTML = `<td>${escapeFitnessHtml(f.name_he)}${unverified ? ' ' + nxBadge('לא מאומת', 'warning') : ''}${sourceHe ? `<div style="font-size:11px;color:var(--nx-text3)">${sourceHe}</div>` : ''}</td>
+                    <td><bdi>${n.kcal ?? '—'}</bdi></td><td><bdi>${f.basis_g}</bdi> גרם</td><td data-verify-cell></td>`;
+                if (unverified) {
+                    const btn = document.createElement('button');
+                    btn.className = 'nx-btn nx-btn-primary nx-btn-sm';
+                    btn.textContent = 'אמת';
+                    btn.addEventListener('click', async () => {
+                        btn.disabled = true;
+                        const resp = await safeFetch(`/api/meals/catalog/food-versions/${encodeURIComponent(fid)}/verify`, { method: 'POST' });
+                        if (resp.ok) { await mealsFetchCatalog(); renderMealsCatalogPanel(); }
+                        else { btn.disabled = false; mealsMessage('אימות נכשל', false); }
+                    });
+                    tr.querySelector('[data-verify-cell]').appendChild(btn);
+                }
                 table.appendChild(tr);
             });
             el.appendChild(table);
@@ -7578,7 +7620,7 @@
         function renderMealsToday(el, plan, day) {
             const blockedEl = document.getElementById('meals-blocked');
             blockedEl.style.display = 'none';
-            if (!plan) { el.innerHTML = '<div class="nx-card"><div class="nx-empty">עוד אין תוכנית פעילה — ההורה יכין אחת בסביבת המאמן.</div></div>'; return; }
+            if (!plan) { el.innerHTML = '<div class="nx-card"><div class="nx-empty">עוד אין תוכנית פעילה — המאמן יכין אחת בסביבת המאמן.</div></div>'; return; }
             const voided = new Set((day?.events || []).filter(e => e.event_type === 'void').map(e => e.corrects_event_id));
             const eatenBySlot = {};
             (day?.events || []).filter(e => e.event_type === 'recorded' && !voided.has(e.id) && (e.source_context || '').startsWith('slot:'))
@@ -7683,8 +7725,10 @@
             panel.innerHTML = `<div class="nx-overlay" data-sheet-close></div>
                 <div class="nx-sheet" role="dialog" aria-modal="true" aria-label="חלופה">
                     <div class="nx-sheet-box"><div class="nx-sheet-handle"></div>
+                        <button type="button" class="nx-sheet-x" aria-label="סגירה">✕</button>
                         <div class="nx-sheet-body" style="padding:0 16px 16px">${headHtml}</div></div></div>`;
             panel.querySelector('[data-sheet-close]').addEventListener('click', () => { panel.innerHTML = ''; });
+            panel.querySelector('.nx-sheet-x').addEventListener('click', () => { panel.innerHTML = ''; });
             const sheet = panel.querySelector('.nx-sheet');
             sheet.addEventListener('keydown', e => {
                 if (e.key === 'Escape') { panel.innerHTML = ''; return; }
@@ -7749,10 +7793,27 @@
 
         function mealsRenderJob(panel, job, slotKey, explanation = null) {
             if (job.state !== 'eligible_candidate' || !job.proposal) {
-                const reasons = (job.reasons || []).map(mealReasonHe).join(' · ') || 'לא נמצאה חלופה מתאימה כרגע.';
+                const reasons = (job.reasons || []).map(mealReasonHe);
                 const bodyEl = mealsSheetOpen(panel);
-                bodyEl.innerHTML = nxCallout('warning', 'alert-triangle', escapeFitnessHtml(reasons)) +
+                const listHtml = reasons.length
+                    ? `<ul style="margin:10px 0 0;padding-inline-start:20px;font-size:14px;color:var(--nx-text2)">` +
+                      reasons.map(r => `<li>${escapeFitnessHtml(r)}</li>`).join('') + `</ul>` : '';
+                bodyEl.innerHTML = nxCallout('warning', 'alert-triangle', 'לא נשארה חלופה זמינה לארוחה הזאת:') + listHtml +
                     `<button class="nx-btn nx-btn-secondary nx-btn-lg" style="width:100%;margin-top:12px" data-close-sheet>סגור</button>`;
+                if (mealsSess[slotKey]) {
+                    const reset = document.createElement('button');
+                    reset.className = 'nx-btn nx-btn-primary nx-btn-lg';
+                    reset.style.cssText = 'width:100%;margin-top:8px';
+                    reset.textContent = 'בטל סירובים ונסה שוב';
+                    reset.addEventListener('click', async () => {
+                        reset.disabled = true;
+                        if (await mealsPatchSession(slotKey, { missing_food_ids: [], rejected_recipe_ids: [] })) {
+                            const job2 = await mealsPropose(slotKey);
+                            if (job2) mealsRenderJob(panel, job2, slotKey);
+                        } else { reset.disabled = false; }
+                    });
+                    bodyEl.appendChild(reset);
+                }
                 bodyEl.querySelector('[data-close-sheet]').addEventListener('click', () => mealsSheetClose(panel));
                 return;
             }
@@ -7762,18 +7823,26 @@
             if (explanation) {
                 const note = document.createElement('div');
                 note.className = 'nx-chat-bubble';
-                note.textContent = explanation;
+                note.innerHTML = `<div class="nx-alfi-row"><span class="nx-alfi-avatar">${nxIcon('robot', 14)}</span><span class="nx-alfi-name">ALFI</span></div>`;
+                const t = document.createElement('div');
+                t.textContent = explanation;
+                note.appendChild(t);
                 bodyEl.appendChild(note);
             }
             const metaChips = [];
             if (p.total_minutes != null) metaChips.push(`<span class="nx-badge">${nxIcon('clock', 14)} <bdi>${p.total_minutes}</bdi> דק׳</span>`);
             if ((p.equipment || []).length) metaChips.push(`<span class="nx-badge">${nxIcon('utensils', 14)} ${mealEquipmentHtml(p.equipment)}</span>`);
+            const unverifiedBadge = (p.items || []).some(i => i.unverified)
+                ? ' ' + nxBadge('נתונים משוערים — ממתין לאימות המאמן', 'warning') : '';
             const box = document.createElement('div');
             box.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
                     <strong style="font-size:16px">${escapeFitnessHtml(p.name_he || 'חלופה')}</strong>
                     <span data-more-slot style="flex:none"></span>
                 </div>
-                <div style="margin-top:4px">${nxBadge(mealComplianceHe(p.compliance_label), 'info')}</div>
+                <div style="margin-top:4px">${nxBadge(mealComplianceHe(p.composed ? 'smart_composition' : p.compliance_label), 'info')}${unverifiedBadge}</div>
+                ${p.adapted && (p.dropped_food_ids || []).length
+                    ? `<div style="font-size:13px;color:var(--nx-text3);margin-top:4px">בלי: ${p.dropped_food_ids.map(fid => escapeFitnessHtml((mealsFoodIndex[fid] || {}).name_he || fid)).join(' · ')}</div>`
+                    : ''}
                 <div style="margin:8px 0">${mealItemsHtml(p.items)}</div>
                 ${metaChips.length ? `<div class="nx-meta">${metaChips.join('')}</div>` : ''}`;
             if ((p.steps_he || []).length) {
@@ -7808,17 +7877,49 @@
                 return b;
             };
             mkChip('חסר לי מצרך', () => mealsMissingPicker(box, p, slotKey, panel));
-            mkChip('לא בא לי', async () => {
+            // One "another option" = session reject + next proposal. An
+            // unmerged "עוד אפשרות" that re-proposes with no state change is a
+            // no-op (deterministic engine returns the same dish); composed
+            // proposals have no recipe id to reject, so the chip is hidden.
+            if (!p.composed) mkChip('עוד אפשרות', async () => {
                 if (await mealsPatchSession(slotKey, { rejected_recipe_ids: [p.recipe_version_id] })) {
                     const job2 = await mealsPropose(slotKey);
                     if (job2) mealsRenderJob(panel, job2, slotKey);
                 }
             });
-            mkChip('עוד אפשרות', async () => {
-                const job2 = await mealsPropose(slotKey);
-                if (job2) mealsRenderJob(panel, job2, slotKey);
-            });
             box.appendChild(chipsRow);
+            // Requested foods that didn't fit the served dish: show why and
+            // offer fitting substitutes. Clicking a substitute asks ALFI for
+            // it through the same bounded assistant path.
+            (job.unmet_requests || []).forEach(u => {
+                const row = document.createElement('div');
+                row.style.cssText = 'margin-top:10px;border-top:1px dashed var(--nx-border);padding-top:10px';
+                const reason = u.reason_nutrient
+                    ? `חורג מיעד ${MEAL_NUTRIENT_HE[u.reason_nutrient] || u.reason_nutrient} שנותר להיום`
+                    : 'לא נכנס ליעדי היום';
+                row.innerHTML = `<div style="font-size:13px;color:var(--nx-text2)"><b>${escapeFitnessHtml(u.name_he)}</b> — ${escapeFitnessHtml(reason)}</div>`;
+                if ((u.substitutes || []).length) {
+                    const lab = document.createElement('div');
+                    lab.style.cssText = 'font-size:12px;color:var(--nx-text3);margin-top:6px';
+                    lab.textContent = 'אפשר במקום:';
+                    row.appendChild(lab);
+                    const subs = document.createElement('div');
+                    subs.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:6px';
+                    u.substitutes.forEach(sub => {
+                        const chip = document.createElement('button');
+                        chip.className = 'nx-chip nx-chip-selectable';
+                        chip.textContent = sub.name_he;
+                        chip.addEventListener('click', () => {
+                            const inp = panel.querySelector('input[placeholder*="ALFI"]');
+                            const btn = panel.querySelector('button[aria-label="שלח"]');
+                            if (inp && btn) { inp.value = `בא לי ${sub.name_he}`; btn.click(); }
+                        });
+                        subs.appendChild(chip);
+                    });
+                    row.appendChild(subs);
+                }
+                box.appendChild(row);
+            });
             const moreBtn = document.createElement('button');
             moreBtn.className = 'nx-btn nx-btn-ghost nx-btn-icon';
             moreBtn.setAttribute('aria-label', 'אפשרויות נוספות');
@@ -7832,7 +7933,7 @@
                     });
                     mealsMessage(r.ok ? 'נשמר בארוחות שלי' : 'שמירה נכשלה', r.ok);
                 }],
-                ['אל תציע לי את זה שוב', async () => {
+                ...(!p.composed ? [['אל תציע לי את זה שוב', async () => {
                     if (!await nxConfirm('לא להציע שוב?', `לא להציע את "${p.name_he || 'המתכון'}" יותר? זה יישמר בפרופיל שלך ויוסיף לרשימת "לא להציע".`, 'אל תציע')) return;
                     const pr = await safeFetch(`/api/meals/${selectedUserId}/profile`);
                     const profile = pr.ok ? (await pr.json()).profile || {} : {};
@@ -7846,7 +7947,7 @@
                     const cr = await safeFetch(`/api/meals/${selectedUserId}/profile-change-intents/${id}/confirm`, { method: 'POST' });
                     if (cr.ok) { mealsMessage('נשמר — לא נציע את זה שוב.'); mealsAlternatives(panel.closest('[data-slot-card]'), slotKey); }
                     else mealsMessage('שמירת ההעדפה נכשלה', false);
-                }],
+                }]] : []),
             ]));
             box.querySelector('[data-more-slot]').appendChild(moreBtn);
             bodyEl.appendChild(box);
@@ -7889,7 +7990,7 @@
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:14px;border-top:1px dashed var(--nx-border);padding-top:12px';
             const input = document.createElement('input');
-            input.placeholder = 'ספרי לי מה מתאים לך';
+            input.placeholder = 'ספרי ל-ALFI מה מתאים לך';
             input.maxLength = 500;
             input.className = 'nx-input';
             input.style.flex = '1';
@@ -7917,11 +8018,11 @@
                     if (!r.ok) { mealsMessage('העוזרת לא זמינה כרגע — נסו "עוד אפשרות"', false); return; }
                     sess.rev = d.session_revision || sess.rev;
                     if (d.health_preview) {
-                        if (await nxConfirm('עדכון בריאותי', 'לעדכן מידע בריאותי? זה יעצור הצעות עד שההורה יבדוק.', 'עדכן')) {
+                        if (await nxConfirm('עדכון בריאותי', 'לעדכן מידע בריאותי? זה יעצור הצעות עד שהמאמן יבדוק.', 'עדכן')) {
                             await safeFetch(`/api/meals/${selectedUserId}/health-update-intents`, {
                                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ reported_text: message, source_context: 'assistant_chat' }) });
-                            mealsMessage('נשלח לבדיקת ההורה.');
+                            mealsMessage('נשלח לבדיקת המאמן.');
                         }
                     }
                     mealsRenderJob(panel, d.job || {}, slotKey, d.explanation_he || null);

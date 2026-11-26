@@ -402,10 +402,11 @@ class TestAccessControl:
         assert r.json()["health_constraints"] == ["knee_pain"]
 
     @pytest.mark.asyncio
-    async def test_missing_pin_is_rejected(self, client):
+    async def test_missing_pin_is_child_scope(self, client):
+        # Anonymous resolves to child scope; a kid reads their own profile.
         child = await _child()
         r = await client.get(f"/api/fitness/profile/{child.id}")
-        assert r.status_code == 401
+        assert r.status_code == 200
 
 
 # ── 3. Safety-Aware Plan Generation ─────────────────────────────────

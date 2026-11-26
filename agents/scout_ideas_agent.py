@@ -443,7 +443,7 @@ async def _extract_candidates(items: List[dict]) -> List[dict]:
 - כלול רק נכסים ספציפיים (מניה/טיקר/ETF/קריפטו) - לא נושאים כלליים כמו "הנדל"ן" או "השקל".
 - התעלם מפרסומות, ספאם וקידום מכירות.
 - direction: long = המלצת קנייה, short = מכירה/שורט, watch = אזכור מעניין בלי המלצה ברורה.
-- מקסימום 15 מועמדים, בסדר יורד של חשיבות.
+- מקסימום 20 מועמדים, בסדר יורד של חשיבות.
 - אם אין מועמדים - החזר {"candidates": []}."""
 
     try:
@@ -451,7 +451,7 @@ async def _extract_candidates(items: List[dict]) -> List[dict]:
         raw = await BaseAgent()._call_llm(
             system_prompt,
             [{"role": "user", "content": block}],
-            max_tokens=1200,
+            max_tokens=2000,
             primary_model="gpt-4o-mini",
             fallback_model="gpt-4o-mini",
             json_response=True,
@@ -575,50 +575,78 @@ async def _research_candidate(candidate: dict) -> Optional[dict]:
     }
 
 
-def _build_research_digest(candidates: List[dict], max_ideas: int) -> str:
-    """Format the final digest: verdict + numeric reasoning + source channel."""
-    lines = ["💼 מחקר השקעות מעמיק - מבוסס מחקר אינטרנטי חי\n"]
-    direction_he = {"long": "לונג", "short": "שורט", "watch": "מעקב"}
+def _build_research_digest(candidates: List[dict], max_ideas: int) -> List[str]:
+    """Format the digest as one or more Telegram-sized messages.
 
+    Each idea is an indivisible block; blocks are packed greedily so no
+    message exceeds the Telegram limit and no idea is cut mid-block.
+    """
+    direction_he = {"long": "לונג", "short": "שורט", "watch": "מעקב"}
+    blocks: List[str] = []
     for i, cand in enumerate(candidates[:max_ideas], start=1):
         research = cand.get("research") or {}
         verdict = research.get("verdict", "זהירות")
         emoji = _RESEARCH_VERDICTS.get(verdict, "⚠️")
         direction = direction_he.get(cand.get("direction", "watch"), "מעקב")
-        lines.append(f"{i}. **{cand['asset']}** — {emoji} {verdict} (הערוץ הציע: {direction})")
+        lines = [f"{i}. **{cand['asset']}** — {emoji} {verdict} (הערוץ הציע: {direction})"]
+        if cand.get("sources"):
+            lines.append(f"   📌 נסרק מ: {', '.join(cand['sources'])}")
         if cand.get("reason"):
             lines.append(f"   הערוץ אומר: {cand['reason']}")
         if research.get("reasoning"):
             lines.append(f"   ניתוח: {research['reasoning']}")
         if research.get("confidence"):
             lines.append(f"   רמת ביטחון: {research['confidence']}")
-        if cand.get("sources"):
-            lines.append(f"   📌 ערוץ: {', '.join(cand['sources'])}")
-        lines.append("")
+        blocks.append("\n".join(lines))
 
-    lines.append("⚖️ מידע בלבד - לא ייעוץ השקעות. בדוק בעצמך לפני פעולה.")
-    text = "\n".join(lines)
-    if len(text) > MAX_TELEGRAM_MESSAGE_CHARS:
-        text = text[: MAX_TELEGRAM_MESSAGE_CHARS - 60] + "\n…(קוצר)"
-    return text
+    header = "💼 מחקר השקעות מעמיק - מבוסס מחקר אינטרנטי חי\n"
+    footer = "⚖️ מידע בלבד - לא ייעוץ השקעות. בדוק בעצמך לפני פעולה."
+    # Reserve room for the scope header prepended to the first chunk and the
+    # disclaimer appended to the last.
+    budget = MAX_TELEGRAM_MESSAGE_CHARS - len(header) - len(footer) - 120
+    chunks: List[str] = []
+    cur: List[str] = []
+    cur_len = 0
+    for block in blocks:
+        if cur and cur_len + len(block) + 1 > budget:
+            chunks.append("\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(block)
+        cur_len += len(block) + 1
+    chunks.append("\n".join(cur))
+    for idx, chunk in enumerate(chunks):
+        if idx > 0:
+            chunk = f"(המשך {idx + 1}/{len(chunks)})\n{chunk}"
+        chunks[idx] = chunk
+    chunks[0] = header + chunks[0]
+    chunks[-1] = chunks[-1] + f"\n\n{footer}"
+    return chunks
 
 
-async def _researched_summarize(items: List[dict]) -> Optional[str]:
+async def _researched_summarize(items: List[dict]) -> Optional[List[str]]:
     """Full pipeline: extract candidates, deep-research top N, format digest.
 
-    Returns None when the research path is unavailable (no GEMINI_API_KEY or
-    extraction produced nothing) so the caller falls back to the plain digest.
+    Returns a list of Telegram-sized message chunks, or None when the
+    research path is unavailable (no GEMINI_API_KEY or extraction produced
+    nothing) so the caller falls back to the plain digest.
     """
     if not os.getenv("GEMINI_API_KEY"):
         return None
-    max_ideas = int(os.getenv("SCOUT_RESEARCH_MAX_IDEAS", "8"))
+    max_ideas = int(os.getenv("SCOUT_RESEARCH_MAX_IDEAS", "15"))
 
     candidates = await _extract_candidates(items)
     if not candidates:
         return None
 
-    for cand in candidates[:max_ideas]:
-        cand["research"] = await _research_candidate(cand)
+    # Research calls run concurrently (bounded) - sequential Gemini calls at
+    # ~20s each would turn a 15-idea digest into a five-minute wait.
+    sem = asyncio.Semaphore(4)
+
+    async def _one(cand: dict) -> None:
+        async with sem:
+            cand["research"] = await _research_candidate(cand)
+
+    await asyncio.gather(*(_one(c) for c in candidates[:max_ideas]))
 
     return _build_research_digest(candidates, max_ideas)
 
@@ -723,12 +751,26 @@ async def run_scout_digest(channels: Optional[List[str]] = None) -> dict:
 
         # Prefer the deep-research pipeline (Gemini + live web search) when
         # configured; otherwise keep the plain LLM digest.
-        summary = await _researched_summarize(pending_items)
-        if summary is None:
-            summary = await _summarize_items(pending_items)
+        summary_chunks = await _researched_summarize(pending_items)
+        if summary_chunks is None:
+            summary_chunks = [await _summarize_items(pending_items)]
         stamp = datetime.utcnow().strftime("%d/%m/%Y %H:%M")
-        digest_text = f"📈 Scout Ideas - {stamp} UTC\n{summary}"
-        sent = await _send_via_messenger(digest_text)
+        if channels is None:
+            scope_note = "כל הערוצים"
+        else:
+            titles = await _channel_titles()
+            names = [titles.get(c) or c for c in channels[:4]]
+            scope_note = ", ".join(names) + (
+                f" ועוד {len(channels) - 4}" if len(channels) > 4 else ""
+            )
+        header = f"📈 Scout Ideas - {stamp} UTC\n🔎 סריקת: {scope_note}\n"
+        digest_text = header + "\n".join(summary_chunks)
+        sent = True
+        for idx, chunk in enumerate(summary_chunks):
+            msg = header + chunk if idx == 0 else chunk
+            if not await _send_via_messenger(msg):
+                sent = False
+                break
 
         async with SessionLocal() as db:
             if sent:
@@ -841,8 +883,16 @@ def _channel_keyboard(channels: List[str], titles: Dict[str, str]) -> dict:
         "callback_data": "s:all",
     }]]
     row: List[dict] = []
+    seen_labels: Dict[str, int] = {}
     for i, chan in enumerate(channels, start=1):
         label = titles.get(chan) or chan
+        # Two sources can share an identical Telegram title (e.g. a channel and
+        # its discussion group) - keep their buttons distinguishable.
+        if label in seen_labels:
+            seen_labels[label] += 1
+            label = f"{label} ({seen_labels[label]})"
+        else:
+            seen_labels[label] = 1
         row.append({"text": label[:40], "callback_data": f"s:{i}"})
         if len(row) == 2:
             rows.append(row)
@@ -866,7 +916,11 @@ async def _channel_titles() -> Dict[str, str]:
             )).all()
             for source, author in rows:
                 if author and source.startswith("telegram:"):
-                    titles[source.split(":", 1)[1]] = author
+                    handle = source.split(":", 1)[1]
+                    # Items collected before channel titles were stored keep
+                    # the raw handle as author - that is NOT a resolved name.
+                    if author != handle:
+                        titles[handle] = author
     except Exception:
         logger.exception("Failed to resolve channel titles for /scout_list")
     return titles
@@ -947,9 +1001,14 @@ async def handle_telegram_command(event, payload):
         await _bot_reply("⏳ סריקה כבר רצה כרגע - הדידג'סט ישלח בסיומה.")
         return {"handled": True, "action": "busy"}
 
-    scope = "כל הערוצים" if channels is None else f"{len(channels)} ערוצים שנבחרו"
+    if channels is None:
+        scope = "כל הערוצים"
+    else:
+        titles = await _resolve_channel_titles(channels)
+        names = [titles.get(c) or c for c in channels[:3]]
+        scope = ", ".join(names) + (f" ועוד {len(channels) - 3}" if len(channels) > 3 else "")
     await _bot_reply(
-        f"🔎 מתחיל סריקה יזומה של {scope}…\n"
+        f"🔎 מתחיל סריקה יזומה — {scope}…\n"
         "(איסוף הודעות + מחקר Gemini חי - בערך 2-4 דקות)"
     )
 

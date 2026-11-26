@@ -507,6 +507,18 @@ BUILTIN_AGENTS = [
         "secret_env": None,
     },
     {
+        "agent_id": "meal_coach",
+        "name": "Meal Coach",
+        "description": "Coach-led family meal planning: draft, approve, publish, and honest eating ledger.",
+        "kind": "wellness",
+        "capabilities": ["plan", "publish", "log", "catalog"],
+        "is_builtin": 1,
+        "module_path": "agents.nutrition_coach_agent",
+        "router_attr": "router",
+        "remote_url": None,
+        "secret_env": None,
+    },
+    {
         "agent_id": "orchestrator",
         "name": "Orchestrator",
         "description": "Meta-agent that coordinates other agents, schedules reports, and escalates to parents.",

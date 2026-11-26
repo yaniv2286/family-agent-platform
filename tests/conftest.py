@@ -15,6 +15,12 @@ os.environ["TELEGRAM_CHAT_ID"] = "123456"
 _test_db_dir = tempfile.mkdtemp(prefix="koko-tests-")
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_db_dir}/family_platform_test.db"
 os.environ["TUTOR_HISTORY_DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_db_dir}/tutor_history_test.db"
+# NUTRITION_DATABASE_URL/NUTRITION_ADMIN_DATABASE_URL can be pre-set to a
+# real PostgreSQL to run the same suite against the RLS deployment path.
+os.environ.setdefault("NUTRITION_DATABASE_URL", f"sqlite+aiosqlite:///{_test_db_dir}/nutrition_test.db")
+# Each test gets a fresh event loop; pooled asyncpg connections cannot cross
+# loops, so the nutrition engine must not retain connections between tests.
+os.environ.setdefault("NUTRITION_POOL", "null")
 
 # database.py creates its engines at import time, so it must be imported after
 # the environment variables above are set.
@@ -27,9 +33,13 @@ async def setup_database():
     """Create the test DB schema once per test session and clean up afterwards."""
     await db.init_db()
     await db.init_tutor_history_db()
+    from nutrition_db import init_nutrition_db, nutrition_engine
+
+    await init_nutrition_db()
     yield
     await db.engine.dispose()
     await db.tutor_history_engine.dispose()
+    await nutrition_engine.dispose()
     shutil.rmtree(_test_db_dir, ignore_errors=True)
 
 

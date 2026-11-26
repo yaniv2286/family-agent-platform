@@ -19,3 +19,4 @@ locust
 feedparser==6.0.11
 Telethon==1.38.1
 discord.py==2.5.2
+asyncpg==0.30.0

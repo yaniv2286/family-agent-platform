@@ -126,9 +126,13 @@ async def test_me_returns_child_for_child_pin(client, child_headers):
     assert resp.json()["role"] == "child"
 
 
-async def test_control_endpoints_require_pin(client):
+async def test_control_endpoints_child_scope_without_pin(client):
+    """Anonymous callers resolve to child scope: they may list agents but
+    only see the child-visible set (fail-closed for parent/admin data)."""
     resp = await client.get("/api/control/agents")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    ids = {a["agent_id"] for a in resp.json()["agents"]}
+    assert ids <= {"koko_math", "koko_english", "fitness", "meal_coach"}
 
 
 # ── registry ─────────────────────────────────────────────────────────────────
@@ -136,14 +140,14 @@ async def test_list_agents_includes_built_ins(client, parent_headers):
     resp = await client.get("/api/control/agents", headers=parent_headers)
     assert resp.status_code == 200
     ids = {a["agent_id"] for a in resp.json()["agents"]}
-    assert ids == {"koko_math", "koko_english", "fitness", "nutrition", "neuraltrader", "volatilityhunter", "orchestrator", "messenger", "data", "scout_ideas"}
+    assert ids == {"koko_math", "koko_english", "fitness", "nutrition", "meal_coach", "neuraltrader", "volatilityhunter", "orchestrator", "messenger", "data", "scout_ideas"}
 
 
 async def test_child_only_sees_permitted_agents(client, child_headers):
     resp = await client.get("/api/control/agents", headers=child_headers)
     assert resp.status_code == 200
     ids = {a["agent_id"] for a in resp.json()["agents"]}
-    assert ids == {"koko_math", "koko_english", "fitness"}
+    assert ids == {"koko_math", "koko_english", "fitness", "meal_coach"}
 
 
 async def test_register_agent_is_admin_only(client, parent_headers, admin_headers):

@@ -354,6 +354,52 @@ async def test_telegram_command_list_shows_numbered_channels(client, monkeypatch
     assert {b["callback_data"] for b in flat} == {"s:1", "s:2"}
 
 
+def test_research_digest_splits_into_telegram_chunks():
+    """15 researched ideas exceed one Telegram message - the digest must be
+    split on idea boundaries, every chunk under the limit, none truncated."""
+    import agents.scout_ideas_agent as scout
+
+    candidates = [
+        {
+            "asset": f"ASSET{i}",
+            "direction": "long",
+            "reason": "סיבה " * 30,
+            "sources": ["@chan"],
+            "research": {
+                "verdict": "מומלץ",
+                "reasoning": "ניתוח עם מספרים " * 40,
+                "confidence": "גבוהה",
+            },
+        }
+        for i in range(15)
+    ]
+    chunks = scout._build_research_digest(candidates, 15)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert len(chunk) <= scout.MAX_TELEGRAM_MESSAGE_CHARS
+    joined = "\n".join(chunks)
+    assert "…(קוצר)" not in joined
+    assert "15. **ASSET14**" in joined  # last idea survives, numbered
+    assert chunks[0].startswith("💼")
+    assert chunks[-1].rstrip().endswith("בדוק בעצמך לפני פעולה.")
+
+
+def test_channel_keyboard_disambiguates_identical_titles():
+    """A channel and its discussion group can share the same Telegram title -
+    their buttons must stay visually distinct."""
+    import agents.scout_ideas_agent as scout
+
+    kb = scout._channel_keyboard(
+        ["1302869860", "311082011"],
+        {"1302869860": "Bulls & Bears", "311082011": "Bulls & Bears"},
+    )
+    labels = [b["text"] for row in kb["inline_keyboard"][1:] for b in row]
+    assert len(set(labels)) == 2
+    assert labels[0] == "Bulls & Bears"
+    assert labels[1].startswith("Bulls & Bears")
+    assert labels[1] != labels[0]
+
+
 async def test_run_now_accepts_channel_filter(client, monkeypatch):
     """POST /api/scout/run-now with {"channels": [...]} must forward the
     filter into the digest run."""

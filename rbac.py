@@ -28,14 +28,18 @@ class Role:
     CHILD = "child"
 
 
-_CHILD_AGENTS = {"koko_math", "koko_english", "fitness"}
+_CHILD_AGENTS = {"koko_math", "koko_english", "fitness", "meal_coach"}
 _MONITOR_ONLY = {"volatilityhunter"}
 _ADMIN_ONLY_COMMAND = {"neuraltrader"}
 
 
 def resolve_role(pin: Optional[str]) -> Optional[str]:
+    # Missing PIN = anonymous child scope (family UX: kids enter without a
+    # password; only the ADMIN profile prompts for one). An incorrect PIN
+    # still fails closed with 401. Parent/admin surfaces stay gated by
+    # _require_coach / require_permission regardless.
     if not pin:
-        return None
+        return Role.CHILD
     if os.getenv("ADMIN_PIN") and pin == os.getenv("ADMIN_PIN"):
         return Role.ADMIN
     # Preserve legacy APP_PIN behaviour: when PARENT_PIN is not set, APP_PIN acts as the parent PIN.
