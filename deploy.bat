@@ -352,4 +352,4 @@ ssh %SSH_OPTS% %SERVER% "docker compose -p neuraltrader ps" || echo "[SMOKE] neu
 if "%DEPLOY_VOLATILITYHUNTER%"=="1" ssh %SSH_OPTS% %SERVER% "docker compose -p volatilityhunter ps" || echo "[SMOKE] volatilityhunter stack status check failed"
 
 echo [OK] Deployment complete.
-pause
+pause
