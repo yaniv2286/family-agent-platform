@@ -373,10 +373,11 @@ async def _insert_lookup_food(db, requested_name: str, looked: dict) -> str:
             derive_attributes(name_he, "generic", looked.get("allergens"),
                               looked.get("nutrients") or {}),
             ensure_ascii=False),
-        kosher_evidence="unknown", status="approved",
+        kosher_evidence=looked.get("kosher") or "unknown", status="approved",
         aliases_json=json.dumps(aliases, ensure_ascii=False),
         evidence=looked.get("evidence") or looked.get("source") or "auto_lookup",
-        source="auto_lookup" if looked.get("source") == "openfoodfacts" else "builtin-synthetic",
+        source="auto_lookup" if looked.get("source") == "openfoodfacts"
+               else (looked.get("source") or "builtin-synthetic"),
         verified=0,
     ))
     await db.flush()

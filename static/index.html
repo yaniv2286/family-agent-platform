@@ -6217,8 +6217,15 @@
            DESIGN invariants mirrored in the UI: a published plan is not a
            selection; a selection is never an eating event. Eating is recorded
            only through an explicit "אכלתי" tap or a confirmed report. */
-        const MEAL_SLOT_NAMES = { breakfast: 'ארוחת בוקר', lunch: 'ארוחת צהריים', dinner: 'ארוחת ערב', snack: 'ביניים' };
-        const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
+        const MEAL_SLOT_NAMES = { breakfast: 'ארוחת בוקר', snack: 'ביניים', lunch: 'ארוחת צהריים', snack2: 'ביניים נוספת', dinner: 'ארוחת ערב', evening_snack: 'ארוחה קלה בערב' };
+        const MEAL_SLOTS = ['breakfast', 'snack', 'lunch', 'snack2', 'dinner', 'evening_snack'];
+        const MEAL_DEFAULT_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
+        const MEAL_SLOT_FAMILY = { snack2: 'snack', evening_snack: 'snack' };
+        const mealSlotFamily = k => MEAL_SLOT_FAMILY[k] || k;
+        const recipeFitsSlot = (r, slot) => {
+            const fams = (r?.slots || []).map(mealSlotFamily);
+            return !fams.length || fams.includes(mealSlotFamily(slot));
+        };
         const MEAL_NUTRIENTS = [['kcal', 'קק״ל'], ['protein_g', 'חלבון (גרם)'], ['carbs_g', 'פחמימות (גרם)'], ['fat_g', 'שומן (גרם)'], ['fiber_g', 'סיבים (גרם)'], ['sodium_mg', 'נתרן (מ״ג)']];
         const MEAL_RULE_NUTRIENTS = [...MEAL_NUTRIENTS, ['sugar_g', 'סוכר (גרם)'], ['sat_fat_g', 'שומן רווי (גרם)'], ['cholesterol_mg', 'כולסטרול (מ״ג)']];
         const MEAL_NUTRIENT_HE = Object.fromEntries(MEAL_RULE_NUTRIENTS);
@@ -6272,7 +6279,8 @@
         let mealsCoachChild = null;
         const wiz = { state: null, activePlan: null, profile: {}, profileVersion: 0,
                       draftId: null, revision: null, contentHash: null, inputVector: null,
-                      approvalId: null, targets: {}, meals: {}, alts: {} };
+                      approvalId: null, targets: {}, meals: {}, alts: {},
+                      chosenSlots: [...MEAL_DEFAULT_SLOTS], slotKosher: {} };
 
         // ================= nx design system helpers =================
         const NX_ICONS = {
@@ -6660,10 +6668,17 @@
                 wiz.targets[n] = { lower: b?.lower ?? '', upper: b?.upper ?? '' };
             });
             wiz.meals = {}; wiz.alts = {};
+            const declared = Array.isArray(content.meal_slots) && content.meal_slots.length ? content.meal_slots : [];
+            const used = new Set(declared);
+            (content.meals || []).forEach(m => used.add(m.slot_key));
+            Object.keys(content.alternatives || {}).forEach(s => used.add(s));
+            wiz.chosenSlots = MEAL_SLOTS.filter(s => used.has(s));
+            if (!wiz.chosenSlots.length) wiz.chosenSlots = [...MEAL_DEFAULT_SLOTS];
             (content.meals || []).forEach(m => {
                 const qty = {};
                 (m.items || []).forEach(i => { qty[i.food_version_id] = String(i.quantity_g); });
-                wiz.meals[m.slot_key] = { rid: m.recipe_version_id || '', qty };
+                wiz.meals[m.slot_key] = { rid: m.recipe_version_id || '', qty,
+                    items: m.recipe_version_id ? null : (m.items || []).map(i => i.food_version_id) };
             });
             Object.entries(content.alternatives || {}).forEach(([slot, rids]) => { wiz.alts[slot] = rids || []; });
         }
@@ -6676,19 +6691,29 @@
                 if (b.upper !== '' && b.upper != null) t.upper = String(b.upper);
                 if (Object.keys(t).length) targets[n] = t;
             });
-            const meals = MEAL_SLOTS.map(slot => {
+            const meals = wiz.chosenSlots.map(slot => {
                 const m = wiz.meals[slot];
-                if (!m || !m.rid) return null;
-                const rec = mealRecipe(m.rid);
-                const items = (rec?.items || []).map(i => ({
-                    food_version_id: i.food_version_id,
-                    quantity_g: String(m.qty[i.food_version_id] ?? i.default_g),
-                }));
-                return { slot_key: slot, recipe_version_id: m.rid, items };
+                if (!m) return null;
+                if (m.rid) {
+                    const rec = mealRecipe(m.rid);
+                    const items = (rec?.items || []).map(i => ({
+                        food_version_id: i.food_version_id,
+                        quantity_g: String(m.qty[i.food_version_id] ?? i.default_g),
+                    }));
+                    return { slot_key: slot, recipe_version_id: m.rid, items };
+                }
+                if (m.items?.length) {
+                    return { slot_key: slot, items: m.items.map(fid => ({
+                        food_version_id: fid,
+                        quantity_g: String(m.qty[fid] ?? '100'),
+                    })) };
+                }
+                return null;
             }).filter(Boolean);
             const alternatives = {};
-            MEAL_SLOTS.forEach(slot => { if (wiz.alts[slot]?.length) alternatives[slot] = wiz.alts[slot]; });
-            return { name: `תוכנית יומית - ${mealsCoachChild?.name || ''}`, day_targets: targets, meals, alternatives };
+            wiz.chosenSlots.forEach(slot => { if (wiz.alts[slot]?.length) alternatives[slot] = wiz.alts[slot]; });
+            return { name: `תוכנית יומית - ${mealsCoachChild?.name || ''}`, day_targets: targets,
+                     meal_slots: [...wiz.chosenSlots], meals, alternatives };
         }
 
         // ---------- wizard step renderers ----------
@@ -6714,7 +6739,10 @@
             const nameOf = id => (items.find(it => it.id === id) || {}).name || id;
             const renderChips = () => {
                 chips.innerHTML = '';
+                const MAX_CHIPS = 12;
+                let shown = 0;
                 selected.forEach(id => {
+                    if (++shown > MAX_CHIPS) return;
                     const chip = document.createElement('button');
                     chip.className = 'nx-chip'; chip.type = 'button';
                     chip.innerHTML = `${escapeFitnessHtml(nameOf(id))} ${nxIcon('x', 12)}`;
@@ -6722,6 +6750,11 @@
                     chip.addEventListener('click', () => { selected.delete(id); onToggle(id, false); renderChips(); renderList(search.value.trim()); });
                     chips.appendChild(chip);
                 });
+                const rest = selected.size - Math.min(selected.size, MAX_CHIPS);
+                const sum = document.createElement('span');
+                sum.className = 'nx-chip';
+                sum.textContent = rest > 0 ? `ועוד ${rest} נבחרו` : `${selected.size} נבחרו`;
+                chips.appendChild(sum);
             };
             const renderList = filter => {
                 list.innerHTML = '';
@@ -6751,7 +6784,6 @@
             const allAllergens = [...new Set([...allergens, ...(p.allergies || [])])];
             const foodItems = (mealsCatalog.foods || []).map(f => ({ id: f.food_version_id || f.id, name: f.name_he }));
             const recipeItems = (mealsCatalog.recipes || []).map(r => ({ id: r.recipe_version_id || r.id, name: r.name_he }));
-            const habitual = new Set(p.habitual_food_ids || []);
             const excluded = new Set(p.excluded_food_ids || []);
             const disliked = new Set(p.disliked_recipe_ids || []);
             const prep = p.preparation_defaults || {};
@@ -6784,8 +6816,9 @@
                         ${rc('wiz-kosher', 'none', 'ללא דרישה', '', p.kosher_mode !== 'strict')}
                         ${rc('wiz-kosher', 'strict', 'כשרות מלאה', 'דורש ראיות', p.kosher_mode === 'strict')}
                     </div>
-                    <div class="nx-field"><span class="nx-label">מאכלים קבועים בבית</span><div id="wiz-habitual"></div></div>
-                    <div class="nx-field"><span class="nx-label">מזונות מוחרגים</span><div id="wiz-excluded"></div></div>
+                    <div class="nx-field"><span class="nx-label">מזונות להחרגה מהתפריט</span>
+                        <div class="nx-helper" style="margin:0 0 6px">כל המאכלים זמינים בברירת מחדל — סמני רק מה שלא להציע בכלל</div>
+                        <div id="wiz-excluded"></div></div>
                     <div class="nx-field"><span class="nx-label">מתכונים שלא להציע שוב</span>
                         <div class="nx-helper" style="margin:0 0 6px">חלופות בלבד — לא מסיר ארוחה מתוכננת</div>
                         <div id="wiz-disliked"></div></div>
@@ -6813,7 +6846,6 @@
             const updMed = () => { const v = el.querySelector('input[name="wiz-med"]:checked')?.value; medNote.style.display = (v === 'yes' || v === 'unsure') ? 'block' : 'none'; };
             el.querySelectorAll('input[name="wiz-med"]').forEach(r => r.addEventListener('change', updMed));
             updMed();
-            wizMulti(el.querySelector('#wiz-habitual'), foodItems, habitual, (id, on) => on ? habitual.add(id) : habitual.delete(id));
             wizMulti(el.querySelector('#wiz-excluded'), foodItems, excluded, (id, on) => on ? excluded.add(id) : excluded.delete(id));
             wizMulti(el.querySelector('#wiz-disliked'), recipeItems, disliked, (id, on) => on ? disliked.add(id) : disliked.delete(id));
             const confirmCb = el.querySelector('#wiz-profile-confirm');
@@ -6830,7 +6862,7 @@
                     medical_condition_declared: medV,
                     allergies: mode === 'declared' ? [...allergenBox.querySelectorAll('[data-allergen]:checked')].map(c => c.dataset.allergen) : [],
                     kosher_mode: el.querySelector('input[name="wiz-kosher"]:checked')?.value || 'none',
-                    habitual_food_ids: [...habitual],
+                    habitual_food_ids: [],
                     excluded_food_ids: [...excluded],
                     disliked_recipe_ids: [...disliked],
                     preparation_defaults: (() => { const m = el.querySelector('#wiz-prep-min').value; return m === '' ? {} : { max_total_minutes: Number(m) }; })(),
@@ -7144,30 +7176,133 @@
             el.innerHTML = `<div class="nx-card-head"><div>
                     <h3 class="nx-card-title">ארוחות מתוכננות</h3>
                     <p class="nx-card-desc">לכל ארוחה בוחרים מתכון מהקטלוג; הכמויות ניתנות לעריכה רק בצעדים שהמתכון מכריז.</p></div></div>
-                <div class="nx-card-body"><div id="wiz-meals-slots" style="display:grid;gap:14px"></div></div>`;
-            const slotsEl = el.querySelector('#wiz-meals-slots');
+                <div class="nx-card-body"><div id="wiz-structure-picker" style="margin-bottom:14px"></div>
+                    <div id="wiz-meals-slots" style="display:grid;gap:14px"></div></div>`;
+            const picker = el.querySelector('#wiz-structure-picker');
+            picker.innerHTML = `<strong style="font-size:14px">מבנה ארוחות</strong>
+                <div class="nx-meta" style="margin:2px 0 8px">בוחרים כמה ארוחות יהיו ביום של הילד — מארוחה אחת ועד שש.</div>`;
+            const pickRow = document.createElement('div');
+            pickRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap';
             MEAL_SLOTS.forEach(slot => {
+                const lab = document.createElement('label');
+                lab.style.cssText = 'display:flex;gap:6px;align-items:center;min-height:36px;font-size:14px;cursor:pointer';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox'; cb.checked = wiz.chosenSlots.includes(slot);
+                cb.style.cssText = 'accent-color:var(--nx-primary);width:16px;height:16px';
+                cb.addEventListener('change', () => {
+                    if (!cb.checked && wiz.chosenSlots.length <= 1) { cb.checked = true; nxToast('חייבת להישאר לפחות ארוחה אחת'); return; }
+                    wiz.chosenSlots = MEAL_SLOTS.filter(s => s === slot ? cb.checked : wiz.chosenSlots.includes(s));
+                    renderWizMeals(); renderWizAlts();
+                });
+                lab.appendChild(cb);
+                lab.appendChild(document.createTextNode(mealsSlotName(slot)));
+                pickRow.appendChild(lab);
+            });
+            picker.appendChild(pickRow);
+            // Auto-compose bar: kosher split + one-click draft builder.
+            const autoBar = document.createElement('div');
+            autoBar.style.cssText = 'margin-top:12px;padding:10px 12px;border:1px dashed #cfdcd6;border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+            autoBar.innerHTML = `<strong style="font-size:13px">הצעת תפריט אוטומטית:</strong>
+                <label style="font-size:13px">בשרי <input id="wiz-auto-meat" type="number" min="0" max="6" value="0" class="nx-input" style="width:52px;padding:4px 6px"></label>
+                <label style="font-size:13px">חלבי <input id="wiz-auto-dairy" type="number" min="0" max="6" value="0" class="nx-input" style="width:52px;padding:4px 6px"></label>
+                <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" id="wiz-auto-gen">הצע ארוחות</button>
+                <span id="wiz-auto-msg" style="font-size:12px;color:var(--nx-text3)"></span>`;
+            picker.appendChild(autoBar);
+            autoBar.querySelector('#wiz-auto-gen').addEventListener('click', async () => {
+                const meatN = Number(autoBar.querySelector('#wiz-auto-meat').value) || 0;
+                const dairyN = Number(autoBar.querySelector('#wiz-auto-dairy').value) || 0;
+                const msg = autoBar.querySelector('#wiz-auto-msg');
+                // Meat goes to lunch first, then dinner, then the rest in order;
+                // dairy fills breakfast/snacks-style slots first.
+                const order = wiz.chosenSlots.slice().sort((a, b) =>
+                    ({ lunch: 0, dinner: 1 }[a] ?? 2) - ({ lunch: 0, dinner: 1 }[b] ?? 2));
+                order.forEach((s, i) => {
+                    wiz.slotKosher[s] = i < meatN ? 'meat' : (i < meatN + dairyN ? 'dairy' : 'any');
+                });
+                msg.textContent = 'מרכיב הצעה...';
+                const slotsPayload = wiz.chosenSlots.map(s => ({ slot_key: s, kosher: wiz.slotKosher[s] || 'any' }));
+                const targets = {};
+                Object.entries(wiz.targets).forEach(([n, b]) => {
+                    const t = {};
+                    if (b.lower !== '' && b.lower != null) t.lower = String(b.lower);
+                    if (b.upper !== '' && b.upper != null) t.upper = String(b.upper);
+                    if (Object.keys(t).length) targets[n] = t;
+                });
+                const r = await safeFetch(`/api/meals/${mealsUid()}/auto-plan`, { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slots: slotsPayload, day_targets: targets }) });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { msg.textContent = 'ההצעה נכשלה'; return; }
+                (d.meals || []).forEach(m => {
+                    wiz.meals[m.slot_key] = { rid: '', qty: {},
+                        items: (m.items || []).map(i => i.food_version_id) };
+                    (m.items || []).forEach(i => { wiz.meals[m.slot_key].qty[i.food_version_id] = i.quantity_g; });
+                });
+                const unmetN = (d.unmet || []).length;
+                msg.textContent = `הוצעו ${(d.meals || []).length} ארוחות` + (unmetN ? ` — ${unmetN} ארוחות לתשומת לב` : '');
+                renderWizMeals(); renderWizAlts();
+            });
+            const slotsEl = el.querySelector('#wiz-meals-slots');
+            const foodOpts = (mealsCatalog.foods || []).map(f =>
+                `<option value="${escapeFitnessHtml(f.name_he)}"></option>`).join('');
+            const foodByName = Object.fromEntries((mealsCatalog.foods || []).map(f => [f.name_he, f.food_version_id || f.id]));
+            slotsEl.insertAdjacentHTML('beforeend', `<datalist id="wiz-foods-dl">${foodOpts}</datalist>`);
+            wiz.chosenSlots.forEach(slot => {
                 const box = document.createElement('div');
                 box.className = 'nx-card';
                 box.style.marginBottom = '0';
-                const allowed = (mealsCatalog.recipes || []).filter(r => (r.slots || []).includes(slot));
+                const allowed = (mealsCatalog.recipes || []).filter(r => recipeFitsSlot(r, slot));
                 const cur = wiz.meals[slot] || { rid: '', qty: {} };
-                const options = [`<option value="">— ללא ארוחה —</option>`]
+                const options = [`<option value="">— מנה מורכבת / ללא —</option>`]
                     .concat(allowed.map(r => `<option value="${r.recipe_version_id || r.id}" ${cur.rid === (r.recipe_version_id || r.id) ? 'selected' : ''}>${escapeFitnessHtml(r.name_he)}</option>`));
+                const kosherSel = [['any', 'הכל'], ['meat', 'בשרי'], ['dairy', 'חלבי'], ['parve', 'פרווה']]
+                    .map(([v, l]) => `<option value="${v}" ${(wiz.slotKosher[slot] || 'any') === v ? 'selected' : ''}>${l}</option>`).join('');
                 box.innerHTML = `<div class="nx-card-body" style="padding:14px 16px">
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                         <strong style="font-size:14px">${mealsSlotName(slot)}</strong>
-                        <select data-slot="${slot}" class="nx-select" style="flex:1;min-width:200px;max-width:320px">${options.join('')}</select></div>
+                        <select data-slot="${slot}" class="nx-select" style="flex:1;min-width:200px;max-width:320px">${options.join('')}</select>
+                        <select data-kosher="${slot}" class="nx-select" style="width:auto;font-size:12px" title="סוג הארוחה להצעה האוטומטית">${kosherSel}</select></div>
                     <div data-qty-box="${slot}" style="margin-top:8px"></div>
                     <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                         <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" data-fit="${slot}">התאם כמויות להנחיה</button>
                         <span data-fit-msg="${slot}" style="font-size:13px"></span>
                     </div></div>`;
                 const sel = box.querySelector('select');
+                box.querySelector('[data-kosher]').addEventListener('change', e => { wiz.slotKosher[slot] = e.target.value; });
+                const renderAdhoc = () => {
+                    const qb = box.querySelector(`[data-qty-box="${slot}"]`);
+                    const items = wiz.meals[slot]?.items || [];
+                    if (!items.length) { qb.innerHTML = ''; return; }
+                    qb.innerHTML = `<div class="nx-meta" style="margin-bottom:8px">${nxBadge('מנה מורכבת — עריכה חופשית של מצרכים וכמויות')}</div>
+                        <table class="nx-table"><tr><th>מצרך</th><th>כמות</th><th></th></tr>` +
+                        items.map(fid => `<tr><td>${escapeFitnessHtml(mealFoodName(fid))}</td>
+                            <td><span class="nx-input-wrap" style="width:120px"><input type="number" data-qty-fid="${fid}" class="nx-input" value="${escapeFitnessHtml(String((wiz.meals[slot].qty || {})[fid] ?? '100'))}" min="0" step="10"><span class="nx-unit">גרם</span></span></td>
+                            <td><button type="button" class="nx-btn nx-btn-sm" data-del-fid="${fid}" title="הסר מצרך" style="padding:2px 8px">✕</button></td></tr>`).join('') + `</table>
+                        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+                            <input list="wiz-foods-dl" data-add-inp class="nx-input" style="flex:1;max-width:260px" placeholder="הוסף מצרך...">
+                            <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" data-add-btn>הוסף</button>
+                        </div>`;
+                    nxHydrateIcons(qb);
+                    qb.querySelectorAll('[data-qty-fid]').forEach(inp => inp.addEventListener('input', () => {
+                        wiz.meals[slot].qty[inp.dataset.qtyFid] = inp.value;
+                    }));
+                    qb.querySelectorAll('[data-del-fid]').forEach(btn => btn.addEventListener('click', () => {
+                        wiz.meals[slot].items = items.filter(f => f !== btn.dataset.delFid);
+                        renderAdhoc();
+                    }));
+                    qb.querySelector('[data-add-btn]').addEventListener('click', () => {
+                        const inp = qb.querySelector('[data-add-inp]');
+                        const fid = foodByName[inp.value.trim()];
+                        if (!fid) { inp.value = ''; return; }
+                        if (!wiz.meals[slot].items.includes(fid)) wiz.meals[slot].items.push(fid);
+                        inp.value = '';
+                        renderAdhoc();
+                    });
+                };
                 const renderQty = rid => {
                     const qb = box.querySelector(`[data-qty-box="${slot}"]`);
                     const rec = mealRecipe(rid);
-                    if (!rec) { qb.innerHTML = ''; return; }
+                    if (!rec) { renderAdhoc(); return; }
                     qb.innerHTML = `<div class="nx-meta" style="margin-bottom:8px">
                             ${nxBadge(`${nxIcon('clock', 14)} <bdi>${rec.active_minutes ?? '?'}</bdi> דק׳ עבודה · <bdi>${rec.total_minutes ?? '?'}</bdi> סה״כ`)}
                             ${nxBadge(`ציוד: ${mealEquipmentHtml(rec.equipment)}`)}</div>
@@ -7193,7 +7328,7 @@
                     const msg = box.querySelector(`[data-fit-msg="${slot}"]`);
                     if (!rid) { msg.textContent = 'בחרו מתכון קודם'; msg.style.color = 'var(--nx-danger)'; return; }
                     msg.textContent = 'בודק כמויות...'; msg.style.color = 'var(--nx-text3)';
-                    const otherMeals = MEAL_SLOTS.filter(s2 => s2 !== slot && wiz.meals[s2]?.rid).map(s2 => ({
+                    const otherMeals = wiz.chosenSlots.filter(s2 => s2 !== slot && wiz.meals[s2]?.rid).map(s2 => ({
                         slot_key: s2,
                         items: (mealRecipe(wiz.meals[s2].rid)?.items || []).map(i => ({
                             food_version_id: i.food_version_id,
@@ -7227,8 +7362,8 @@
                     <p class="nx-card-desc">רק מתכונים שמסומנים כאן יכולים להוצע לילד כחלופה. בלי חלופות — רק הארוחה המתוכננת.</p></div></div>
                 <div class="nx-card-body"><div id="wiz-alts-slots" style="display:grid;gap:14px"></div></div>`;
             const slotsEl = el.querySelector('#wiz-alts-slots');
-            MEAL_SLOTS.forEach(slot => {
-                const allowed = (mealsCatalog.recipes || []).filter(r => (r.slots || []).includes(slot));
+            wiz.chosenSlots.forEach(slot => {
+                const allowed = (mealsCatalog.recipes || []).filter(r => recipeFitsSlot(r, slot));
                 const box = document.createElement('div');
                 box.className = 'nx-card';
                 box.style.marginBottom = '0';
@@ -7266,13 +7401,14 @@
             } else {
                 const activeMeals = Object.fromEntries((active.meals || []).map(m => [m.slot_key, m.recipe_version_id]));
                 const draftMeals = Object.fromEntries(draft.meals.map(m => [m.slot_key, m.recipe_version_id]));
-                MEAL_SLOTS.forEach(slot => {
+                const aAlt = active.alternatives || {}, dAlt = draft.alternatives || {};
+                const diffSlots = MEAL_SLOTS.filter(s => s in activeMeals || s in draftMeals || s in aAlt || s in dAlt);
+                diffSlots.forEach(slot => {
                     const a = activeMeals[slot], d = draftMeals[slot];
                     if (a !== d) lines.push({ kind: a && d ? 'chg' : a ? 'del' : 'add',
                         text: `${mealsSlotName(slot)}: ${a ? mealRecipe(a)?.name_he || a : 'ללא'} ← ${d ? mealRecipe(d)?.name_he || d : 'ללא'}` });
                 });
-                const aAlt = active.alternatives || {}, dAlt = draft.alternatives || {};
-                MEAL_SLOTS.forEach(slot => {
+                diffSlots.forEach(slot => {
                     const added = (dAlt[slot] || []).filter(r => !(aAlt[slot] || []).includes(r));
                     const removed = (aAlt[slot] || []).filter(r => !(dAlt[slot] || []).includes(r));
                     added.forEach(r => lines.push({ kind: 'add', text: `${mealsSlotName(slot)} חלופות — נוספה ${mealRecipe(r)?.name_he || r}` }));
@@ -7315,11 +7451,8 @@
                             <button class="nx-btn nx-btn-primary nx-btn-block" id="wiz-publish" style="margin-top:8px" disabled>פרסם</button>
                         </div>
                         <div id="wiz-review-status" class="nx-error-text" style="margin-top:10px"></div>
-                        <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--nx-text3);font-size:13px">מתקדם — JSON (קריאה בלבד)</summary>
-                            <pre id="wiz-json-view" style="direction:ltr;text-align:left;font:11px/1.5 Consolas,monospace;background:var(--nx-surface2);padding:10px;border-radius:8px;overflow:auto"></pre></details>
                     </div></div>
                 </div></div>`;
-            el.querySelector('#wiz-json-view').textContent = JSON.stringify(wizContent(), null, 2);
             const status = el.querySelector('#wiz-review-status');
             const issuesBox = el.querySelector('#wiz-issues');
             const btns = { save: el.querySelector('#wiz-save'), validate: el.querySelector('#wiz-validate'), approve: el.querySelector('#wiz-approve'), publish: el.querySelector('#wiz-publish') };
@@ -7346,7 +7479,6 @@
                 wiz.approvalId = null; wiz.contentHash = null; wiz.inputVector = null;
                 btns.approve.disabled = true; btns.publish.disabled = true;
                 paintSteps(0);
-                el.querySelector('#wiz-json-view').textContent = JSON.stringify(wizContent(), null, 2);
             };
             ['wiz-meals-card', 'wiz-targets-card', 'wiz-alts-card'].forEach(id => {
                 const pane = document.getElementById(id);
@@ -7482,23 +7614,116 @@
         }
 
         // ---------- shared catalog / submissions panels ----------
+        const MEAL_FOOD_KINDS = ['generic','poultry','meat','fish','seafood','egg','dairy','bread','grain',
+            'legume','vegetable','fruit','nut_seed','fat_oil','sauce','snack','sweet','beverage','prepared'];
+        const MEAL_KOSHER_OPTS = [['unknown','לא ידוע'],['parve','פרווה'],['dairy','חלבי'],['meat','בשרי'],['non_kosher','לא כשר']];
+        const MEAL_EDIT_NUTRIENTS = ['kcal','protein_g','carbs_g','fat_g','fiber_g','sugar_g','sodium_mg','sat_fat_g','cholesterol_mg'];
+
+        function mealFoodEditForm(f) {
+            // Shared form for add/edit: name, kind, kosher + per-100g nutrient grid.
+            const form = document.createElement('div');
+            const n = f?.nutrients || {};
+            form.innerHTML = `<div class="nx-field"><span class="nx-label">שם המזון</span>
+                    <input class="nx-input" data-f-name value="${escapeFitnessHtml(f?.name_he || '')}"></div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <div class="nx-field" style="flex:1;min-width:140px"><span class="nx-label">סוג</span>
+                        <select class="nx-select" data-f-kind>${MEAL_FOOD_KINDS.map(k =>
+                            `<option value="${k}" ${f?.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
+                    <div class="nx-field" style="flex:1;min-width:140px"><span class="nx-label">כשרות</span>
+                        <select class="nx-select" data-f-kosher>${MEAL_KOSHER_OPTS.map(([v, l]) =>
+                            `<option value="${v}" ${f?.kosher_evidence === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+                <div class="nx-helper" style="margin:2px 0 6px">ערכים ל-100 גרם — ריק = לא ידוע (אף פעם לא 0)</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">` +
+                MEAL_EDIT_NUTRIENTS.map(k => `<div class="nx-field"><span class="nx-label" style="font-size:11px">${MEAL_NUTRIENT_HE[k] || k}</span>
+                    <input class="nx-input" data-nutr="${k}" type="number" min="0" step="any" value="${n[k] ?? ''}"></div>`).join('') +
+                `</div>`;
+            return form;
+        }
+
+        function mealFoodFormValues(form) {
+            const nutrients = {};
+            form.querySelectorAll('[data-nutr]').forEach(inp => {
+                if (inp.value !== '') nutrients[inp.dataset.nutr] = inp.value;
+            });
+            return { name_he: form.querySelector('[data-f-name]').value.trim(),
+                     kind: form.querySelector('[data-f-kind]').value,
+                     kosher_evidence: form.querySelector('[data-f-kosher]').value,
+                     nutrients };
+        }
+
+        async function mealEditFoodDialog(food) {
+            const form = mealFoodEditForm(food);
+            const ok = await nxDialog({ title: `עריכת ${food.name_he}`, body: form,
+                actions: [{ label: 'ביטול', kind: 'secondary', value: false },
+                          { label: 'שמור', kind: 'primary', value: true }] });
+            if (!ok) return;
+            const body = mealFoodFormValues(form);
+            if (!body.name_he) { mealsMessage('חסר שם', false); return; }
+            const fid = food.food_version_id || food.id;
+            const resp = await safeFetch(`/api/meals/catalog/food-versions/${encodeURIComponent(fid)}`,
+                { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body) });
+            if (resp.ok) { nxToast('נשמר'); await mealsFetchCatalog(); renderMealsCatalogPanel(); }
+            else mealsMessage('שמירה נכשלה: ' + mealsErr(resp, await resp.json().catch(() => null)), false);
+        }
+
+        async function mealAddFoodDialog() {
+            // Step 1: name only - the server fetches real values from the internet.
+            const nameForm = document.createElement('div');
+            nameForm.innerHTML = `<div class="nx-field"><span class="nx-label">שם המזון</span>
+                    <input class="nx-input" data-f-name placeholder='למשל: שעועית שחורה'></div>
+                <div class="nx-helper">ננסה להביא ערכים אמיתיים מהאינטרנט; אם לא נמצא — תמלאו ידנית.</div>`;
+            const ok = await nxDialog({ title: 'הוספת מצרך לקטלוג', body: nameForm,
+                actions: [{ label: 'ביטול', kind: 'secondary', value: false },
+                          { label: 'חפש והוסף', kind: 'primary', value: true }] });
+            if (!ok) return;
+            const name = nameForm.querySelector('[data-f-name]').value.trim();
+            if (!name) return;
+            const uid = mealsUid();
+            const resp = await safeFetch(`/api/meals/${uid}/catalog/foods`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name_he: name }) });
+            const d = await resp.json().catch(() => ({}));
+            if (resp.ok && d.state === 'created') {
+                nxToast(d.verified ? 'נוסף לקטלוג' : 'נוסף — ממתין לאימות נתונים');
+                await mealsFetchCatalog(); renderMealsCatalogPanel();
+                return;
+            }
+            // Step 2: lookup missed - manual entry with the same edit form.
+            const form = mealFoodEditForm({ name_he: name });
+            const ok2 = await nxDialog({ title: `לא נמצאו נתונים — הזנה ידנית: ${name}`, body: form,
+                actions: [{ label: 'ביטול', kind: 'secondary', value: false },
+                          { label: 'שמור', kind: 'primary', value: true }] });
+            if (!ok2) return;
+            const body = mealFoodFormValues(form);
+            if (!body.name_he || !Object.keys(body.nutrients).length) { mealsMessage('חסר שם או ערך תזונתי אחד לפחות', false); return; }
+            const resp2 = await safeFetch(`/api/meals/${uid}/catalog/foods`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, lookup: false }) });
+            const d2 = await resp2.json().catch(() => ({}));
+            if (resp2.ok && d2.state === 'created') { nxToast('נוסף לקטלוג'); await mealsFetchCatalog(); renderMealsCatalogPanel(); }
+            else mealsMessage('הוספה נכשלה: ' + mealsErr(resp2, d2), false);
+        }
+
         function renderMealsCatalogPanel() {
             const el = document.getElementById('meals-catalog-list');
             const d = mealsCatalog;
             el.className = '';
-            el.innerHTML = `<p style="color:var(--nx-text3);font-size:12px">מהדורת קטלוג: <bdi>${escapeFitnessHtml(d.catalog_epoch || '?')}</bdi> · קטלוג סינתטי להדגמה — לא נתוני מזון אמיתיים</p>`;
+            el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <p style="color:var(--nx-text3);font-size:12px;margin:0">מהדורת קטלוג: <bdi>${escapeFitnessHtml(d.catalog_epoch || '?')}</bdi> · ${(d.foods || []).length} מצרכים</p>
+                <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" id="meals-add-food">${nxIcon('plus', 14)} הוסף מצרך</button></div>`;
+            el.querySelector('#meals-add-food').addEventListener('click', mealAddFoodDialog);
             const table = document.createElement('table');
             table.className = 'nx-table';
-            table.innerHTML = '<tr><th>מזון</th><th>קק״ל</th><th>בסיס</th><th>אימות</th></tr>';
+            table.innerHTML = '<tr><th>מזון</th><th>קק״ל</th><th>בסיס</th><th>אימות</th><th></th></tr>';
             (d.foods || []).forEach(f => {
                 const n = (f.nutrients || {});
                 const tr = document.createElement('tr');
                 const fid = f.food_version_id || f.id;
                 const unverified = f.verified === 0 || f.verified === false;
                 const sourceHe = f.source === 'builtin-synthetic' ? 'הערכה מובנית'
-                    : f.source === 'auto_lookup' ? 'חיפוש חיצוני' : null;
+                    : f.source === 'auto_lookup' ? 'חיפוש חיצוני'
+                    : f.source === 'llm-estimate' ? 'הערכת AI' : null;
                 tr.innerHTML = `<td>${escapeFitnessHtml(f.name_he)}${unverified ? ' ' + nxBadge('לא מאומת', 'warning') : ''}${sourceHe ? `<div style="font-size:11px;color:var(--nx-text3)">${sourceHe}</div>` : ''}</td>
-                    <td><bdi>${n.kcal ?? '—'}</bdi></td><td><bdi>${f.basis_g}</bdi> גרם</td><td data-verify-cell></td>`;
+                    <td><bdi>${n.kcal ?? '—'}</bdi></td><td><bdi>${f.basis_g}</bdi> גרם</td><td data-verify-cell></td><td data-edit-cell></td>`;
                 if (unverified) {
                     const btn = document.createElement('button');
                     btn.className = 'nx-btn nx-btn-primary nx-btn-sm';
@@ -7511,6 +7736,11 @@
                     });
                     tr.querySelector('[data-verify-cell]').appendChild(btn);
                 }
+                const editBtn = document.createElement('button');
+                editBtn.className = 'nx-btn nx-btn-secondary nx-btn-sm';
+                editBtn.textContent = 'ערוך';
+                editBtn.addEventListener('click', () => mealEditFoodDialog(f));
+                tr.querySelector('[data-edit-cell]').appendChild(editBtn);
                 table.appendChild(tr);
             });
             el.appendChild(table);
@@ -7639,7 +7869,8 @@
                 const eaten = eatenSlotSet.has(meal.slot_key);
                 const [statusText, statusKind] = eaten ? [nxIcon('check-circle', 13) + ' נאכל', 'success'] : sel ? ['נבחר — עוד לא נאכל', 'info'] : ['מתוכנן', ''];
                 const displayItems = sel?.snapshot?.items || meal.items;
-                const displayName = sel?.snapshot?.name_he || mealRecipe(meal.recipe_version_id)?.name_he || '';
+                const displayName = sel?.snapshot?.name_he || mealRecipe(meal.recipe_version_id)?.name_he
+                    || (meal.items || []).map(i => mealFoodName(i.food_version_id)).join(' + ') || '';
                 const card = document.createElement('div');
                 card.className = 'nx-card' + (eaten ? ' nx-card-muted' : '');
                 card.dataset.slotCard = meal.slot_key;
@@ -8129,7 +8360,9 @@
                 row.innerHTML = `<div class="nx-card-body"><strong style="font-size:15px">${escapeFitnessHtml(sv.name)}</strong>
                     <div style="font-size:13px;color:var(--nx-text3);margin-top:4px">${(snap.items || []).map(i => `${escapeFitnessHtml(mealFoodName(i.food_version_id))} ${mealQty(i.quantity_g ?? '')} גרם`).join(' · ')}</div></div>`;
                 const rec = mealRecipe(snap.recipe_version_id);
-                const slots = (rec?.slots || []).length ? rec.slots : MEAL_SLOTS;
+                const planSlots = (mealsActivePlan?.meals || []).map(m => m.slot_key);
+                let slots = planSlots.filter(s => recipeFitsSlot(rec, s));
+                if (!slots.length) slots = planSlots.length ? planSlots : MEAL_SLOTS.filter(s => recipeFitsSlot(rec, s));
                 const actions = document.createElement('div');
                 actions.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap';
                 let slotSel = null;

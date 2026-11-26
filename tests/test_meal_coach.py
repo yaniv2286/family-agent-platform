@@ -2196,3 +2196,160 @@ async def test_assistant_library_food_served_via_composition(
     assert job["state"] == "eligible_candidate", job.get("reasons")
     served = {i["food_version_id"] for i in job["proposal"]["items"]}
     assert any("בטטה" in (i.get("name_he") or "") for i in job["proposal"]["items"])
+
+
+async def test_coach_chosen_meal_structure(client, parent_headers):
+    """Coach picks the child's meal structure: slot families let a snack
+    recipe serve snack2; declared meal_slots bounds the plan's slots."""
+    user = await _user()
+    plan = {
+        "name": "מבנה ארוחות מותאם",
+        "meal_slots": ["breakfast", "snack2", "lunch"],
+        "meals": [
+            {"slot_key": "breakfast", "recipe_version_id": "r_egg_bread_v1",
+             "items": [
+                 {"food_version_id": "f_egg_boiled_v1", "quantity_g": "100"},
+                 {"food_version_id": "f_bread_v1", "quantity_g": "60"},
+                 {"food_version_id": "f_tomato_v1", "quantity_g": "100"},
+             ]},
+            {"slot_key": "snack2", "recipe_version_id": "r_yogurt_bowl_v1",
+             "items": [{"food_version_id": "f_yogurt_v1", "quantity_g": "200"}]},
+            {"slot_key": "lunch", "recipe_version_id": "r_chicken_plate_v1",
+             "items": [
+                 {"food_version_id": "f_chicken_cooked_v1", "quantity_g": "150"},
+                 {"food_version_id": "f_rice_cooked_v1", "quantity_g": "200"},
+                 {"food_version_id": "f_cucumber_v1", "quantity_g": "100"},
+                 {"food_version_id": "f_tomato_v1", "quantity_g": "100"},
+             ]},
+        ],
+        "alternatives": {"snack2": ["r_egg_bread_v1"]},
+    }
+    published = await _publish_plan(client, parent_headers, user.id, content=plan)
+    assert published["version"] == 1
+    body = (await client.get(f"/api/meals/{user.id}/plan", headers=parent_headers)).json()
+    slots = [m["slot_key"] for m in body["plan"]["meals"]]
+    assert slots == ["breakfast", "snack2", "lunch"]
+
+    # A meal outside the declared structure fails validation.
+    bad = dict(plan)
+    bad["meals"] = plan["meals"] + [{
+        "slot_key": "dinner", "recipe_version_id": "r_tahini_plate_v1",
+        "items": [
+            {"food_version_id": "f_tahini_v1", "quantity_g": "50"},
+            {"food_version_id": "f_bread_v1", "quantity_g": "60"},
+            {"food_version_id": "f_tomato_v1", "quantity_g": "100"},
+        ],
+    }]
+    draft_id, _ = await _create_draft(client, parent_headers, user.id, bad)
+    result = await _validate(client, parent_headers, user.id, draft_id)
+    assert not result["valid"]
+    assert any("meal_slots" in str(i) for i in result["issues"])
+
+    # Legacy plans without meal_slots stay valid (subset always allowed).
+    draft_id, _ = await _create_draft(client, parent_headers, user.id, PLAN)
+    assert (await _validate(client, parent_headers, user.id, draft_id))["valid"]
+
+
+async def test_auto_plan_endpoint(client, parent_headers):
+    """Coach auto-compose: per-slot kosher split respected, exclusions hold,
+    and the output slots match the requested structure."""
+    user = await _user()
+    resp = await client.post(
+        f"/api/meals/{user.id}/auto-plan",
+        json={"slots": [
+                  {"slot_key": "lunch", "kosher": "meat"},
+                  {"slot_key": "breakfast", "kosher": "dairy"},
+                  {"slot_key": "snack2", "kosher": "parve"},
+              ],
+              "day_targets": {"kcal": {"upper": "1400"},
+                              "protein_g": {"lower": "100"}}},
+        headers=parent_headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert {m["slot_key"] for m in body["meals"]} == {"lunch", "breakfast", "snack2"}
+    cat = (await client.get("/api/meals/catalog")).json()
+    foods = {f["food_version_id"]: f for f in cat["foods"]}
+    lunch = next(m for m in body["meals"] if m["slot_key"] == "lunch")
+    assert any(foods[i["food_version_id"]]["kosher_evidence"] == "meat"
+               for i in lunch["items"])
+    for m in body["meals"]:
+        if m["slot_key"] != "lunch":
+            assert all(foods[i["food_version_id"]]["kosher_evidence"] != "meat"
+                       for i in m["items"])
+    # Child scope is refused.
+    resp = await client.post(f"/api/meals/{user.id}/auto-plan",
+                             json={"slots": [{"slot_key": "lunch"}]})
+    assert resp.status_code == 403
+    resp = await client.post(f"/api/meals/{user.id}/auto-plan",
+                             json={"slots": [{"slot_key": "bogus"}]},
+                             headers=parent_headers)
+    assert resp.status_code == 400
+
+
+async def test_coach_catalog_food_lookup_create_and_edit(client, parent_headers, monkeypatch):
+    """Coach adds 'שעועית שחורה': internet lookup fills real nutrients
+    (unverified until coach checks); PATCH edits values and re-derives flags."""
+    import agents.nutrition_coach_agent as nca
+
+    async def fake_lookup(name):
+        return {"name_he": name, "product_name": "Black Beans",
+                "nutrients": {"kcal": "132", "protein_g": "8.9", "carbs_g": "23.7",
+                              "fat_g": "0.5", "fiber_g": "8.7"},
+                "allergens": [], "source": "openfoodfacts",
+                "evidence": "openfoodfacts.org"}
+
+    monkeypatch.setattr(nca, "lookup_food", fake_lookup)
+    user = await _user()
+    resp = await client.post(
+        f"/api/meals/{user.id}/catalog/foods",
+        json={"name_he": "שעועית שחורה"}, headers=parent_headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "created"
+    assert body["source"] == "auto_lookup"
+    assert body["verified"] is False  # external data is not human-verified
+    assert body["nutrients"]["protein_g"] == "8.9"
+    fid = body["food_version_id"]
+
+    # Coach knows better than the lookup - edits the protein value.
+    resp = await client.patch(
+        f"/api/meals/catalog/food-versions/{fid}",
+        json={"nutrients": {"protein_g": "9.5"}}, headers=parent_headers)
+    assert resp.status_code == 200, resp.text
+    assert "nutrients" in resp.json()["updated"]
+
+    cat = (await client.get("/api/meals/catalog")).json()
+    food = next(f for f in cat["foods"] if f["food_version_id"] == fid)
+    assert food["nutrients"]["protein_g"] == "9.5"
+    assert food["nutrients"]["kcal"] == "132"          # merge kept other values
+    assert "high_fiber" in (food["attributes"] or [])  # re-derived after edit
+
+    # LLM-estimate tier: OFF/builtin miss -> llm-estimate stays unverified.
+    async def llm_hit(name):
+        return {"name_he": name, "nutrients": {"kcal": "200", "protein_g": "10"},
+                "allergens": None, "kosher": "parve",
+                "source": "llm-estimate", "evidence": "llm-estimate"}
+    monkeypatch.setattr(nca, "lookup_food", llm_hit)
+    resp = await client.post(
+        f"/api/meals/{user.id}/catalog/foods",
+        json={"name_he": "מאכל נדיר"}, headers=parent_headers)
+    body = resp.json()
+    assert body["state"] == "created" and body["source"] == "llm-estimate"
+    assert body["verified"] is False
+
+    # Lookup miss -> honest lookup_miss, nothing created.
+    async def miss(name):
+        return None
+    monkeypatch.setattr(nca, "lookup_food", miss)
+    resp = await client.post(
+        f"/api/meals/{user.id}/catalog/foods",
+        json={"name_he": "מאכל דמיוני שלא קיים"}, headers=parent_headers)
+    assert resp.json()["state"] == "lookup_miss"
+
+    # Child scope is refused.
+    resp = await client.post(f"/api/meals/{user.id}/catalog/foods",
+                             json={"name_he": "x"})
+    assert resp.status_code == 403
+    resp = await client.patch(f"/api/meals/catalog/food-versions/{fid}",
+                              json={"nutrients": {"kcal": "1"}})
+    assert resp.status_code == 403

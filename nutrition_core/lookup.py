@@ -22,6 +22,8 @@ lookup_food returns:
     }
 or None when nothing usable was found.
 """
+import asyncio
+import json
 import re
 import time
 from typing import Dict, List, Optional
@@ -324,12 +326,83 @@ def _builtin_lookup(normalized: str) -> Optional[dict]:
     }
 
 
+_KNOWN_ALLERGENS = {"gluten", "sesame", "egg", "milk", "peanut", "nuts", "soy", "fish"}
+_KNOWN_KOSHER = {"parve", "dairy", "meat", "non_kosher"}
+_LLM_NUTRIENT_CAPS = {"kcal": 950, "protein_g": 100, "carbs_g": 100, "fat_g": 100,
+                      "fiber_g": 100, "sugar_g": 100, "sodium_mg": 10000,
+                      "sat_fat_g": 100, "cholesterol_mg": 2000}
+
+_LLM_SYSTEM = (
+    "You are a nutrition database. Reply with ONE JSON object and nothing else. "
+    "For the food the user names (any language), return per-100-gram values for "
+    "the food as commonly eaten (cooked if usually eaten cooked): "
+    '{"nutrients": {"kcal": <n>, "protein_g": <n>, "carbs_g": <n>, "fat_g": <n>, '
+    '"fiber_g": <n>, "sugar_g": <n>, "sodium_mg": <n>, "sat_fat_g": <n>, '
+    '"cholesterol_mg": <n>}, '
+    '"allergens": [<subset of: gluten,sesame,egg,milk,peanut,nuts,soy,fish>], '
+    '"kosher": "parve"|"dairy"|"meat"|"non_kosher"}. '
+    "null for a nutrient you do not know - never invent zeros. "
+    'If the name is not a real food, reply {"nutrients": null}.'
+)
+
+
+def _parse_llm_food(raw: str) -> Optional[dict]:
+    """Strict shape/range validation of an LLM nutrient answer - anything that
+    is not clean per-100g numbers is dropped (the estimate is unverified data,
+    never silently trusted)."""
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    raw_nutr = data.get("nutrients")
+    if not isinstance(raw_nutr, dict):
+        return None
+    nutrients = {}
+    for f in NUTRIENT_FIELDS:
+        v = raw_nutr.get(f)
+        if v is None:
+            nutrients[f] = None
+            continue
+        try:
+            d = dec(v)
+        except (ValueError, TypeError):
+            return None
+        if d < 0 or d > _LLM_NUTRIENT_CAPS[f]:
+            return None
+        nutrients[f] = str(d)
+    if not any(v is not None for v in nutrients.values()):
+        return None
+    allergens = data.get("allergens")
+    allergens = [a for a in allergens if a in _KNOWN_ALLERGENS] \
+        if isinstance(allergens, list) else None
+    kosher = data.get("kosher")
+    return {"name_he": None, "nutrients": nutrients, "allergens": allergens,
+            "kosher": kosher if kosher in _KNOWN_KOSHER else "unknown",
+            "source": "llm-estimate", "evidence": "llm-estimate"}
+
+
+async def _llm_lookup(name: str) -> Optional[dict]:
+    """LLM nutrient estimate - the last tier, for foods OFF and the builtin
+    table both miss. Marked llm-estimate and stays unverified downstream."""
+    try:
+        from tutors import call_llm  # late import: pulls the LLM stack lazily
+        raw = await asyncio.wait_for(
+            call_llm(_LLM_SYSTEM, [{"role": "user", "content": name}]),
+            timeout=20)
+    except Exception:
+        return None
+    return _parse_llm_food(raw)
+
+
 async def lookup_food(name: str) -> Optional[dict]:
     """Resolve a free-text food name to real nutrient data.
 
-    Open Food Facts first; the synthetic built-in table only when the
-    network lookup errors or finds nothing and the name fuzzy-matches it.
-    Same name -> same result within 24h (misses are cached too)."""
+    Open Food Facts first; then the synthetic built-in table when the name
+    fuzzy-matches it; then an LLM estimate (source="llm-estimate", always
+    unverified downstream). Same name -> same result within 24h."""
     key = _normalize(name)
     if not key:
         return None
@@ -345,5 +418,7 @@ async def lookup_food(name: str) -> Optional[dict]:
         result = None
     if result is None:
         result = _builtin_lookup(key)
+    if result is None:
+        result = await _llm_lookup(name)
     _cache[key] = (time.time(), result)
     return result

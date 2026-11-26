@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nutrition_core import ENGINE_VERSION, engine
 from nutrition_core.catalog import CatalogSource
 from nutrition_core.food_library import KNOWN_DIET_FLAGS, derive_attributes
+from nutrition_core.lookup import lookup_food
 from nutrition_db import (
     MealCatalogState,
     MealCatalogSubmission,
@@ -527,6 +528,11 @@ class FitPortionsRequest(BaseModel):
     other_meals: Optional[List[dict]] = None  # [{slot_key, items:[{food_version_id, quantity_g}]}]
 
 
+class AutoPlanRequest(BaseModel):
+    slots: List[dict]          # [{"slot_key": "lunch", "kosher": "meat|dairy|parve|any"}]
+    day_targets: Optional[dict] = None  # same shape as plan content day_targets
+
+
 class SubmissionCreate(BaseModel):
     request_text: str
     proposed_match: Optional[str] = None
@@ -542,6 +548,26 @@ class ReviewApprove(BaseModel):
     kosher_evidence: Optional[str] = "unknown"
     aliases: Optional[List[str]] = []
     attributes: Optional[List[str]] = None  # None = derive from nutrients
+
+
+class FoodCreate(BaseModel):
+    name_he: str = Field(min_length=1, max_length=120)
+    kind: Optional[str] = "generic"
+    preparation_state: Optional[str] = "raw"
+    nutrients: Optional[dict] = None      # None -> internet lookup first
+    allergens: Optional[List[str]] = None # None = undeclared (fail-closed)
+    kosher_evidence: Optional[str] = None
+    aliases: Optional[List[str]] = None
+    lookup: bool = True
+
+
+class FoodPatch(BaseModel):
+    name_he: Optional[str] = None
+    kind: Optional[str] = None
+    nutrients: Optional[dict] = None      # merged over existing values
+    allergens: Optional[List[str]] = None
+    kosher_evidence: Optional[str] = None
+    aliases: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1290,6 +1316,35 @@ async def fit_portions(request: Request, user_id: int, data: FitPortionsRequest,
 
 
 # ---------------------------------------------------------------------------
+# auto-plan - deterministic first-draft day builder (draft helper only)
+# ---------------------------------------------------------------------------
+@router.post("/{user_id}/auto-plan")
+async def auto_plan(request: Request, user_id: int, data: AutoPlanRequest,
+                    db: AsyncSession = Depends(get_nutrition_db)):
+    _require_coach(request)
+    if not data.slots:
+        _err(400, "BAD_REQUEST", "slots must be a non-empty list")
+    for s in data.slots:
+        if s.get("slot_key") not in engine.SLOT_KEYS:
+            _err(400, "BAD_REQUEST", "invalid slot_key")
+        if (s.get("kosher") or "any") not in ("meat", "dairy", "parve", "any"):
+            _err(400, "BAD_REQUEST", "invalid kosher class")
+    src = await _catalog_source(db)
+    state = await _get_state(db, user_id)
+    profile = await _current_profile(db, user_id, state)
+    excluded = set(profile.get("excluded_food_ids") or [])
+    # Declared allergens become hard exclusions for the draft builder too
+    # (fail-closed already handled downstream at validate time).
+    allergies = set(profile.get("allergies") or [])
+    if allergies:
+        for food in src.approved_foods():
+            if allergies & set(food.get("allergens") or []):
+                excluded.add(food["food_version_id"])
+    return engine.auto_compose_day(
+        data.slots, data.day_targets or {}, src, excluded_food_ids=excluded)
+
+
+# ---------------------------------------------------------------------------
 # suggestion sessions (ephemeral context - never an inventory record)
 # ---------------------------------------------------------------------------
 @router.post("/{user_id}/suggestion-sessions")
@@ -1983,6 +2038,119 @@ async def retract_food(request: Request, food_version_id: str,
     _audit(db, role, "catalog.retract", food_version_id, {"epoch": epoch})
     await db.commit()
     return {"food_version_id": food_version_id, "status": "retracted", "catalog_epoch": epoch}
+
+
+def _clean_nutrients(raw: dict) -> dict:
+    """Keep only known nutrient keys; every value must be a real decimal."""
+    out = {}
+    for k, v in (raw or {}).items():
+        if k not in engine.NUTRIENT_FIELDS or v is None:
+            continue
+        try:
+            out[k] = str(engine.dec(v))
+        except (ValueError, TypeError):
+            _err(400, "BAD_REQUEST", f"nutrient {k}: not a number")
+    return out
+
+
+@router.post("/{user_id}/catalog/foods")
+async def create_food(request: Request, user_id: int, data: FoodCreate,
+                      db: AsyncSession = Depends(get_nutrition_db_coach)):
+    """Coach adds a food to the shared catalog. Without explicit nutrients the
+    internet lookup (Open Food Facts, builtin fallback) fills real values;
+    a miss returns lookup_miss so the coach can enter values manually."""
+    role = _require_coach(request)
+    name = data.name_he.strip()
+    nutrients = _clean_nutrients(data.nutrients) if data.nutrients else None
+    allergens = data.allergens
+    hit = None
+    source, evidence, verified = "coach-entered", "coach-entered", 1
+    if not nutrients:
+        if not data.lookup:
+            _err(400, "BAD_REQUEST", "nutrients required when lookup is disabled")
+        hit = await lookup_food(name)
+        if not hit or not hit.get("nutrients"):
+            return {"state": "lookup_miss", "food_version_id": None}
+        nutrients = _clean_nutrients(hit["nutrients"])
+        if allergens is None:
+            allergens = hit.get("allergens")
+        source = hit.get("source") or "auto_lookup"
+        if source == "openfoodfacts":
+            source = "auto_lookup"
+        evidence = hit.get("evidence") or hit.get("source") or "auto_lookup"
+        verified = 0  # external data stays unverified until the coach checks it
+    if not nutrients:
+        _err(400, "BAD_REQUEST", "at least one nutrient value is required")
+    food_version_id = f"f_{uuid.uuid4().hex[:12]}"
+    db.add(MealFoodVersion(
+        id=food_version_id, food_id=food_version_id, name_he=name,
+        kind=data.kind or "generic", preparation_state=data.preparation_state or "raw",
+        basis_g="100",
+        nutrients_json=json.dumps(nutrients, ensure_ascii=False),
+        allergens_json=json.dumps(allergens, ensure_ascii=False),
+        attributes_json=json.dumps(
+            derive_attributes(name, data.kind or "generic", allergens, nutrients),
+            ensure_ascii=False),
+        kosher_evidence=data.kosher_evidence or (hit or {}).get("kosher") or "unknown",
+        status="approved",
+        aliases_json=json.dumps(data.aliases or [name], ensure_ascii=False),
+        evidence=evidence, source=source, verified=verified,
+    ))
+    epoch = await _bump_catalog_epoch(db)
+    _audit(db, role, "catalog.food_create", food_version_id,
+           {"source": source, "verified": verified})
+    await db.commit()
+    return {"state": "created", "food_version_id": food_version_id,
+            "verified": bool(verified), "source": source, "nutrients": nutrients,
+            "catalog_epoch": epoch}
+
+
+@router.patch("/catalog/food-versions/{food_version_id}")
+async def update_food(request: Request, food_version_id: str, data: FoodPatch,
+                      db: AsyncSession = Depends(get_nutrition_db_coach)):
+    """Coach edits an existing food - the catalog grows and improves over
+    time. Provided fields replace; nutrients merge over current values."""
+    role = _require_coach(request)
+    food = (
+        await db.execute(select(MealFoodVersion).where(
+            MealFoodVersion.id == food_version_id
+        ))
+    ).scalar_one_or_none()
+    if not food:
+        _err(404, "NOT_FOUND", "food version not found")
+    changed = {}
+    if data.name_he is not None and data.name_he.strip():
+        food.name_he = data.name_he.strip()
+        changed["name_he"] = food.name_he
+    if data.kind is not None:
+        food.kind = data.kind
+        changed["kind"] = food.kind
+    if data.nutrients:
+        merged = {**_loads(food.nutrients_json, {}), **_clean_nutrients(data.nutrients)}
+        food.nutrients_json = json.dumps(merged, ensure_ascii=False)
+        changed["nutrients"] = merged
+    if data.allergens is not None:
+        food.allergens_json = json.dumps(data.allergens, ensure_ascii=False)
+        changed["allergens"] = data.allergens
+    if data.kosher_evidence is not None:
+        food.kosher_evidence = data.kosher_evidence
+        changed["kosher_evidence"] = data.kosher_evidence
+    if data.aliases is not None:
+        food.aliases_json = json.dumps(data.aliases, ensure_ascii=False)
+        changed["aliases"] = data.aliases
+    if not changed:
+        _err(400, "BAD_REQUEST", "no fields to update")
+    # Dietary flags always re-derive from the row's post-edit state.
+    food.attributes_json = json.dumps(
+        derive_attributes(food.name_he, food.kind,
+                          _loads(food.allergens_json, None),
+                          _loads(food.nutrients_json, {})),
+        ensure_ascii=False)
+    epoch = await _bump_catalog_epoch(db)
+    _audit(db, role, "catalog.food_update", food_version_id, {"epoch": epoch})
+    await db.commit()
+    return {"food_version_id": food_version_id, "updated": list(changed),
+            "catalog_epoch": epoch}
 
 
 # ---------------------------------------------------------------------------

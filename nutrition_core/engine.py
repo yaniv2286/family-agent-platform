@@ -16,7 +16,20 @@ from .units import dec, dstr, scale_per_basis
 
 NUTRIENT_FIELDS = ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "sodium_mg",
                    "sugar_g", "sat_fat_g", "cholesterol_mg")
-SLOT_KEYS = ("breakfast", "lunch", "dinner", "snack")
+SLOT_KEYS = ("breakfast", "snack", "lunch", "snack2", "dinner", "evening_snack")
+# Plan slots are finer than recipe-declared slots: any recipe approved for a
+# family (e.g. "snack") may serve any plan slot in that family (snack, snack2,
+# evening_snack). The coach picks the child's structure; recipes stay coarse.
+SLOT_FAMILY = {"snack2": "snack", "evening_snack": "snack"}
+
+
+def slot_family(slot_key: str) -> str:
+    return SLOT_FAMILY.get(slot_key, slot_key)
+
+
+def recipe_covers_slot(recipe: dict, slot_key: str) -> bool:
+    fams = {slot_family(s) for s in recipe.get("slots") or []}
+    return not fams or slot_family(slot_key) in fams
 
 # Engineering caps (DESIGN 7.4.4): resource limits, not nutritional policy.
 MAX_COMBINATIONS_PER_RECIPE = 2000
@@ -193,6 +206,22 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
 
     _validate_targets(content.get("day_targets") or {}, "day_targets", issues)
 
+    # Optional coach-chosen meal structure (DESIGN: children can have 3-6
+    # meals). Absent = legacy plan; present = every planned/alternative slot
+    # must belong to the declared structure.
+    declared_slots = content.get("meal_slots")
+    if declared_slots is not None:
+        if not isinstance(declared_slots, list) or not declared_slots:
+            issues.append("meal_slots must be a non-empty list of slot keys")
+            declared_slots = None
+        else:
+            if any(s not in SLOT_KEYS for s in declared_slots):
+                issues.append(f"meal_slots: every slot must be one of {SLOT_KEYS}")
+            elif len(set(declared_slots)) != len(declared_slots):
+                issues.append("meal_slots: duplicate slot keys")
+            else:
+                declared_slots = set(declared_slots)
+
     alternatives = content.get("alternatives") or {}
     if not isinstance(alternatives, dict):
         issues.append("alternatives must be {slot_key: [recipe_version_id, ...]}")
@@ -201,6 +230,9 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
         if slot not in SLOT_KEYS:
             issues.append(f"alternatives: unknown slot {slot!r}")
             continue
+        if declared_slots and slot not in declared_slots:
+            issues.append(f"alternatives: slot {slot!r} not in declared meal_slots")
+            continue
         if not isinstance(rids, list):
             issues.append(f"alternatives.{slot}: must be a list")
             continue
@@ -208,7 +240,7 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
             recipe = src.get_recipe_version(rid)
             if not recipe:
                 issues.append(f"alternatives.{slot}: unknown recipe_version_id {rid!r}")
-            elif slot not in recipe["slots"]:
+            elif not recipe_covers_slot(recipe, slot):
                 issues.append(f"alternatives.{slot}: recipe {rid} not approved for slot {slot!r}")
 
     seen_slots = set()
@@ -221,6 +253,9 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
         slot = meal.get("slot_key")
         if slot not in SLOT_KEYS:
             issues.append(f"{where}: slot_key must be one of {SLOT_KEYS}")
+            continue
+        if declared_slots and slot not in declared_slots:
+            issues.append(f"{where}: slot {slot!r} not in declared meal_slots")
             continue
         if slot in seen_slots:
             issues.append(f"{where}: duplicate slot_key {slot!r}")
@@ -237,7 +272,7 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
             recipe = src.get_recipe_version(rid)
             if not recipe:
                 issues.append(f"{where}: unknown recipe_version_id {rid!r}")
-            elif slot not in recipe["slots"]:
+            elif not recipe_covers_slot(recipe, slot):
                 issues.append(f"{where}: recipe {rid} is not approved for slot {slot!r}")
 
         recipe_items = {i["food_version_id"]: i for i in recipe["items"]} if recipe else {}
@@ -301,7 +336,171 @@ def validate_plan_content(content: dict, src: CatalogSource = DEFAULT_SOURCE,
         "rules": rules,
         "day_targets": content.get("day_targets") or {},
         "alternatives": alternatives,
+        "meal_slots": list(declared_slots) if declared_slots else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# coach auto-compose: deterministic first-draft day builder.
+# The coach picks the structure + kosher split; we fill slots with foods whose
+# kind/kosher class fit and size portions to a share of the day targets. This
+# is a draft helper only - validate/approve/publish stays authoritative.
+# ---------------------------------------------------------------------------
+_AUTO_PROTEIN_KINDS = {
+    "meat":  ("poultry", "meat"),
+    "dairy": ("dairy", "egg"),
+    "parve": ("fish", "egg", "legume", "nut_seed"),
+    "any":   ("poultry", "meat", "fish", "seafood", "egg", "dairy", "legume", "nut_seed"),
+}
+_AUTO_KOSHER_ALLOW = {
+    "meat": {"meat", "parve"},
+    "dairy": {"dairy", "parve"},
+    "parve": {"parve"},
+    "any": {"meat", "dairy", "parve"},
+}
+_AUTO_CARB_KINDS = ("bread", "grain", "legume")
+_AUTO_VEG_KINDS = ("vegetable",)
+_AUTO_FRUIT_KINDS = ("fruit",)
+# Per-slot fallbacks when the draft has no day_targets yet.
+_AUTO_DEFAULT_BUDGET = {"kcal_upper": 500, "protein_lower": 25,
+                        "carbs_upper": 50, "fat_upper": 15}
+_AUTO_SNACK_SHARE = Decimal("0.5")
+
+
+def _per100(food: dict, nutrient: str) -> Optional[Decimal]:
+    v = (food.get("nutrients") or {}).get(nutrient)
+    return dec(v) if v is not None else None
+
+
+def _round_qty(qty: Decimal, step: Decimal = Decimal(10)) -> Decimal:
+    return max(step, (qty / step).to_integral_value() * step)
+
+
+def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
+                     *, excluded_food_ids: Optional[set] = None) -> dict:
+    """Greedy deterministic draft: one protein + carb + veg per main slot,
+    protein + fruit per snack slot, portions sized to the slot's share of
+    day_targets. Returns meals + per-slot unmet notes."""
+    excluded = set(excluded_food_ids or set())
+    usable = [f for f in src.approved_foods()
+              if f["status"] == "approved"
+              and f["food_version_id"] not in excluded
+              and f.get("kosher_evidence") != "non_kosher"]
+
+    def _pool(kosher: str, kinds, need_nutrient: str, sort_mode: str = "lean"):
+        allow = _AUTO_KOSHER_ALLOW.get(kosher, _AUTO_KOSHER_ALLOW["any"])
+        pool = [f for f in usable
+                if f.get("kind") in kinds
+                and f.get("kosher_evidence") in allow
+                and _per100(f, need_nutrient) is not None]
+        if sort_mode == "lean":   # lowest fat, then densest in need_nutrient
+            pool.sort(key=lambda f: (_per100(f, "fat_g") or Decimal(999),
+                                     -(_per100(f, need_nutrient) or Decimal(0))))
+        elif sort_mode == "min":  # lightest first (veg, fruit)
+            pool.sort(key=lambda f: _per100(f, need_nutrient) or Decimal(999))
+        else:                     # densest first (carbs)
+            pool.sort(key=lambda f: -(_per100(f, need_nutrient) or Decimal(0)))
+        return pool
+
+    def _bound(name: str, direction: str) -> Optional[Decimal]:
+        v = ((day_targets or {}).get(name) or {}).get(direction)
+        return dec(v) if v is not None else None
+
+    weights = [_AUTO_SNACK_SHARE if slot_family(s["slot_key"]) == "snack"
+               else Decimal(1) for s in slots]
+    total_w = sum(weights) or Decimal(1)
+
+    meals, unmet = [], []
+    for idx, spec in enumerate(slots):
+        slot, kosher = spec["slot_key"], spec.get("kosher") or "any"
+        share = weights[idx] / total_w
+        p_lo = (_bound("protein_g", "lower") or
+                Decimal(_AUTO_DEFAULT_BUDGET["protein_lower"]) * total_w) * share
+        k_up = (_bound("kcal", "upper") or
+                Decimal(_AUTO_DEFAULT_BUDGET["kcal_upper"]) * total_w) * share
+        c_up = (_bound("carbs_g", "upper") or
+                Decimal(_AUTO_DEFAULT_BUDGET["carbs_upper"]) * total_w) * share
+        f_up = (_bound("fat_g", "upper") or
+                Decimal(_AUTO_DEFAULT_BUDGET["fat_upper"]) * total_w) * share
+
+        is_snack = slot_family(slot) == "snack"
+        proteins = _pool(kosher, _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
+                         "protein_g", "lean")
+        # Powders/shakes are supplements, not meals - the coach adds them by hand.
+        proteins = [p for p in proteins
+                    if not any(w in (p.get("name_he") or "") for w in ("אבקת", "אבקה", "משקה"))]
+        sides = (_pool(kosher, _AUTO_FRUIT_KINDS, "kcal", "min") if is_snack
+                 else _pool(kosher, _AUTO_CARB_KINDS, "carbs_g", "max"))
+        # Raw baking ingredients are carbs but never a meal side.
+        sides = [s for s in sides
+                 if not any(w in (s.get("name_he") or "") for w in ("קמח", "עמילן", "סולת", "דגני", "אבקת"))]
+        vegs = [] if is_snack else _pool(kosher, _AUTO_VEG_KINDS, "kcal", "min")
+
+        def _totals(items):
+            tot = {}
+            for f, qty in items:
+                for n in ("kcal", "protein_g", "carbs_g", "fat_g"):
+                    p = _per100(f, n)
+                    tot[n] = (tot.get(n) or Decimal(0)) + (p * qty / 100 if p is not None else Decimal(0))
+            return tot
+
+        def _fits(items):
+            t = _totals(items)
+            return (t["protein_g"] >= p_lo and t["kcal"] <= k_up
+                    and t["fat_g"] <= f_up and t["carbs_g"] <= c_up)
+
+        def _over(items):
+            t = _totals(items)
+            return (max(Decimal(0), t["kcal"] - k_up) + max(Decimal(0), t["fat_g"] - f_up)
+                    + max(Decimal(0), t["carbs_g"] - c_up)
+                    + max(Decimal(0), p_lo - t["protein_g"]))
+
+        best, best_items = None, None
+        for pi in range(len(proteins)):
+            prot = proteins[(idx + pi) % len(proteins)]
+            p100 = _per100(prot, "protein_g")
+            if not p100 or p100 <= 0:
+                continue
+            p_qty = min(Decimal(350), _round_qty(p_lo * 100 / p100, Decimal(25)))
+            for si in range(min(len(sides), 8)):
+                side = sides[(idx + si) % len(sides)]
+                s100 = _per100(side, "kcal" if is_snack else "carbs_g")
+                s_target = (k_up * Decimal("0.35")) if is_snack else (c_up * Decimal("0.9"))
+                s_qty = min(Decimal(300), _round_qty(s_target * 100 / s100, Decimal(25))
+                            if s100 and s100 > 0 else Decimal(150))
+                items = [(prot, p_qty), (side, s_qty)]
+                if vegs:
+                    items.append((vegs[idx % len(vegs)], Decimal(150)))
+                # Shrink the side portion to fit the ceilings, then the protein.
+                for _ in range(12):
+                    if _fits(items):
+                        best_items = items
+                        break
+                    t = _totals(items)
+                    if t["carbs_g"] > c_up or t["kcal"] > k_up:
+                        items[1] = (side, max(Decimal(0), items[1][1] - 25))
+                    elif t["fat_g"] > f_up and items[0][1] > Decimal(80):
+                        items[0] = (prot, items[0][1] - 25)
+                    else:
+                        break
+                if best_items:
+                    break
+                score = _over(items)
+                if best is None or score < best:
+                    best, best_items = score, items
+            if best_items and _fits(best_items):
+                break
+        if best_items is None:
+            unmet.append({"slot_key": slot, "reason": "אין מצרכים מתאימים באילוצי הכשרות/החרגות"})
+            continue
+        if not _fits(best_items):
+            unmet.append({"slot_key": slot, "reason": "הכמויות לא עמדו במלוא התקציב — כדאי לכוון ידנית"})
+        meals.append({
+            "slot_key": slot,
+            "items": [{"food_version_id": f["food_version_id"], "quantity_g": format(q, "f")}
+                      for f, q in best_items],
+        })
+    return {"meals": meals, "unmet": unmet}
 
 
 # ---------------------------------------------------------------------------
@@ -907,7 +1106,7 @@ def fit_portions(
     recipe = src.get_recipe_version(recipe_version_id)
     if not recipe or recipe["status"] != "approved":
         return {"state": "no_match", "reasons": ["recipe unavailable"]}
-    if slot_key not in recipe["slots"]:
+    if not recipe_covers_slot(recipe, slot_key):
         return {"state": "no_match",
                 "reasons": [f"{recipe_version_id} not approved for slot {slot_key}"]}
     conflicts = detect_rule_conflicts(rules)
