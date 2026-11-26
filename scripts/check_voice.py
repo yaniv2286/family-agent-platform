@@ -43,7 +43,7 @@ def run():
     parser.add_argument('--browser', default='chromium', choices=['chromium', 'webkit'])
     args = parser.parse_args()
     html = Path('static/index.html').read_text(encoding='utf-8')
-    html = html.replace('        // State', '        window.voiceTest = {startListening, stopListening, finishListening, isListening: () => isListening, setup: () => {selectedUserId = 1; selectedSubject = "math";}};\n        // State', 1)
+    html = html.replace('        // State', '        window.voiceTest = {startListening, stopListening, finishListening, isListening: () => isListening, speak: t => speakResponse(t), setup: () => {selectedUserId = 1; selectedSubject = "math";}};\n        // State', 1)
     failures = []
     with sync_playwright() as p:
         browser = getattr(p, args.browser).launch(**({'channel': 'chrome'} if args.browser == 'chromium' else {}), headless=True)
@@ -120,6 +120,7 @@ def run():
             assert not errors, errors
             page.close()
         check_push_to_talk(browser, html, failures)
+        check_tts_stream_retry(browser, html, failures)
         browser.close()
     if failures:
         raise AssertionError(json.dumps(failures))
@@ -245,6 +246,53 @@ def check_push_to_talk(browser, html, failures):
         print('PASS push-to-talk: hold+pause, key repeat, short tap cancel, text input, focused button, modal, blur, long-press, tap toggle')
     except AssertionError as error:
         failures.append(f'push-to-talk: {error}')
+    page.close()
+
+
+def check_tts_stream_retry(browser, html, failures):
+    """A mid-stream MediaSource failure must refetch the same utterance as a
+    whole blob (ינאי's 'אני לא שומע אותך': a dying stream left Koko silent)."""
+    page = browser.new_page(viewport={'width': 390, 'height': 844})
+    page.add_init_script(MOCKS)
+    page.add_init_script(r"""
+        // Every SourceBuffer append fails the way a mid-play network error
+        // does - this is the real failure mode behind the silent tutor.
+        MediaSource.prototype.addSourceBuffer = function () {
+            const fake = new EventTarget();
+            fake.buffered = {length: 0, end() { return 0; }};
+            fake.appendBuffer = () => queueMicrotask(() => fake.dispatchEvent(new Event('error')));
+            return fake;
+        };
+    """)
+    speech_calls, logs, errors = [], [], []
+    page.on('pageerror', lambda e: errors.append(str(e)))
+
+    def api(route):
+        url = route.request.url
+        if url.endswith('/speech'):
+            speech_calls.append(route.request.post_data_json)
+            route.fulfill(status=200, content_type='audio/mpeg', body=b'\xff\xfb\x90\x64' * 64)
+        elif url.endswith('/client-log'):
+            logs.append(route.request.post_data_json)
+            route.fulfill(json={})
+        else:
+            route.fulfill(json={})
+
+    page.route('**/api/**', api)
+    page.route('http://voice.test/', lambda r: r.fulfill(body=html, content_type='text/html'))
+    page.goto('http://voice.test/')
+    page.evaluate('voiceTest.setup()')
+    page.evaluate('voiceTest.speak("כל הכבוד")')
+    page.wait_for_timeout(2500)
+    try:
+        assert len(speech_calls) == 2, f'mid-stream error did not retry (got {len(speech_calls)} speech calls)'
+        assert speech_calls[0].get('text') == speech_calls[1].get('text'), 'retry used different text'
+        details = [l.get('detail', '') for l in logs]
+        assert any('mid-stream retry' in d for d in details), f'no retry client-log: {details}'
+        assert not errors, errors
+        print('PASS tts mid-stream error retries as full blob')
+    except AssertionError as e:
+        failures.append(f'tts-retry: {e}')
     page.close()
 
 
