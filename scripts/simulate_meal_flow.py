@@ -994,52 +994,27 @@ async def section_ui(base_url, verbose) -> list[str]:
                     await cbs.nth(j).check()
         await shot(page, "07_wizard_alts")
         await page.click('[data-meals-panel="wiz-review"]')
-        # publish must be disabled before save/validate/approve
-        if not await page.locator("#wiz-publish").is_disabled():
-            fails.append("ui publish enabled before approval")
         # no raw JSON visible in the main path
         txt = await page.locator("#meals-setup").inner_text()
         if '"recipe_version_id"' in txt or '"slot_key"' in txt:
             fails.append("ui raw JSON visible in review step")
+        if not await page.locator("#wiz-save-only").count():
+            fails.append("ui missing draft-only save option")
         await shot(page, "08_review")
-        # the publish card shows ONE primary next-action button; walk it stage
-        # by stage (a leftover draft may start the flow at a later stage).
+        # one-button pipeline: save -> validate -> approve -> confirm -> publish
         status = "#wiz-review-status"
-        for stage in range(4):
-            nxt = page.locator("#wiz-actions .nx-btn-primary")
-            if not await nxt.count():
-                fails.append("ui no next-action button before publish")
-                break
-            label = (await nxt.inner_text()).strip()
-            if "שמור" in label:
-                await nxt.click()
-                await page.wait_for_function(
-                    f"document.querySelector('{status}')?.textContent.includes('נשמרה')",
-                    timeout=8000)
-            elif "בדיקה" in label:
-                await nxt.click()
-                await page.wait_for_function(
-                    f"document.querySelector('{status}')?.textContent.includes('תקינה')",
-                    timeout=8000)
-                if not await page.locator("#wiz-publish").is_disabled():
-                    fails.append("ui publish enabled before approve")
-                await shot(page, "09_validated")
-            elif "אשר" in label:
-                await nxt.click()
-                await page.wait_for_function(
-                    f"document.querySelector('{status}')?.textContent.includes('אושר')",
-                    timeout=8000)
-            elif "פרסם" in label:
-                await nxt.click()
-                await page.wait_for_selector(".nx-dialog", timeout=5000)
-                await page.locator(".nx-dialog button", has_text="פרסם").click()
-                await page.wait_for_function(
-                    f"document.querySelector('{status}')?.textContent.includes('פורסם')",
-                    timeout=8000)
-                break
-            else:
-                fails.append(f"ui unknown next-action label: {label!r}")
-                break
+        await page.click("#wiz-go")
+        try:
+            await page.wait_for_selector(".nx-dialog", timeout=15000)
+        except Exception:
+            st = await page.locator(status).inner_text()
+            fails.append(f"ui publish pipeline stalled before confirm: {st!r}")
+        else:
+            await shot(page, "09_confirm")
+            await page.locator(".nx-dialog button", has_text="פרסם").click()
+            await page.wait_for_function(
+                f"document.querySelector('{status}')?.textContent.includes('פורסם')",
+                timeout=10000)
         await shot(page, "10_published")
         # Regression (prod, Nov 23): once the parent PIN sits in localStorage,
         # opening נויה's 🥗 card must show HER daily app - the view follows the

@@ -1793,7 +1793,7 @@
         .nx-input-wrap .nx-input-sm + .nx-unit { inset-inline-end: 8px; font-size: 11px; }
         .nx-helper { font-size: 12px; color: var(--nx-text3); margin-top: 4px; }
         .nx-error-text { font-size: 12px; color: var(--nx-danger); margin-top: 4px; }
-        .nx-input-wrap { position: relative; }
+        .nx-input-wrap { position: relative; display: inline-block; }
         .nx-input-wrap .nx-unit { position: absolute; inset-inline-end: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--nx-text3); pointer-events: none; }
         .nx-input-wrap .nx-input { padding-inline-end: 52px; }
         .nx-field-row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -7202,16 +7202,27 @@
                 pickRow.appendChild(lab);
             });
             picker.appendChild(pickRow);
-            // Auto-compose bar: kosher split + one-click draft builder.
+            // Auto-compose bar: per-slot kosher chips + one-click draft builder.
             const autoBar = document.createElement('div');
-            autoBar.style.cssText = 'margin-top:12px;padding:10px 12px;border:1px dashed #cfdcd6;border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-            autoBar.innerHTML = `<strong style="font-size:13px">הצעת תפריט אוטומטית:</strong>
-                <span class="nx-meta" style="font-size:12px">מרכיב את כל הארוחות לפי בחירת הסוג (בשרי/חלבי/פרווה) בכל כרטיס — "הכל" = בחירה חופשית</span>
+            autoBar.style.cssText = 'margin-top:12px;padding:10px 12px;border:1px dashed #cfdcd6;border-radius:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+            const kosherOpts = [['any', 'חופשי'], ['meat', 'בשרי'], ['dairy', 'חלבי'], ['parve', 'פרווה']];
+            autoBar.innerHTML = `<strong style="font-size:13px">הצעת תפריט:</strong>
+                ${wiz.chosenSlots.map(s => `
+                <span style="display:inline-flex;align-items:center;gap:5px;background:#eef4f0;border:1px solid #d5e0da;border-radius:8px;padding:2px 6px 2px 10px;font-size:12px">
+                    ${mealsSlotName(s)}
+                    <select data-kosher="${s}" class="nx-select" style="min-height:26px;width:auto;font-size:12px;padding:0 4px;background:transparent;border:none">
+                        ${kosherOpts.map(([v, l]) => `<option value="${v}" ${(wiz.slotKosher[s] || 'any') === v ? 'selected' : ''}>${l}</option>`).join('')}
+                    </select>
+                </span>`).join('')}
                 <button type="button" class="nx-btn nx-btn-primary nx-btn-sm" id="wiz-auto-gen">הצע ארוחות</button>
-                <span id="wiz-auto-msg" style="font-size:12px;color:var(--nx-text3)"></span>`;
+                <span id="wiz-auto-msg" style="font-size:12px;color:var(--nx-text3)"></span>
+                <span class="nx-meta" style="font-size:11px;flex-basis:100%">"חופשי" = המערכת בוחרת. אין צורך לבחור — אפשר פשוט ללחוץ "הצע ארוחות"</span>`;
             picker.appendChild(autoBar);
-            autoBar.querySelector('#wiz-auto-gen').addEventListener('click', async () => {
+            autoBar.querySelectorAll('[data-kosher]').forEach(ks =>
+                ks.addEventListener('change', () => { wiz.slotKosher[ks.dataset.kosher] = ks.value; }));
+            autoBar.querySelector('#wiz-auto-gen').addEventListener('click', async (e) => {
                 const msg = autoBar.querySelector('#wiz-auto-msg');
+                e.target.disabled = true;
                 msg.textContent = 'מרכיב הצעה...';
                 const slotsPayload = wiz.chosenSlots.map(s => ({ slot_key: s, kosher: wiz.slotKosher[s] || 'any' }));
                 const targets = {};
@@ -7224,6 +7235,7 @@
                 const r = await safeFetch(`/api/meals/${mealsUid()}/auto-plan`, { method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ slots: slotsPayload, day_targets: targets, use_llm: true }) });
+                e.target.disabled = false;
                 const d = await r.json().catch(() => ({}));
                 if (!r.ok) { msg.textContent = 'ההצעה נכשלה'; return; }
                 (d.meals || []).forEach(m => {
@@ -7247,15 +7259,11 @@
                 box.style.marginBottom = '0';
                 const allowed = (mealsCatalog.recipes || []).filter(r => recipeFitsSlot(r, slot));
                 const cur = wiz.meals[slot] || { rid: '', qty: {} };
-                const options = [`<option value="">— מנה מורכבת / ללא —</option>`]
+                const options = [`<option value="">מנה מורכבת — מצרכים בחירה חופשית</option>`]
                     .concat(allowed.map(r => `<option value="${r.recipe_version_id || r.id}" ${cur.rid === (r.recipe_version_id || r.id) ? 'selected' : ''}>${escapeFitnessHtml(r.name_he)}</option>`));
-                const kosherSel = [['any', 'הכל'], ['meat', 'בשרי'], ['dairy', 'חלבי'], ['parve', 'פרווה']]
-                    .map(([v, l]) => `<option value="${v}" ${(wiz.slotKosher[slot] || 'any') === v ? 'selected' : ''}>${l}</option>`).join('');
                 box.innerHTML = `<div class="nx-card-body" style="padding:14px 16px">
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                         <strong style="font-size:14px">${mealsSlotName(slot)}</strong>
-                        <span class="nx-meta" style="font-size:12px">סוג:</span>
-                        <select data-kosher="${slot}" class="nx-select" style="width:auto;min-height:32px;font-size:12px" title="סוג הארוחה להצעה האוטומטית">${kosherSel}</select>
                         <select data-slot="${slot}" class="nx-select" style="flex:1;min-width:180px;max-width:320px">${options.join('')}</select></div>
                     <div data-qty-box="${slot}" style="margin-top:8px"></div>
                     <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -7263,7 +7271,6 @@
                         <span data-fit-msg="${slot}" style="font-size:13px"></span>
                     </div></div>`;
                 const sel = box.querySelector('select[data-slot]');
-                box.querySelector('[data-kosher]').addEventListener('change', e => { wiz.slotKosher[slot] = e.target.value; });
                 const renderAdhoc = () => {
                     const qb = box.querySelector(`[data-qty-box="${slot}"]`);
                     const items = wiz.meals[slot]?.items || [];
@@ -7432,25 +7439,24 @@
                         <div id="wiz-issues"></div>
                     </div>
                     <div class="nx-card" style="margin-bottom:0"><div class="nx-card-body" style="padding:14px 16px">
-                        <strong style="font-size:14px">מסלול פרסום</strong>
+                        <strong style="font-size:14px">פרסום</strong>
                         <ul class="nx-checklist" id="wiz-publish-steps" style="margin:12px 0">
                             <li data-step="save"><span class="nx-step-num">1</span>טיוטה נשמרה</li>
-                            <li data-step="validate"><span class="nx-step-num">2</span>נבדקה</li>
+                            <li data-step="validate"><span class="nx-step-num">2</span>תקינות נבדקה</li>
                             <li data-step="approve"><span class="nx-step-num">3</span>אושרה</li>
                             <li data-step="publish"><span class="nx-step-num">4</span>פורסמה</li>
                         </ul>
                         <div id="wiz-actions">
-                            <button class="nx-btn nx-btn-primary nx-btn-block" id="wiz-save">שמור טיוטה</button>
-                            <button class="nx-btn nx-btn-secondary nx-btn-block" id="wiz-validate" style="margin-top:8px" disabled>הרץ בדיקה</button>
-                            <button class="nx-btn nx-btn-secondary nx-btn-block" id="wiz-approve" style="margin-top:8px" disabled>אשר</button>
-                            <button class="nx-btn nx-btn-primary nx-btn-block" id="wiz-publish" style="margin-top:8px" disabled>פרסם</button>
+                            <button class="nx-btn nx-btn-primary nx-btn-block" id="wiz-go">שמור ופרסם את התוכנית</button>
+                            <button class="nx-btn nx-btn-secondary nx-btn-block" id="wiz-save-only" style="margin-top:8px">שמור טיוטה בלבד</button>
                         </div>
                         <div id="wiz-review-status" class="nx-error-text" style="margin-top:10px"></div>
                     </div></div>
                 </div></div>`;
             const status = el.querySelector('#wiz-review-status');
             const issuesBox = el.querySelector('#wiz-issues');
-            const btns = { save: el.querySelector('#wiz-save'), validate: el.querySelector('#wiz-validate'), approve: el.querySelector('#wiz-approve'), publish: el.querySelector('#wiz-publish') };
+            const btnGo = el.querySelector('#wiz-go');
+            const btnSaveOnly = el.querySelector('#wiz-save-only');
             const setStatus = (t, ok = true) => { status.innerHTML = t || ''; status.style.color = ok ? 'var(--nx-success)' : 'var(--nx-danger)'; };
             const setIssues = html => { issuesBox.innerHTML = html || ''; nxHydrateIcons(issuesBox); };
             const paintSteps = stage => {
@@ -7461,18 +7467,9 @@
                     li.className = idx < stage ? 'done' : idx === stage ? 'current' : '';
                     li.querySelector('.nx-step-num').innerHTML = idx < stage ? nxIcon('check', 12) : String(idx + 1);
                 });
-                // exactly one primary action at a time
-                const next = stage === 0 ? btns.save : stage === 1 ? btns.validate : stage === 2 ? btns.approve : stage === 3 ? btns.publish : null;
-                [btns.save, btns.validate, btns.approve, btns.publish].forEach(b => {
-                    const isNext = b === next;
-                    b.className = `nx-btn nx-btn-block ${isNext ? 'nx-btn-primary' : 'nx-btn-secondary'}`;
-                    b.style.marginTop = '8px';
-                    b.style.display = isNext ? '' : 'none';
-                });
             };
             const markEdited = () => {
                 wiz.approvalId = null; wiz.contentHash = null; wiz.inputVector = null;
-                btns.approve.disabled = true; btns.publish.disabled = true;
                 paintSteps(0);
             };
             ['wiz-meals-card', 'wiz-targets-card', 'wiz-alts-card'].forEach(id => {
@@ -7490,10 +7487,9 @@
                 status.appendChild(document.createTextNode(' '));
                 status.appendChild(b);
             };
-            btns.save.addEventListener('click', async () => {
+            const doSave = async () => {
                 const content = wizContent();
-                if (!content.meals.length) { setStatus('צריך לבחור לפחות ארוחה אחת בלשונית "ארוחות"', false); return; }
-                btns.save.disabled = true;
+                if (!content.meals.length) { setStatus('צריך לבחור לפחות ארוחה אחת בלשונית "ארוחות"', false); return false; }
                 try {
                     let r;
                     if (wiz.draftId) {
@@ -7506,79 +7502,70 @@
                     }
                     const d = await r.json().catch(() => ({}));
                     if (!r.ok) {
-                        setStatus(`שמירה נכשלה: ${mealsErr(r, d)}${r.status === 409 ? ` (הטיוטה כעת במספר ${d?.detail?.staleFields?.draft_revision ?? '?'}) ` : ''}`, false);
+                        setStatus(`שמירה נכשלה: ${mealsErr(r, d)}`, false);
                         if (r.status === 409) refreshBtn();
-                        btns.save.disabled = false; return;
+                        return false;
                     }
                     wiz.draftId = d.draft_id; wiz.revision = d.draft_revision;
                     wiz.contentHash = null; wiz.inputVector = null; wiz.approvalId = null;
-                    btns.validate.disabled = false; btns.approve.disabled = true; btns.publish.disabled = true;
                     paintSteps(1);
-                    setStatus(`טיוטה ${d.draft_revision} נשמרה. עכשיו: בדיקת תקינות.`);
                     mealsRenderClientHead();
-                } catch (e) { setStatus('שגיאת רשת', false); }
-                btns.save.disabled = false;
-            });
-            btns.validate.addEventListener('click', async () => {
+                    return true;
+                } catch (e) { setStatus('שגיאת רשת', false); return false; }
+            };
+            const doValidate = async () => {
                 try {
                     const r = await safeFetch(`/api/meals/${mealsUid()}/plan-drafts/${wiz.draftId}/validate`, { method: 'POST' });
                     const d = await r.json().catch(() => ({}));
-                    if (!r.ok) { setStatus('בדיקה נכשלה: ' + mealsErr(r, d), false); return; }
+                    if (!r.ok) { setStatus('בדיקה נכשלה: ' + mealsErr(r, d), false); return false; }
                     wiz.contentHash = d.content_hash; wiz.inputVector = d.input_vector;
-                    if (d.valid) {
-                        btns.approve.disabled = false;
-                        paintSteps(2);
-                        setStatus('הטיוטה תקינה — אפשר לאשר.');
-                        setIssues('');
-                    } else {
-                        // Map issues back to their wizard step where possible.
-                        const issueText = i => {
-                            if (typeof i === 'string') return i;
-                            if (i.rule === 'nutrient_bounds') {
-                                const n = MEAL_NUTRIENT_HE[i.nutrient] || i.nutrient;
-                                const bound = i.upper != null ? `המקסימום ${i.upper}` : `המינימום ${i.lower}`;
-                                if (i.scope === 'day') {
-                                    return i.status === 'unknown'
-                                        ? `סכום היום של ${n} לא ניתן לבדיקה — חסרים נתונים`
-                                        : `סכום היום: ${n} ${i.total} — חורג מ${bound} שנקבע בהנחיה`;
-                                }
-                                const slot = mealsSlotName(i.slot_key || '');
+                    if (d.valid) { paintSteps(2); return true; }
+                    // Map issues back to their wizard step where possible.
+                    const issueText = i => {
+                        if (typeof i === 'string') return i;
+                        if (i.rule === 'nutrient_bounds') {
+                            const n = MEAL_NUTRIENT_HE[i.nutrient] || i.nutrient;
+                            const bound = i.upper != null ? `המקסימום ${i.upper}` : `המינימום ${i.lower}`;
+                            if (i.scope === 'day') {
                                 return i.status === 'unknown'
-                                    ? `ארוחת ${slot}: ${n} לא ידוע — ההנחיה לא ניתנת לבדיקה`
-                                    : `ארוחת ${slot}: ${n} ${i.total ?? '?'} — ${i.upper != null ? 'מעל' : 'מתחת'} ${bound} שנקבע בהנחיה`;
+                                    ? `סכום היום של ${n} לא ניתן לבדיקה — חסרים נתונים`
+                                    : `סכום היום: ${n} ${i.total} — חורג מ${bound} שנקבע בהנחיה`;
                             }
-                            return `ארוחת ${mealsSlotName(i.slot_key || '')}: ${i.rule}${i.detail ? ' — ' + i.detail : ''}`;
-                        };
-                        const stepFor = i => {
-                            const t = issueText(i);
-                            if (typeof i === 'string' && /alternatives/.test(t)) return 'wiz-alts';
-                            if (typeof i === 'string' && /day_targets/.test(t)) return 'wiz-targets';
-                            return 'wiz-meals';
-                        };
-                        setStatus('הטיוטה לא תקינה — יש לתקן את הסעיפים הבאים:', false);
-                        setIssues('<div style="display:grid;gap:8px">' + (d.issues || []).map(i =>
-                            `<div class="nx-callout nx-callout-danger">${nxIcon('alert-triangle', 18)}<div>${escapeFitnessHtml(issueText(i))}
-                             <button class="nx-issue-step-link" data-goto="${stepFor(i)}">לשלב הרלוונטי</button></div></div>`).join('') + '</div>');
-                        issuesBox.querySelectorAll('[data-goto]').forEach(b =>
-                            b.addEventListener('click', () => mealsCoachTab(b.dataset.goto)));
-                    }
-                } catch (e) { setStatus('שגיאת רשת', false); }
-            });
-            btns.approve.addEventListener('click', async () => {
+                            const slot = mealsSlotName(i.slot_key || '');
+                            return i.status === 'unknown'
+                                ? `ארוחת ${slot}: ${n} לא ידוע — ההנחיה לא ניתנת לבדיקה`
+                                : `ארוחת ${slot}: ${n} ${i.total ?? '?'} — ${i.upper != null ? 'מעל' : 'מתחת'} ${bound} שנקבע בהנחיה`;
+                        }
+                        return `ארוחת ${mealsSlotName(i.slot_key || '')}: ${i.rule}${i.detail ? ' — ' + i.detail : ''}`;
+                    };
+                    const stepFor = i => {
+                        const t = issueText(i);
+                        if (typeof i === 'string' && /alternatives/.test(t)) return 'wiz-alts';
+                        if (typeof i === 'string' && /day_targets/.test(t)) return 'wiz-targets';
+                        return 'wiz-meals';
+                    };
+                    setStatus('הטיוטה לא תקינה — יש לתקן את הסעיפים הבאים:', false);
+                    setIssues('<div style="display:grid;gap:8px">' + (d.issues || []).map(i =>
+                        `<div class="nx-callout nx-callout-danger">${nxIcon('alert-triangle', 18)}<div>${escapeFitnessHtml(issueText(i))}
+                         <button class="nx-issue-step-link" data-goto="${stepFor(i)}">לשלב הרלוונטי</button></div></div>`).join('') + '</div>');
+                    issuesBox.querySelectorAll('[data-goto]').forEach(b =>
+                        b.addEventListener('click', () => mealsCoachTab(b.dataset.goto)));
+                    return false;
+                } catch (e) { setStatus('שגיאת רשת', false); return false; }
+            };
+            const doApprove = async () => {
                 try {
                     const r = await safeFetch(`/api/meals/${mealsUid()}/plan-drafts/${wiz.draftId}/approve`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json', 'If-Match': String(wiz.revision) },
                         body: JSON.stringify({ content_hash: wiz.contentHash, input_vector: wiz.inputVector }) });
                     const d = await r.json().catch(() => ({}));
-                    if (!r.ok) { setStatus('אישור נכשל: ' + mealsErr(r, d), false); if (r.status === 409) refreshBtn(); return; }
+                    if (!r.ok) { setStatus('אישור נכשל: ' + mealsErr(r, d), false); if (r.status === 409) refreshBtn(); return false; }
                     wiz.approvalId = d.approval_id;
-                    btns.publish.disabled = false;
                     paintSteps(3);
-                    setStatus('אושר. הפרסום ייצור גרסת תוכנית חדשה באופן אטומי.');
-                } catch (e) { setStatus('שגיאת רשת', false); }
-            });
-            btns.publish.addEventListener('click', async () => {
-                if (!await nxConfirm('פרסום התוכנית', 'לפרסם את הטיוטה כתוכנית הפעילה? פעולה זו מחליפה את הגרסה הפעילה.', 'פרסם')) return;
+                    return true;
+                } catch (e) { setStatus('שגיאת רשת', false); return false; }
+            };
+            const doPublish = async () => {
                 try {
                     const r = await safeFetch(`/api/meals/${mealsUid()}/plan-drafts/${wiz.draftId}/publish`, {
                         method: 'POST',
@@ -7595,16 +7582,42 @@
                             setStatus(`פרסום נכשל: ${mealsErr(r, d)}`, false);
                         }
                         if (r.status === 409) refreshBtn();
+                        return false;
+                    }
+                    paintSteps(4);
+                    nxToast('התוכנית פורסמה');
+                    await wizLoad(); mealsRenderClientHead();
+                    return d.version;
+                } catch (e) { setStatus('שגיאת רשת', false); return false; }
+            };
+            btnSaveOnly.addEventListener('click', async () => {
+                btnSaveOnly.disabled = true;
+                if (await doSave()) setStatus(`טיוטה ${wiz.revision} נשמרה — אפשר להמשיך לערוך או לפרסם.`);
+                btnSaveOnly.disabled = false;
+            });
+            btnGo.addEventListener('click', async () => {
+                btnGo.disabled = true; btnSaveOnly.disabled = true;
+                setIssues('');
+                try {
+                    setStatus('שומר טיוטה...');
+                    if (!await doSave()) return;
+                    setStatus('בודק תקינות...');
+                    if (!await doValidate()) return;
+                    setStatus('מאשר...');
+                    if (!await doApprove()) return;
+                    if (!await nxConfirm('פרסום התוכנית',
+                        'הטיוטה תקינה ומאושרת. לפרסם כתוכנית הפעילה? הפעולה מחליפה את הגרסה הקיימת.', 'פרסם')) {
+                        setStatus('פרסום בוטל — הטיוטה נשמרה ואושרה, אפשר לפרסם בהמשך.');
                         return;
                     }
-                    nxToast('התוכנית פורסמה');
-                    await wizLoad(); renderWizReview(); mealsRenderClientHead();
-                    const st2 = document.querySelector('#wiz-review-status');
-                    if (st2) { st2.textContent = `פורסם כגרסה ${d.version}! הילד/ה יראה את התוכנית החדשה.`; st2.style.color = 'var(--nx-success)'; }
-                } catch (e) { setStatus('שגיאת רשת', false); }
+                    setStatus('מפרסם...');
+                    const ver = await doPublish();
+                    if (ver) { renderWizReview(); const st2 = document.querySelector('#wiz-review-status'); if (st2) { st2.textContent = `פורסם כגרסה ${ver}! הילד/ה יראה את התוכנית החדשה.`; st2.style.color = 'var(--nx-success)'; } }
+                } finally {
+                    btnGo.disabled = false; btnSaveOnly.disabled = false;
+                }
             });
             const initialStage = wiz.approvalId ? 3 : wiz.draftId ? 1 : 0;
-            if (wiz.draftId && wiz.revision) btns.validate.disabled = false;
             paintSteps(initialStage);
         }
 
