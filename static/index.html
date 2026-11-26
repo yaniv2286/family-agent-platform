@@ -2888,6 +2888,7 @@
                     }
                 }
                 profileGrid.appendChild(createAdminCard());
+                profileGrid.appendChild(createMikeyCard());
                 await loadOperationalAccess();
             } catch (error) {
                 console.error('Error loading users:', error);
@@ -3065,6 +3066,22 @@
                 }
                 adminUnlockPending = true;
                 promptForPin();
+            });
+            return card;
+        }
+
+        // Mikey training app card: external link to the family dog-training
+        // web app served under /mikey/ on this same domain.
+        function createMikeyCard() {
+            const card = document.createElement('div');
+            card.className = 'profile-card';
+            card.innerHTML = `
+                <div class="avatar"><div class="avatar-fallback" style="display:flex;background:linear-gradient(135deg,#e9a13b,#b0413e)">🐕</div></div>
+                <div class="profile-name">מייקי</div>
+                <div style="font-size:0.8em;color:#71807b">🎓 קורס האילוף המשפחתי</div>
+            `;
+            card.addEventListener('click', () => {
+                window.location.href = '/mikey/';
             });
             return card;
         }

@@ -10,6 +10,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./mikey-dist:/srv/mikey:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
