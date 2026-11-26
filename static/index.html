@@ -2155,8 +2155,7 @@
                             <div id="meals-setup" style="display:none">
                                 <div id="meals-client-head"></div>
                                 <nav class="nx-subnav" aria-label="אזורי עבודה">
-                                    <button data-meals-nav="wizard" aria-current="page">הגדרת תוכנית</button>
-                                    <button data-meals-nav="wiz-health">דיווחים בריאותיים <span id="meals-health-count"></span></button>
+                                    <button data-meals-nav="wizard" aria-current="page">הגדרת תוכנית <span id="meals-health-count"></span></button>
                                     <button data-meals-nav="meals-coach-catalog">קטלוג</button>
                                 </nav>
                                 <div id="meals-wizard-wrap">
@@ -2164,12 +2163,14 @@
                                     <div class="nx-step-mobile" id="meals-step-mobile"></div>
                                 </div>
                                 <section class="fitness-panel active" id="wiz-profile"><div class="nx-card" id="wiz-profile-card"></div></section>
-                                <section class="fitness-panel" id="wiz-medical"><div class="nx-card" id="wiz-medical-card"></div></section>
+                                <section class="fitness-panel" id="wiz-medical">
+                                    <div class="nx-card" id="wiz-medical-card"></div>
+                                    <div class="nx-card" id="wiz-health-card"></div>
+                                </section>
                                 <section class="fitness-panel" id="wiz-targets"><div class="nx-card" id="wiz-targets-card"></div></section>
                                 <section class="fitness-panel" id="wiz-meals"><div class="nx-card" id="wiz-meals-card"></div></section>
                                 <section class="fitness-panel" id="wiz-alts"><div class="nx-card" id="wiz-alts-card"></div></section>
                                 <section class="fitness-panel" id="wiz-review"><div class="nx-card" id="wiz-review-card"></div></section>
-                                <section class="fitness-panel" id="wiz-health"><div class="nx-card" id="wiz-health-card"></div></section>
                                 <section class="fitness-panel" id="meals-coach-catalog">
                                     <div class="nx-card"><div class="nx-card-head"><h3 class="nx-card-title">קטלוג המזון המשותף</h3></div>
                                         <div class="nx-card-body"><div id="meals-catalog-list" class="nx-empty">טוען קטלוג...</div></div></div>
@@ -6601,7 +6602,7 @@
         function mealsCoachTab(panelId) {
             if (panelId === 'wizard') panelId = 'wiz-profile';
             const isWizard = NX_WIZ_STEPS.some(([id]) => id === panelId);
-            const navKey = panelId === 'wiz-health' ? 'wiz-health' : panelId === 'meals-coach-catalog' ? 'meals-coach-catalog' : 'wizard';
+            const navKey = panelId === 'meals-coach-catalog' ? 'meals-coach-catalog' : 'wizard';
             document.querySelectorAll('#meals-setup [data-meals-nav]').forEach(t =>
                 t.setAttribute('aria-current', t.dataset.mealsNav === navKey ? 'page' : 'false'));
             document.querySelectorAll('#meals-setup .fitness-panel').forEach(p => p.classList.toggle('active', p.id === panelId));
@@ -7103,7 +7104,7 @@
             const statusHe = { pending: 'ממתין', confirmed: 'טופל', cancelled: 'לא רלוונטי' };
             const statusKind = { pending: 'warning', confirmed: 'success', cancelled: '' };
             el.innerHTML = `<div class="nx-card-head"><div>
-                    <h3 class="nx-card-title">דיווחים בריאותיים</h3>
+                    <h3 class="nx-card-title">דיווחי בריאות מהילד/ה</h3>
                     <p class="nx-card-desc">דיווח ממתין חוסם הצעות חלופה עד טיפול. רישום אכילה פתוח תמיד.</p></div></div>
                 <div class="nx-card-body">
                     <div id="wiz-health-list"></div>
