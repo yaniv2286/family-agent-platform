@@ -398,7 +398,44 @@ _AUTO_PREFER_FRUIT = ["תפוח עץ", "בננה", "תות שדה", "אשכול�
 _AUTO_NO_COMPONENT = ("אבקת", "אבקה", "משקה", "חלבון ביצה", "שמנת", "חמאה",
                       "מרגרינה")
 _AUTO_NO_SIDE = ("קמח", "עמילן", "סולת", "דגני", "אבקת")
-_AUTO_NO_VEG = ("חמוץ", "כבוש", "מיובש", "מיץ")
+_AUTO_NO_VEG = ("חמוץ", "כבוש", "מיובש", "מיץ", "בצל")
+# A snack is light food: no fried mains, roasts or stews even when the
+# numbers happen to fit.
+_AUTO_NO_SNACK = ("מטוגן", "קציצ", "טלה", "צלעות", "סטייק", "נקניק",
+                  "המבורגר", "צלי", "תבשיל", "שניצל בלחמנייה")
+_AUTO_SNACK_PROTEIN = {
+    "meat":  ["טונה במים (משומר)", "פסטרמה הודו", "חזה עוף מעושן", "ביצה קשה"],
+    "dairy": ["קוטג׳ 5%", "יוגורט יווני 5%", "גבינה לבנה 5%", "ביצה קשה",
+              "יוגורט יווני 0%", "קוטג׳ 0%"],
+    "parve": ["טונה במים (משומר)", "ביצה קשה", "חומוס מוכן (ממרח)"],
+    "any":   ["קוטג׳ 5%", "יוגורט יווני 5%", "טונה במים (משומר)", "ביצה קשה",
+              "גבינה לבנה 5%"],
+}
+# Culinary sanity: two proteins from the same family (cottage + yogurt +
+# Greek yogurt) is one idea served three times, not a meal. At most one
+# item per family and at most two proteins per meal.
+_AUTO_PROTEIN_FAMILY = {
+    "dairy": "dairy", "egg": "egg", "poultry": "land", "meat": "land",
+    "fish": "sea", "seafood": "sea", "legume": "plant", "nut_seed": "plant",
+}
+
+
+def _auto_protein_family(food: dict) -> str:
+    return _AUTO_PROTEIN_FAMILY.get(food.get("kind"), food.get("kind") or "other")
+
+
+def _auto_dedupe_proteins(prots: List[dict], max_items: int = 2) -> List[dict]:
+    seen = set()
+    out = []
+    for f in prots:
+        fam = _auto_protein_family(f)
+        if fam in seen:
+            continue
+        seen.add(fam)
+        out.append(f)
+        if len(out) >= max_items:
+            break
+    return out
 # Realistic caps: nobody serves 350g of egg whites or half a kilo of rice.
 _AUTO_CAP = {"protein": Decimal(250), "side": Decimal(200), "veg": Decimal(200),
              "fat": Decimal(30), "fruit": Decimal(200)}
@@ -525,8 +562,10 @@ def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
         is_snack = b["is_snack"]
         proteins = _pool(kosher, _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
                          "protein_g", "lean",
-                         prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
-                         skip=_AUTO_NO_COMPONENT)
+                         prefer=((_AUTO_SNACK_PROTEIN.get(kosher) or _AUTO_SNACK_PROTEIN["any"])
+                                 if is_snack else
+                                 (_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"])),
+                         skip=_AUTO_NO_COMPONENT + (_AUTO_NO_SNACK if is_snack else ()))
         sides = (_pool(kosher, _AUTO_FRUIT_KINDS, "kcal", "min",
                        prefer=_AUTO_PREFER_FRUIT, skip=_AUTO_NO_COMPONENT) if is_snack
                  else _pool(kosher, _AUTO_CARB_KINDS, "carbs_g", "max",
@@ -566,8 +605,13 @@ def auto_compose_day(slots: List[dict], day_targets: dict, src: CatalogSource,
                 # a coach adds a second protein, e.g. cottage + eggs.
                 prot_deficit = p_lo - _auto_totals(items)["protein_g"]
                 if prot_deficit > Decimal(5) and len(proteins) > 1:
-                    prot2 = proteins[(idx + pi + 1) % len(proteins)]
-                    p2100 = _per100(prot2, "protein_g")
+                    prot2 = None
+                    for n in range(1, len(proteins)):
+                        cand = proteins[(idx + pi + n) % len(proteins)]
+                        if _auto_protein_family(cand) != _auto_protein_family(prot):
+                            prot2 = cand
+                            break
+                    p2100 = _per100(prot2, "protein_g") if prot2 else None
                     if p2100 and p2100 > 0:
                         p2_qty = min(Decimal(150),
                                      _round_qty(prot_deficit * 100 / p2100, Decimal(25)))
@@ -630,8 +674,11 @@ def _auto_size_chosen(kosher: str, roles: dict, b: dict,
     is_snack = b["is_snack"]
     items = []
     # protein(s): split the slot's protein share across the picked proteins
-    prots = [f for f in roles.get("protein") or []
-             if (_per100(f, "protein_g") or Decimal(0)) > 0]
+    prots = _auto_dedupe_proteins(
+        [f for f in roles.get("protein") or []
+         if (_per100(f, "protein_g") or Decimal(0)) > 0
+         and not (is_snack and any(w in (f.get("name_he") or "")
+                                   for w in _AUTO_NO_SNACK))])
     prot_need = p_lo
     for f in prots:
         target = min(prot_need, p_lo / Decimal(len(prots)))
@@ -639,17 +686,21 @@ def _auto_size_chosen(kosher: str, roles: dict, b: dict,
                   _round_qty(target * 100 / _per100(f, "protein_g"), Decimal(25)))
         items.append((f, qty))
         prot_need = max(Decimal(0), p_lo - _auto_totals(items)["protein_g"])
-    # a protein shortfall gets a pool top-up, like a coach adds eggs
+    # a protein shortfall gets a pool top-up from a different family,
+    # like a coach adds eggs next to the cottage
     if prot_need > Decimal(5):
         pool = _auto_pool(usable, kosher,
                           _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
                           "protein_g", "lean",
                           prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
-                          skip=_AUTO_NO_COMPONENT)
+                          skip=_AUTO_NO_COMPONENT + (_AUTO_NO_SNACK if is_snack else ()))
         picked = {f["food_version_id"] for f, _ in items}
+        fams = {_auto_protein_family(f) for f, _ in items
+                if _auto_infer_role(f) == "protein"}
         for f2 in pool:
             p2100 = _per100(f2, "protein_g")
-            if f2["food_version_id"] in picked or not p2100 or p2100 <= 0:
+            if (f2["food_version_id"] in picked or not p2100 or p2100 <= 0
+                    or _auto_protein_family(f2) in fams):
                 continue
             items.append((f2, min(Decimal(150),
                                   _round_qty(prot_need * 100 / p2100, Decimal(25)))))
@@ -760,8 +811,10 @@ def auto_compose_from_choices(slots: List[dict], day_targets: dict,
                 usable, kosher,
                 _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
                 "protein_g", "lean",
-                prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
-                skip=_AUTO_NO_COMPONENT))
+                prefer=((_AUTO_SNACK_PROTEIN.get(kosher) or _AUTO_SNACK_PROTEIN["any"])
+                        if b["is_snack"] else
+                        (_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"])),
+                skip=_AUTO_NO_COMPONENT + (_AUTO_NO_SNACK if b["is_snack"] else ())))
             if pool:
                 roles["protein"] = [pool[idx % len(pool)]]
         if not roles["protein"]:
@@ -789,17 +842,21 @@ def auto_compose_from_choices(slots: List[dict], day_targets: dict,
         _auto_fit_items(items, b)
         items = [(f, q) for f, q in items if q > 0]
         if items:
-            # lean protein top-up when the pick can't reach the share
+            # lean protein top-up when the pick can't reach the share -
+            # from a different family than what is already on the plate
             gap = b["p_lo"] - _auto_totals(items)["protein_g"]
             if gap > Decimal(5):
                 picked = {f["food_version_id"] for f, _ in items}
+                fams = {_auto_protein_family(f) for f, _ in items
+                        if _auto_infer_role(f) == "protein"}
                 for f2 in _fresh(_auto_pool(
                         usable, kosher,
                         _AUTO_PROTEIN_KINDS.get(kosher) or _AUTO_PROTEIN_KINDS["any"],
                         "protein_g", "lean",
                         prefer=_AUTO_PREFER_PROTEIN.get(kosher) or _AUTO_PREFER_PROTEIN["any"],
-                        skip=_AUTO_NO_COMPONENT)):
-                    if f2["food_version_id"] in picked:
+                        skip=_AUTO_NO_COMPONENT + (_AUTO_NO_SNACK if b["is_snack"] else ()))):
+                    if (f2["food_version_id"] in picked
+                            or _auto_protein_family(f2) in fams):
                         continue
                     p100 = _per100(f2, "protein_g")
                     if not p100 or p100 <= 0:
