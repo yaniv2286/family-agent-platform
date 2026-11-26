@@ -1407,6 +1407,8 @@ async def auto_plan(request: Request, user_id: int, data: AutoPlanRequest,
         for food in src.approved_foods():
             if allergies & set(food.get("allergens") or []):
                 excluded.add(food["food_version_id"])
+    slots = [dict(s) for s in data.slots]
+    used_llm = False
     if data.use_llm:
         usable = [f for f in src.approved_foods()
                   if f["status"] == "approved"
@@ -1414,19 +1416,24 @@ async def auto_plan(request: Request, user_id: int, data: AutoPlanRequest,
                   and f.get("kosher_evidence") != "non_kosher"]
         try:
             picks = await _auto_llm_picks(
-                data.slots, data.day_targets or {}, usable)
+                slots, data.day_targets or {}, usable)
         except Exception:
             picks = None
         if picks:
-            slots = [dict(s, items=picks.get(s["slot_key"], []))
-                     for s in data.slots]
-            out = engine.auto_compose_from_choices(
-                slots, data.day_targets or {}, src, excluded_food_ids=excluded)
-            if out["meals"]:
-                out["source"] = "llm"
-                return out
+            used_llm = True
+            for s in slots:
+                if not s.get("items"):  # caller picks win per slot
+                    s["items"] = picks.get(s["slot_key"], [])
+    # Slots carrying caller-picked items (compound-meal fit, coach draft,
+    # or LLM picks) go through the choices path - same engine math.
+    if any(s.get("items") for s in slots):
+        out = engine.auto_compose_from_choices(
+            slots, data.day_targets or {}, src, excluded_food_ids=excluded)
+        if out["meals"]:
+            out["source"] = "llm" if used_llm else "choices"
+            return out
     out = engine.auto_compose_day(
-        data.slots, data.day_targets or {}, src, excluded_food_ids=excluded)
+        slots, data.day_targets or {}, src, excluded_food_ids=excluded)
     out["source"] = "deterministic"
     return out
 

@@ -3073,16 +3073,18 @@
         // Mikey training app card: external link to the family dog-training
         // web app served under /mikey/ on this same domain.
         function createMikeyCard() {
-            const card = document.createElement('div');
+            const card = document.createElement('a');
             card.className = 'profile-card';
+            card.href = '/mikey/';
+            card.target = '_blank';
+            card.rel = 'noopener';
+            card.style.textDecoration = 'none';
+            card.style.color = 'inherit';
             card.innerHTML = `
                 <div class="avatar"><div class="avatar-fallback" style="display:flex;background:linear-gradient(135deg,#e9a13b,#b0413e)">🐕</div></div>
                 <div class="profile-name">מייקי</div>
                 <div style="font-size:0.8em;color:#71807b">🎓 קורס האילוף המשפחתי</div>
             `;
-            card.addEventListener('click', () => {
-                window.location.href = '/mikey/';
-            });
             return card;
         }
 
@@ -5517,6 +5519,7 @@
                     armGestureOnPlay(audio, gesture);
                     audio.addEventListener('playing', startLipSync, { once: true });
                     audio.addEventListener('ended', () => {
+                        if (audio.__dead) return;
                         URL.revokeObjectURL(audio.src);
                         if (currentAudio === audio) currentAudio = null;
                         autoListenAfterSpeech();
@@ -5575,7 +5578,14 @@
                         console.error('TTS streaming failed mid-play:', streamErr);
                         reportClientLog('tts', `mid-stream error: ${String(streamErr).slice(0, 120)}`);
                         if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                        autoListenAfterSpeech();
+                        // A flaky mobile stream must not leave Koko silent -
+                        // retry once as a plain blob fetch (ינאי: 'אני לא
+                        // שומע אותך' came from streams dying mid-play).
+                        audio.__dead = true;
+                        try { audio.pause(); } catch (e) {}
+                        try { reader.cancel(); } catch (e) {}
+                        if (currentAudio === audio) currentAudio = null;
+                        await retrySpeechAsBlob(ttsText, gesture, generation);
                     }
                     if (generation !== speechGeneration) return;
                     // Keep currentAudio set until 'ended' fires (handled above).
@@ -5620,6 +5630,50 @@
             } catch (error) {
                 console.error('Error playing TTS:', error);
                 reportClientLog('tts', `play error: ${String(error).slice(0, 120)}`);
+                showTtsFailureHint();
+                autoListenAfterSpeech();
+            }
+        }
+
+        /* Second-chance playback: refetch the same utterance as a whole blob
+           and play it without MediaSource. One retry only - if this fails we
+           show the quiet-hint and re-arm the mic like any TTS failure. */
+        async function retrySpeechAsBlob(ttsText, gesture, generation) {
+            try {
+                reportClientLog('tts', 'mid-stream retry as blob');
+                const retryResp = await safeFetch('/api/tutor/speech', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: ttsText, subject: selectedSubject || 'math', student_name: selectedUserProfile?.name || '' })
+                });
+                const ct = retryResp.headers.get('content-type') || '';
+                if (!retryResp.ok || !ct.includes('audio')) throw new Error(`retry status=${retryResp.status}`);
+                const blob = await retryResp.blob();
+                if (generation !== speechGeneration) return;
+                const url = URL.createObjectURL(blob);
+                const retryAudio = new Audio(url);
+                currentAudio = retryAudio;
+                tutorAudioGraph(retryAudio);
+                armGestureOnPlay(retryAudio, gesture);
+                retryAudio.addEventListener('playing', startLipSync, { once: true });
+                retryAudio.addEventListener('ended', () => {
+                    URL.revokeObjectURL(url);
+                    if (currentAudio === retryAudio) currentAudio = null;
+                    autoListenAfterSpeech();
+                });
+                try {
+                    await retryAudio.play();
+                } catch (e) {
+                    const blocked = retryAudio;
+                    promptAutoplayHint();
+                    const retry = () => {
+                        if (blocked === currentAudio) blocked.play().catch(() => {});
+                        hideAutoplayHint();
+                    };
+                    document.addEventListener('pointerdown', retry, { once: true });
+                }
+            } catch (e2) {
+                reportClientLog('tts', `blob retry failed: ${String(e2).slice(0, 100)}`);
                 showTtsFailureHint();
                 autoListenAfterSpeech();
             }
@@ -7292,13 +7346,13 @@
                 const renderAdhoc = () => {
                     const qb = box.querySelector(`[data-qty-box="${slot}"]`);
                     const items = wiz.meals[slot]?.items || [];
-                    if (!items.length) { qb.innerHTML = ''; return; }
-                    qb.innerHTML = `<div class="nx-meta" style="margin-bottom:8px">${nxBadge('מנה מורכבת — עריכה חופשית של מצרכים וכמויות')}</div>
-                        <table class="nx-table"><tr><th>מצרך</th><th>כמות</th><th></th></tr>` +
+                    qb.innerHTML = `<div class="nx-meta" style="margin-bottom:8px">${nxBadge('מנה מורכבת — עריכה חופשית של מצרכים וכמויות')}</div>` +
+                        (items.length ? `<table class="nx-table"><tr><th>מצרך</th><th>כמות</th><th></th></tr>` +
                         items.map(fid => `<tr><td>${escapeFitnessHtml(mealFoodName(fid))}</td>
                             <td><span class="nx-input-wrap" style="width:96px"><input type="number" data-qty-fid="${fid}" class="nx-input nx-input-sm" value="${escapeFitnessHtml(String((wiz.meals[slot].qty || {})[fid] ?? '100'))}" min="0" step="10"><span class="nx-unit">גרם</span></span></td>
-                            <td><button type="button" class="nx-btn nx-btn-sm" data-del-fid="${fid}" title="הסר מצרך" style="padding:2px 8px">✕</button></td></tr>`).join('') + `</table>
-                        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+                            <td><button type="button" class="nx-btn nx-btn-sm" data-del-fid="${fid}" title="הסר מצרך" style="padding:2px 8px">✕</button></td></tr>`).join('') + `</table>`
+                        : `<div class="nx-meta" style="margin-bottom:8px">אין מצרכים עדיין — הוסיפו למטה או לחצו "הצע ארוחות".</div>`) +
+                        `<div style="display:flex;gap:8px;margin-top:8px;align-items:center">
                             <input list="wiz-foods-dl" data-add-inp class="nx-input" style="flex:1;max-width:260px" placeholder="הוסף מצרך...">
                             <button type="button" class="nx-btn nx-btn-secondary nx-btn-sm" data-add-btn>הוסף</button>
                         </div>`;
@@ -7340,13 +7394,48 @@
                     }));
                 };
                 sel.addEventListener('change', () => {
-                    wiz.meals[slot] = { rid: sel.value, qty: {} };
+                    const prev = wiz.meals[slot] || {};
+                    wiz.meals[slot] = { rid: sel.value, qty: {}, items: prev.items || [] };
+                    box.querySelector(`[data-fit-msg="${slot}"]`).textContent = '';
                     renderQty(sel.value);
                 });
                 box.querySelector(`[data-fit="${slot}"]`).addEventListener('click', async () => {
                     const rid = sel.value;
                     const msg = box.querySelector(`[data-fit-msg="${slot}"]`);
-                    if (!rid) { msg.textContent = 'בחרו מתכון קודם'; msg.style.color = 'var(--nx-danger)'; return; }
+                    if (!rid) {
+                        // Compound meal: size the free-picked ingredients with
+                        // the same engine math auto-plan uses (deterministic).
+                        const pickedItems = wiz.meals[slot]?.items || [];
+                        if (!pickedItems.length) { msg.textContent = 'הוסיפו מצרכים קודם'; msg.style.color = 'var(--nx-danger)'; return; }
+                        msg.textContent = 'מתאם כמויות...'; msg.style.color = 'var(--nx-text3)';
+                        const targets = {};
+                        Object.entries(wiz.targets).forEach(([n, b]) => {
+                            const t = {};
+                            if (b.lower !== '' && b.lower != null) t.lower = String(b.lower);
+                            if (b.upper !== '' && b.upper != null) t.upper = String(b.upper);
+                            if (Object.keys(t).length) targets[n] = t;
+                        });
+                        const slotsPayload = wiz.chosenSlots.map(s => ({ slot_key: s,
+                            kosher: wiz.slotKosher[s] || 'any',
+                            items: (wiz.meals[s]?.items || []).map(fid => ({ food_version_id: fid })) }));
+                        const r = await safeFetch(`/api/meals/${mealsUid()}/auto-plan`, { method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ slots: slotsPayload, day_targets: targets }) });
+                        const d = await r.json().catch(() => ({}));
+                        const m = (d.meals || []).find(x => x.slot_key === slot);
+                        if (!r.ok || !m) { msg.textContent = 'ההתאמה נכשלה'; msg.style.color = 'var(--nx-danger)'; return; }
+                        wiz.meals[slot].qty = {};
+                        (m.items || []).forEach(i => {
+                            if (!wiz.meals[slot].items.includes(i.food_version_id)) wiz.meals[slot].items.push(i.food_version_id);
+                            wiz.meals[slot].qty[i.food_version_id] = i.quantity_g;
+                        });
+                        renderAdhoc();
+                        const un = (d.unmet || []).find(u => u.slot_key === slot);
+                        msg.textContent = un ? (un.reason || 'חלק מהתקציב לא התמלא')
+                                           : 'הכמויות עודכנו בהתאם להנחיה';
+                        msg.style.color = un ? 'var(--nx-danger)' : 'var(--nx-success)';
+                        return;
+                    }
                     msg.textContent = 'בודק כמויות...'; msg.style.color = 'var(--nx-text3)';
                     const otherMeals = wiz.chosenSlots.filter(s2 => s2 !== slot && wiz.meals[s2]?.rid).map(s2 => ({
                         slot_key: s2,
